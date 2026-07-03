@@ -175,7 +175,11 @@ async fn run_prompt_loop(
                         }
                     }
                     Ok(Err(err)) => {
-                        let _ = event_tx.send(HarnessEvent::Error { message: err.to_string() }).await;
+                        let _ = event_tx
+                            .send(HarnessEvent::Error {
+                                message: format_harness_run_error(&err),
+                            })
+                            .await;
                         let _ = event_tx.send(HarnessEvent::TurnEnded { reason: TurnEndReason::Failed }).await;
                     }
                     Err(_) => {
@@ -499,6 +503,15 @@ fn string_field_opt(value: &Value, keys: &[&str]) -> Option<String> {
         .map(str::to_string)
 }
 
+fn format_harness_run_error(err: &CoreError) -> String {
+    match err {
+        CoreError::JsonRpc { code: -32603, message } => format!(
+            "json-rpc error -32603: {message}. Gateway tools need tamtri-gateway-stdio (rebuild tamtri) and a valid twenty-questions path in Settings → Gateway; disable unreachable servers."
+        ),
+        _ => err.to_string(),
+    }
+}
+
 fn absolute_cwd(path: &std::path::Path) -> Result<String> {
     let absolute = if path.is_absolute() {
         path.to_path_buf()
@@ -599,5 +612,16 @@ mod tests {
         assert_eq!(value[0]["command"], "/tmp/tamtri-gateway-stdio");
         assert_eq!(value[0]["args"][0], "http://127.0.0.1:1234/mcp");
         assert_eq!(value[0]["env"], json!([]));
+    }
+
+    #[test]
+    fn format_harness_run_error_adds_gateway_hint_for_internal_error() {
+        let err = CoreError::JsonRpc {
+            code: -32603,
+            message: "Internal error".to_string(),
+        };
+        let message = format_harness_run_error(&err);
+        assert!(message.contains("tamtri-gateway-stdio"));
+        assert!(message.contains("twenty-questions"));
     }
 }
