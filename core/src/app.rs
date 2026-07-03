@@ -1273,6 +1273,8 @@ impl TamtriCore {
             .ok_or(CoreError::NotFound(id))?;
         self.runtime.block_on(async {
             run.gateway.cancel_pending_elicitations().await;
+            run.gateway
+                .agent_cancelled(serde_json::json!({"requestId": "user-cancel"}));
             run.control.cancel().await
         })
     }

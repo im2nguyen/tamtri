@@ -32,9 +32,9 @@ Current repo status:
 - The Swift shell has a "Fork Into" affordance that forks the current conversation into a selected harness/model.
 - `tamtri-gateway-stdio` is a small stdio forwarding helper binary that can bridge ACP agents requiring stdio MCP server refs to the same run-scoped loopback endpoint. `TamtriCore` discovers it next to the app/test binary, through `TAMTRI_GATEWAY_STDIO_HELPER`, or under `target/debug`, and uses it as the default ACP-facing MCP ref when available.
 
-Remaining packaging follow-up:
+Remaining packaging follow-up (deferred to Milestone 9):
 
-- Bundle `tamtri-gateway-stdio` beside the signed macOS executable in release packaging. Development and tests discover `target/debug/tamtri-gateway-stdio`; release packaging still has to copy it into the app bundle.
+- Bundle `tamtri-gateway-stdio` beside the signed macOS executable in release packaging. Development and tests discover `target/debug/tamtri-gateway-stdio`; copying the helper into the app bundle, DMG layout, and notarized release packaging are M9 scope, not M4.
 
 ## Architecture note: gateway topology
 

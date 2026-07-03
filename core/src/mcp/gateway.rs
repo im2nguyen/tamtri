@@ -1306,14 +1306,106 @@ impl GatewayElicitationService {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::sync::Arc;
 
-    #[test]
-    fn gateway_tool_name_collision_is_stable() {
+    use super::*;
+    use crate::config::GatewayScope;
+    use serde_json::json;
+    use tokio::sync::mpsc;
+
+    fn stdio_server(id: &str, command: &str) -> GatewayServerConfig {
+        GatewayServerConfig {
+            id: id.to_string(),
+            display_name: id.to_string(),
+            enabled: true,
+            scope: GatewayScope::Project,
+            transport: GatewayTransport::Stdio {
+                command: command.to_string(),
+                args: Vec::new(),
+                env: Vec::new(),
+            },
+            timeout_secs: None,
+            credentials: Vec::new(),
+            oauth: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn gateway_tool_name_collision_is_stable() {
         assert_eq!(
             exposed_tool_name("my server", "Echo Tool"),
             "my_server__echo_tool"
         );
+
+        let Some(command) = option_env!("CARGO_BIN_EXE_mock-mcp-server") else {
+            return;
+        };
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let gateway = Arc::new(
+            McpGateway::new(
+                GatewayConfig {
+                    default_call_timeout_secs: 300,
+                    servers: vec![stdio_server("alpha", command), stdio_server("beta", command)],
+                },
+                Arc::new(NoCredentials),
+                Some(tx),
+            )
+            .unwrap(),
+        );
+
+        let tools = gateway.list_tools().await.unwrap();
+        let alpha_echo = tools
+            .iter()
+            .find(|tool| tool.server_id == "alpha" && tool.original_name == "echo")
+            .expect("alpha echo");
+        let beta_echo = tools
+            .iter()
+            .find(|tool| tool.server_id == "beta" && tool.original_name == "echo")
+            .expect("beta echo");
+        assert_ne!(alpha_echo.exposed_name, beta_echo.exposed_name);
+        assert_eq!(alpha_echo.exposed_name, "alpha__echo");
+        assert_eq!(beta_echo.exposed_name, "beta__echo");
+
+        gateway
+            .call_tool(
+                &alpha_echo.exposed_name,
+                json!({"server": "alpha", "message": "alpha"}),
+            )
+            .await
+            .unwrap();
+        let alpha_routed = tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                if let Some(GatewayEvent::ToolRouted { server_id, .. }) = rx.recv().await
+                    && server_id == "alpha"
+                {
+                    return server_id;
+                }
+            }
+        })
+        .await
+        .expect("alpha route event");
+
+        gateway
+            .call_tool(
+                &beta_echo.exposed_name,
+                json!({"server": "beta", "message": "beta"}),
+            )
+            .await
+            .unwrap();
+        let beta_routed = tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                if let Some(GatewayEvent::ToolRouted { server_id, .. }) = rx.recv().await
+                    && server_id == "beta"
+                {
+                    return server_id;
+                }
+            }
+        })
+        .await
+        .expect("beta route event");
+
+        assert_eq!(alpha_routed, "alpha");
+        assert_eq!(beta_routed, "beta");
     }
 
     #[tokio::test]

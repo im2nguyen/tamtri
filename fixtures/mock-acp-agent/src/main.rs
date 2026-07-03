@@ -113,18 +113,13 @@ fn main() {
                         }
                         let _ = call_gateway_echo(&mcp_servers, std::path::Path::new(cwd_path));
                         let _ = call_gateway_probe_roots(&mcp_servers, std::path::Path::new(cwd_path));
-                        if std::env::var("MOCK_ACP_EMIT_GATEWAY_CANCELLATION")
-                            .ok()
-                            .is_some_and(|value| value == "1")
-                        {
-                            let _ = notify_gateway_cancelled(&mcp_servers);
-                        }
                     }
                     if prompt_text.contains("form-elicit") {
                         let cwd_path = cwd.as_deref().map(std::path::Path::new);
                         let _ = call_gateway_elicit_form(&mcp_servers, cwd_path);
                     } else if prompt_text.contains("url-elicit") {
-                        let _ = call_gateway_elicit_url(&mcp_servers);
+                        let cwd_path = cwd.as_deref().map(std::path::Path::new);
+                        let _ = call_gateway_elicit_url(&mcp_servers, cwd_path);
                     }
                     let req_id = json!("perm-1");
                     permission_id = Some(id);
@@ -237,17 +232,27 @@ fn call_gateway_echo(mcp_servers: &[Value], cwd: &std::path::Path) -> Result<(),
     if mcp_servers.is_empty() {
         return Ok(());
     }
-    let tools = list_gateway_tools(mcp_servers)?;
+    let mut session = GatewaySession::connect(mcp_servers)?;
+    let tools = session.rpc_request(2, "tools/list", json!({}))?;
+    let tools = tools
+        .pointer("/tools")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
     let tool_name = tools
         .iter()
         .find(|tool| tool.get("name").and_then(Value::as_str) == Some("mock__echo"))
         .and_then(|tool| tool.get("name").and_then(Value::as_str))
         .ok_or_else(|| "gateway did not expose echo tool".to_string())?
         .to_string();
-    let result = call_gateway_tool(
-        mcp_servers,
-        &tool_name,
-        json!({"message": "gateway-echo-test"}),
+    let result = session.rpc_request(
+        3,
+        "tools/call",
+        json!({
+            "name": tool_name,
+            "arguments": json!({"message": "gateway-echo-test"}),
+            "_meta": {"toolCallId": "acp-tool-1"}
+        }),
     )?;
     let message = result
         .pointer("/structuredContent/echo/message")
@@ -345,7 +350,10 @@ fn call_gateway_elicit_form(
     Ok(())
 }
 
-fn call_gateway_elicit_url(mcp_servers: &[Value]) -> Result<(), String> {
+fn call_gateway_elicit_url(
+    mcp_servers: &[Value],
+    cwd: Option<&std::path::Path>,
+) -> Result<(), String> {
     if mcp_servers.is_empty() {
         return Ok(());
     }
@@ -364,7 +372,16 @@ fn call_gateway_elicit_url(mcp_servers: &[Value]) -> Result<(), String> {
         .and_then(|tool| tool.get("name").and_then(Value::as_str))
     {
         Some(name) => name.to_string(),
-        None => return Ok(()),
+        None => {
+            if let Some(cwd) = cwd {
+                let names: Vec<_> = tools
+                    .iter()
+                    .filter_map(|tool| tool.get("name").and_then(Value::as_str))
+                    .collect();
+                let _ = std::fs::write(cwd.join(".gateway-elicit-debug"), names.join("\n"));
+            }
+            return Ok(());
+        }
     };
     let _ = call_gateway_tool(mcp_servers, &tool_name, json!({}))?;
     Ok(())

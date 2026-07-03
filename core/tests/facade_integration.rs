@@ -215,7 +215,11 @@ fn events_jsonl_full_run_receipts() {
 fn events_jsonl_gateway_receipts() {
     let temp = tempfile::tempdir().expect("tempdir");
     let observer = Arc::new(RecordingObserver::default());
-    let core = TamtriCore::new(temp.path().to_string_lossy().into_owned(), observer).expect("core");
+    let core = TamtriCore::new(
+        temp.path().to_string_lossy().into_owned(),
+        Arc::clone(&observer) as Arc<dyn ConversationObserver>,
+    )
+    .expect("core");
 
     let mock_mcp = env!("CARGO_BIN_EXE_mock-mcp-server").to_string();
     let mut server = gateway_mock_server(&mock_mcp);
@@ -240,10 +244,6 @@ fn events_jsonl_gateway_receipts() {
         vec![
             tamtri_core::app::GatewayEnvVarDto {
                 name: "MOCK_ACP_CALL_FAIL_TOOL".to_string(),
-                value: "1".to_string(),
-            },
-            tamtri_core::app::GatewayEnvVarDto {
-                name: "MOCK_ACP_EMIT_GATEWAY_CANCELLATION".to_string(),
                 value: "1".to_string(),
             },
         ],
