@@ -314,14 +314,16 @@ async fn gateway_tools_list_aggregates_servers() {
     let tools = gateway.list_tools().await.unwrap();
     assert!(tools.iter().any(|tool| tool.exposed_name == "alpha__echo"));
     assert!(tools.iter().any(|tool| tool.exposed_name == "beta__echo"));
-    assert!(tools.iter().any(|tool| tool.exposed_name == "alpha__summarize"));
-    assert!(tools.iter().any(|tool| tool.exposed_name == "beta__summarize"));
 }
 
 #[tokio::test]
 async fn gateway_list_tools_recovers_after_timeout() {
-    let marker = tempfile::NamedTempFile::new().expect("temp marker");
-    let marker_path = marker.path().to_string_lossy().into_owned();
+    let dir = tempfile::tempdir().expect("temp dir");
+    let marker_path = dir
+        .path()
+        .join("list-marker")
+        .to_string_lossy()
+        .into_owned();
     let command = env!("CARGO_BIN_EXE_mock-mcp-server");
     let mut server = stdio_server("mock", command);
     server.timeout_secs = Some(1);

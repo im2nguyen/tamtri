@@ -432,58 +432,13 @@ mod tests {
 
     #[tokio::test]
     async fn timeout_removes_pending_and_ignores_late_response() {
-        use std::sync::atomic::{AtomicBool, Ordering};
-
-        struct SlowFirstTransport {
-            incoming: VecDeque<IncomingMessage>,
-            sent: Arc<Mutex<Vec<JsonRpcRequest>>>,
-            first_recv: AtomicBool,
-        }
-
-        #[async_trait]
-        impl Transport for SlowFirstTransport {
-            async fn send_request(&mut self, req: &JsonRpcRequest) -> Result<()> {
-                self.sent.lock().await.push(req.clone());
-                Ok(())
-            }
-
-            async fn send_notification(&mut self, _note: &JsonRpcNotification) -> Result<()> {
-                Ok(())
-            }
-
-            async fn send_response(&mut self, _resp: &JsonRpcResponse) -> Result<()> {
-                Ok(())
-            }
-
-            async fn recv(&mut self) -> Result<IncomingMessage> {
-                if !self.first_recv.load(Ordering::SeqCst) {
-                    tokio::time::sleep(Duration::from_millis(200)).await;
-                    self.first_recv.store(true, Ordering::SeqCst);
-                }
-                self.incoming
-                    .pop_front()
-                    .ok_or(CoreError::TransportClosed)
-            }
-
-            async fn close(&mut self) -> Result<()> {
-                Ok(())
-            }
-        }
-
         let sent = Arc::new(Mutex::new(Vec::new()));
-        let transport = SlowFirstTransport {
-            incoming: VecDeque::from(vec![
-                IncomingMessage::Response(JsonRpcResponse::success(
-                    RequestId::Number(1),
-                    json!("late"),
-                )),
-                IncomingMessage::Response(JsonRpcResponse::success(
-                    RequestId::Number(2),
-                    json!("ok"),
-                )),
-            ]),
-            sent: Arc::clone(&sent),
-            first_recv: AtomicBool::new(false),
+        let transport = DispatchMockTransport {
+            incoming: VecDeque::from(vec![IncomingMessage::Response(
+                JsonRpcResponse::success(RequestId::Number(1), json!("late")),
+            )]),
+            sent,
+            recv_delay: Duration::from_secs(60),
         };
         let (handle, _inbound) = RpcConnection::start(Box::new(transport));
 
