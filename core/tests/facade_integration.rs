@@ -329,8 +329,16 @@ fn fork_into_harness_updates_model_and_harness() {
     );
     assert_eq!(reloaded_fork.model_id.as_deref(), Some("model-b"));
 
+    let reloaded_parent = core.load_conversation(parent_id).expect("reload parent");
+    assert_eq!(
+        reloaded_parent.active_harness_id.as_deref(),
+        Some("mock-acp")
+    );
+    assert_eq!(reloaded_parent.model_id.as_deref(), Some("model-a"));
+    assert!(reloaded_parent.forked_from.is_none());
+
     let parent_messages: Vec<serde_json::Value> =
-        serde_json::from_str(&parent.transcript_json).expect("parent transcript");
+        serde_json::from_str(&reloaded_parent.transcript_json).expect("parent transcript");
     let fork_messages: Vec<serde_json::Value> =
         serde_json::from_str(&fork.transcript_json).expect("fork transcript");
     assert_eq!(fork_messages, parent_messages);
