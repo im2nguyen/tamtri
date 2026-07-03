@@ -32,6 +32,7 @@ pub enum EventKind {
     ArtifactSnapshotted,
     ArtifactNavigationBlocked,
     GatewayServerConnected,
+    GatewayServerDisconnected,
     GatewayToolRouted,
     GatewayProgress,
     GatewayLog,

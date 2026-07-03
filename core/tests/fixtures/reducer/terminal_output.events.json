@@ -1,0 +1,11 @@
+[
+  {
+    "type": "tool_call_started",
+    "id": "tool-1",
+    "name": "bash",
+    "kind": "execute",
+    "title": "Run",
+    "input": {"command": "echo hi"}
+  },
+  {"type": "terminal_output", "tool_call_id": "tool-1", "chunk": "hi\n"}
+]

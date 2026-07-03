@@ -27,6 +27,7 @@
 - `artifact_snapshotted`
 - `artifact_navigation_blocked`
 - `gateway_server_connected`
+- `gateway_server_disconnected`
 - `gateway_tool_routed`
 - `gateway_progress`
 - `gateway_log`

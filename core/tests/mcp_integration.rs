@@ -1,33 +1,49 @@
 //! Integration tests for the public `McpClient` surface.
-//!
-//! `mcp_client_concurrent_requests_correlate` mirrors
-//! `rpc::dispatch::tests::concurrent_requests_correlate`: McpClient delegates
-//! request correlation to `RpcConnection`, so the behavior is validated here at
-//! the client integration boundary with the same out-of-order response fixture.
 
 use std::collections::VecDeque;
-use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
 use serde_json::json;
-use tamtri_core::mcp::{McpClient, McpClientConfig};
-use tamtri_core::rpc::dispatch::RpcConnection;
-use tamtri_core::rpc::jsonrpc::{IncomingMessage as TransportMessage, JsonRpcRequest, JsonRpcResponse, RequestId};
+use tamtri_core::mcp::jsonrpc::{
+    IncomingMessage, JsonRpcNotification, JsonRpcRequest, JsonRpcResponse, RequestId,
+};
+use tamtri_core::mcp::{McpClient, McpClientConfig, McpClientEvent};
 use tamtri_core::rpc::transport::Transport;
 use tamtri_core::{CoreError, Result};
-use tokio::sync::Mutex;
+use tokio::sync::mpsc;
 
-struct DispatchMockTransport {
-    incoming: VecDeque<TransportMessage>,
-    sent: Arc<Mutex<Vec<JsonRpcRequest>>>,
-    recv_delay: Duration,
+struct MockTransport {
+    incoming: VecDeque<IncomingMessage>,
+    never_recv: bool,
+    requests_sent: usize,
+    responses_delivered: usize,
+}
+
+impl MockTransport {
+    fn new(incoming: Vec<IncomingMessage>) -> Self {
+        Self {
+            incoming: incoming.into(),
+            never_recv: false,
+            requests_sent: 0,
+            responses_delivered: 0,
+        }
+    }
+
+    fn never_recv() -> Self {
+        Self {
+            incoming: VecDeque::new(),
+            never_recv: true,
+            requests_sent: 0,
+            responses_delivered: 0,
+        }
+    }
 }
 
 #[async_trait]
-impl Transport for DispatchMockTransport {
-    async fn send_request(&mut self, req: &JsonRpcRequest) -> Result<()> {
-        self.sent.lock().await.push(req.clone());
+impl Transport for MockTransport {
+    async fn send_request(&mut self, _req: &JsonRpcRequest) -> Result<()> {
+        self.requests_sent += 1;
         Ok(())
     }
 
@@ -42,11 +58,25 @@ impl Transport for DispatchMockTransport {
         Ok(())
     }
 
-    async fn recv(&mut self) -> Result<TransportMessage> {
-        tokio::time::sleep(self.recv_delay).await;
-        self.incoming
-            .pop_front()
-            .ok_or(CoreError::TransportClosed)
+    async fn recv(&mut self) -> Result<IncomingMessage> {
+        if self.never_recv {
+            tokio::time::sleep(Duration::from_secs(60)).await;
+            return Err(CoreError::TransportClosed);
+        }
+        if matches!(self.incoming.front(), Some(IncomingMessage::Response(_)))
+            && self.responses_delivered >= self.requests_sent
+        {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            return Err(CoreError::TransportClosed);
+        }
+        if let Some(message) = self.incoming.pop_front() {
+            if matches!(message, IncomingMessage::Response(_)) {
+                self.responses_delivered += 1;
+            }
+            return Ok(message);
+        }
+        tokio::time::sleep(Duration::from_secs(60)).await;
+        Err(CoreError::TransportClosed)
     }
 
     async fn close(&mut self) -> Result<()> {
@@ -54,33 +84,91 @@ impl Transport for DispatchMockTransport {
     }
 }
 
+fn tools_page(name: &str) -> serde_json::Value {
+    json!({
+        "tools": [{
+            "name": name,
+            "description": name,
+            "inputSchema": {"type": "object"}
+        }]
+    })
+}
+
 #[tokio::test]
 async fn mcp_client_concurrent_requests_correlate() {
-    let sent = Arc::new(Mutex::new(Vec::new()));
-    let transport = DispatchMockTransport {
-        incoming: VecDeque::from(vec![
-            TransportMessage::Response(JsonRpcResponse::success(
+    let client = McpClient::connect_test(
+        Box::new(MockTransport::new(vec![
+            IncomingMessage::Response(JsonRpcResponse::success(
                 RequestId::Number(2),
-                json!("b"),
+                tools_page("b"),
             )),
-            TransportMessage::Response(JsonRpcResponse::success(
+            IncomingMessage::Response(JsonRpcResponse::success(
                 RequestId::Number(1),
-                json!("a"),
+                tools_page("a"),
             )),
-        ]),
-        sent: Arc::clone(&sent),
-        recv_delay: Duration::from_millis(1),
-    };
-    let (handle, _inbound) = RpcConnection::start(Box::new(transport));
-
-    let (a, b) = tokio::join!(
-        handle.request("a", None, Duration::from_secs(1)),
-        handle.request("b", None, Duration::from_secs(1))
+        ])),
+        McpClientConfig::default(),
+        None,
     );
 
-    assert_eq!(a.unwrap(), json!("a"));
-    assert_eq!(b.unwrap(), json!("b"));
-    assert_eq!(sent.lock().await.len(), 2);
+    let (a, b) = tokio::join!(client.list_tools(), client.list_tools());
+
+    let a_tools = a.unwrap();
+    let b_tools = b.unwrap();
+    assert_eq!(a_tools[0].name, "a");
+    assert_eq!(b_tools[0].name, "b");
+}
+
+#[tokio::test]
+async fn mcp_client_inbound_progress_while_pending() {
+    let (events_tx, mut events_rx) = mpsc::unbounded_channel();
+    let client = McpClient::connect_test(
+        Box::new(MockTransport::new(vec![
+            IncomingMessage::Notification(JsonRpcNotification::new(
+                "notifications/progress",
+                Some(json!({"progress": 0.5, "message": "halfway"})),
+            )),
+            IncomingMessage::Response(JsonRpcResponse::success(
+                RequestId::Number(1),
+                json!({"tools": []}),
+            )),
+        ])),
+        McpClientConfig::default(),
+        Some(events_tx),
+    );
+
+    let list = client.list_tools();
+    let (event, result) = tokio::join!(events_rx.recv(), list);
+    assert!(matches!(
+        event,
+        Some(McpClientEvent::Progress { params }) if params["message"] == "halfway"
+    ));
+    assert!(result.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn mcp_client_timeout_removes_pending() {
+    tokio::time::pause();
+
+    let client = McpClient::connect_test(
+        Box::new(MockTransport::never_recv()),
+        McpClientConfig {
+            init_timeout: Duration::from_millis(100),
+            call_timeout: Duration::from_millis(100),
+        },
+        None,
+    );
+
+    let first = client.list_tools();
+    tokio::time::advance(Duration::from_millis(200)).await;
+    assert!(matches!(
+        first.await,
+        Err(CoreError::Timeout { method }) if method == "tools/list"
+    ));
+    assert!(matches!(
+        client.list_tools().await,
+        Err(CoreError::TransportClosed)
+    ));
 }
 
 #[tokio::test]

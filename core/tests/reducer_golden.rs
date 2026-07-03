@@ -38,6 +38,11 @@ fn reducer_golden_files() {
         "text_thinking_collapse",
         "tool_call_pair",
         "file_changed_no_artifact",
+        "permission_compact",
+        "interleaved_thinking",
+        "terminal_output",
+        "harness_error",
+        "lifecycle_no_blocks",
     ] {
         reduce_fixture(case);
     }

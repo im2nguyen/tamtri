@@ -113,6 +113,9 @@ pub enum GatewayEvent {
     ServerConnected {
         server_id: String,
     },
+    ServerDisconnected {
+        server_id: String,
+    },
     ToolRouted {
         server_id: String,
         exposed_name: String,
@@ -809,12 +812,20 @@ impl McpGateway {
     }
 
     async fn evict_client(&self, server_id: &str) {
-        if let Some(client) = self.clients.lock().await.remove(server_id)
-            && let Ok(client) = Arc::try_unwrap(client)
-        {
-            let _ = client.close().await;
-        }
+        let removed = if let Some(client) = self.clients.lock().await.remove(server_id) {
+            if let Ok(client) = Arc::try_unwrap(client) {
+                let _ = client.close().await;
+            }
+            true
+        } else {
+            false
+        };
         self.task_tracker.unregister_client(server_id).await;
+        if removed {
+            self.emit(GatewayEvent::ServerDisconnected {
+                server_id: server_id.to_string(),
+            });
+        }
     }
 
     async fn client_for(&self, server: &GatewayServerConfig) -> Result<Arc<McpClient>> {

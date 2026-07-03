@@ -128,6 +128,16 @@ impl McpClient {
         Ok(client)
     }
 
+    /// Hermetic integration-test constructor. Production code should use `connect_stdio` or
+    /// `connect_http`.
+    pub fn connect_test(
+        transport: Box<dyn Transport>,
+        config: McpClientConfig,
+        events: Option<mpsc::UnboundedSender<McpClientEvent>>,
+    ) -> Self {
+        Self::with_transport(transport, config, events, None, None)
+    }
+
     fn with_transport(
         transport: Box<dyn Transport>,
         config: McpClientConfig,

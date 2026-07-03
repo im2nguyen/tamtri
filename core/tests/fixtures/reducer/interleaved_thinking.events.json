@@ -1,0 +1,6 @@
+[
+  {"type": "thought_delta", "text": "hmm"},
+  {"type": "text_delta", "text": "Hello"},
+  {"type": "thought_delta", "text": " wait"},
+  {"type": "text_delta", "text": " world"}
+]

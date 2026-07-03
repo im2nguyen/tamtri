@@ -16,5 +16,5 @@ pub mod tasks;
 pub mod transport;
 pub mod url_handoff;
 
-pub use client::{McpClient, McpClientConfig};
+pub use client::{McpClient, McpClientConfig, McpClientEvent};
 pub use protocol::MCP_PROTOCOL_VERSION;

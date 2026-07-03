@@ -1822,6 +1822,10 @@ fn gateway_event_to_audit(event: &GatewayEvent) -> (EventKind, serde_json::Value
             EventKind::GatewayServerConnected,
             json!({ "server_id": server_id }),
         ),
+        GatewayEvent::ServerDisconnected { server_id } => (
+            EventKind::GatewayServerDisconnected,
+            json!({ "server_id": server_id }),
+        ),
         GatewayEvent::ToolRouted {
             server_id,
             exposed_name,
@@ -2038,6 +2042,7 @@ fn event_kind(event: &HarnessEvent) -> &'static str {
 fn gateway_event_kind(event: &GatewayEvent) -> &'static str {
     match event {
         GatewayEvent::ServerConnected { .. } => "gateway_server_connected",
+        GatewayEvent::ServerDisconnected { .. } => "gateway_server_disconnected",
         GatewayEvent::ToolRouted { .. } => "gateway_tool_routed",
         GatewayEvent::CredentialInjected { .. } => "gateway_credential_injected",
         GatewayEvent::CredentialUpdated { .. } => "gateway_credential_updated",

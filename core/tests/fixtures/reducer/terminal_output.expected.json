@@ -1,0 +1,13 @@
+[
+  {
+    "type": "tool_call",
+    "id": "tool-1",
+    "name": "bash",
+    "input": {"command": "echo hi"}
+  },
+  {
+    "type": "tool_result",
+    "call_id": "tool-1",
+    "output": {"terminal": "hi\n"}
+  }
+]

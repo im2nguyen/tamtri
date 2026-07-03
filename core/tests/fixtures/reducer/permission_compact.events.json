@@ -1,0 +1,22 @@
+[
+  {
+    "type": "permission_requested",
+    "request_id": "perm-1",
+    "action": "edit",
+    "detail": {
+      "type": "file_edit",
+      "diff": {
+        "path": "report.html",
+        "change": "modified",
+        "old_text": "<h1>old</h1>",
+        "new_text": "<h1>new</h1>"
+      }
+    },
+    "options": [{"id": "allow_once", "label": "Allow once"}]
+  },
+  {
+    "type": "permission_resolved",
+    "request_id": "perm-1",
+    "option_id": "allow_once"
+  }
+]

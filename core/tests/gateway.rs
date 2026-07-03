@@ -510,13 +510,14 @@ async fn gateway_evicts_client_on_transport_closed() {
         env.push(("MOCK_MCP_EXIT_AFTER_FIRST_LIST".to_string(), "1".to_string()));
     }
 
+    let (tx, mut rx) = mpsc::unbounded_channel();
     let gateway = McpGateway::new(
         GatewayConfig {
             default_call_timeout_secs: 300,
             servers: vec![server],
         },
         Arc::new(NoCredentials),
-        None,
+        Some(tx),
     )
     .unwrap();
 
@@ -538,6 +539,20 @@ async fn gateway_evicts_client_on_transport_closed() {
             .iter()
             .map(|tool| tool.exposed_name.as_str())
             .collect::<Vec<_>>()
+    );
+    assert!(
+        tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                if let Some(GatewayEvent::ServerDisconnected { server_id }) = rx.recv().await
+                    && server_id == "mock"
+                {
+                    return;
+                }
+            }
+        })
+        .await
+        .is_ok(),
+        "expected gateway_server_disconnected event after eviction"
     );
 
     let third = gateway.list_tools().await.expect("list after reconnect");
