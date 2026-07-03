@@ -54,7 +54,7 @@ impl TamtriFeatureSupport {
 
     /// Current M7 build support level.
     pub const fn current() -> Self {
-        Self::milestone_7_pr5()
+        Self::milestone_7_pr4()
     }
 }
 
