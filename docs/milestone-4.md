@@ -88,9 +88,9 @@ Keep the existing `&self` call shape. `McpClient` now owns an inbound driver tas
 - logging notifications become gateway log events and audit receipts.
 - server-initiated requests that belong to later milestones, such as elicitation or sampling, receive honest method-not-found or capability-not-advertised behavior for now. Do not silently drop them.
 
-Timeout behavior changes with the dispatch loop: a timed-out request removes its pending entry and returns `CoreError::Timeout`; a late response is ignored and logged. Initialization timeout still closes the connection because the server is not usable without a completed handshake.
+Timeout behavior keeps the M2 full-poison policy on `RpcConnection`: a timed-out request removes its pending entry, returns `CoreError::Timeout`, and poisons the handle (subsequent calls return `CoreError::TransportClosed`). Late responses on the wire are ignored and logged. Callers must reconnect; there is no resync after a stale reply may be in flight. Initialization timeout still closes the connection because the server is not usable without a completed handshake.
 
-Tests: reuse the dispatch tests from M3 and add MCP-client-level tests for two concurrent `tools/call` requests whose responses arrive out of order, inbound progress while calls are pending, timeout removal without poisoning the whole client, and ping handling through the inbound driver.
+Tests: reuse the dispatch tests from M3 and add MCP-client-level tests for two concurrent `tools/call` requests whose responses arrive out of order, inbound progress while calls are pending, timeout poison with late response ignored, and ping handling through the inbound driver.
 
 ## Task 2: Streamable HTTP transport
 
@@ -280,7 +280,7 @@ Enumerated tests:
 
 1. `mcp_client_concurrent_requests_correlate` - two requests to one server, responses out of order.
 2. `mcp_client_inbound_progress_while_pending` - progress arrives before the result and reaches the gateway event sink.
-3. `mcp_client_timeout_removes_pending` - late response after timeout is ignored.
+3. `mcp_client_timeout_removes_pending` - late response after timeout is ignored and the connection is poisoned.
 4. `streamable_http_json_response` - simple request/response over HTTP.
 5. `streamable_http_sse_response` - SSE stream yields progress then result.
 6. `streamable_http_preserves_session_header` - session id/header is reused after initialize.

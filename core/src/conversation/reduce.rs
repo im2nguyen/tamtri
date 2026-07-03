@@ -58,10 +58,10 @@ impl TurnReducer {
                 ..
             } => {
                 self.flush_deltas();
-                if matches!(kind, ToolKind::Write | ToolKind::Edit) {
-                    if let Some(path) = path_from_tool_input(input) {
-                        self.push_referenced_path(&path);
-                    }
+                if matches!(kind, ToolKind::Write | ToolKind::Edit)
+                    && let Some(path) = path_from_tool_input(input)
+                {
+                    self.push_referenced_path(&path);
                 }
                 self.blocks.push(ContentBlock::ToolCall {
                     id: id.clone(),

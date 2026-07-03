@@ -17,6 +17,10 @@ Scope is tools only. No elicitation, Apps, Tasks, Sampling, or Roots yet. No HTT
 - `cargo clippy` clean. No `unwrap()` / `expect()` in non-test code.
 - Protocol version, negotiated capabilities, timeout policy, ping handling, and the message-loop limitation are documented in `/docs/mcp-client.md`.
 
+## Implementation checkpoints and gaps
+
+Task 4 originally specified a sequential read-until-my-reply loop inside `McpClient`, with a mutex-serialized transport and a milestone-4 seam for multiplexing. The repo implements that behavior on the shared `rpc::dispatch::RpcConnection` introduced in Milestone 3 for ACP, not as a one-off reader in `mcp/client.rs`. Timeouts still poison the connection (`CoreError::Timeout` then `CoreError::TransportClosed` on reuse), interleaved notifications and server requests are handled while waiting, and the public `&self` API shape is unchanged. Milestone 4 promoted concurrent fan-out on the same loop. See `/docs/mcp-client.md` for the current poison-on-timeout policy.
+
 ## Architectural note: the core becomes async
 
 Milestone 1 was synchronous. The MCP client spawns subprocesses and reads a stream, so this milestone adopts an async runtime. Use tokio. Every downstream piece (harness adapters return async streams) already assumed this. Keep the async surface inside the core. The FFI bridge to Swift will convert async to the shell's expectations in a later milestone. That conversion is not this milestone's problem, but do not leak `tokio` types across public API boundaries you expect the FFI layer to call. Return your own types and `Result`.

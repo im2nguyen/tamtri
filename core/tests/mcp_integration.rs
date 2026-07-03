@@ -37,3 +37,24 @@ async fn integration_echo_tool() {
 
     client.close().await.unwrap();
 }
+
+#[tokio::test]
+#[ignore = "requires npx and network; spawns @modelcontextprotocol/server-everything"]
+async fn integration_server_everything() {
+    let client = McpClient::connect_stdio(
+        "npx",
+        &[
+            "-y".to_string(),
+            "@modelcontextprotocol/server-everything".to_string(),
+        ],
+        &[],
+        McpClientConfig::default(),
+    )
+    .await
+    .unwrap();
+
+    let tools = client.list_tools().await.unwrap();
+    assert!(!tools.is_empty());
+
+    client.close().await.unwrap();
+}
