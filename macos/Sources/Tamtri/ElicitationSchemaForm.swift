@@ -1,6 +1,28 @@
 import Foundation
 import SwiftUI
 
+enum ElicitationCardKind: Equatable {
+    case urlHandoff
+    case secretBlocked
+    case unsupportedSchema
+    case form
+}
+
+enum ElicitationCardRouter {
+    static func cardKind(mode: String?, schema: JSONValue?) -> ElicitationCardKind {
+        if mode == "url" {
+            return .urlHandoff
+        }
+        if ElicitationSchemaPolicy.schemaLooksSecret(schema) {
+            return .secretBlocked
+        }
+        if !ElicitationSchemaPolicy.schemaIsRenderable(schema) {
+            return .unsupportedSchema
+        }
+        return .form
+    }
+}
+
 enum ElicitationSchemaPolicy {
     static func textLooksSecret(_ text: String) -> Bool {
         let normalized = text.lowercased()

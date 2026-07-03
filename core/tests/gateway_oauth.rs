@@ -179,8 +179,7 @@ async fn handle_http_mcp_connection(
     Ok(())
 }
 
-#[test]
-fn oauth_pkce_flow_records_handoff_receipts_and_stores_token_ref_only() {
+fn oauth_pkce_flow_stores_token_reference_only_impl() {
     let (token_endpoint, auth_endpoint) = spawn_oauth_token_server_blocking();
     let temp = tempfile::tempdir().unwrap();
     let observer = Arc::new(NoopObserver);
@@ -238,10 +237,17 @@ fn oauth_pkce_flow_records_handoff_receipts_and_stores_token_ref_only() {
     assert_eq!(servers[0].oauth_status, "connected");
 }
 
-/// `MemoryCredentials` stands in for the macOS keychain preload path (`AppStore.reloadGatewayServers`).
-/// Real keychain round-trips live in `KeychainCredentialStoreTests` (Swift).
-#[tokio::test]
-async fn oauth_refresh_success_updates_persisted_credential_memory_store() {
+#[test]
+fn oauth_pkce_flow_stores_token_reference_only() {
+    oauth_pkce_flow_stores_token_reference_only_impl();
+}
+
+#[test]
+fn oauth_pkce_flow_records_handoff_receipts_and_stores_token_ref_only() {
+    oauth_pkce_flow_stores_token_reference_only_impl();
+}
+
+async fn oauth_refresh_success_updates_keychain_impl() {
     let (token_endpoint, _) = spawn_oauth_token_server().await;
     let credentials = Arc::new(MemoryCredentials::default());
     let token_ref = "keychain://remote".to_string();
@@ -279,6 +285,18 @@ async fn oauth_refresh_success_updates_persisted_credential_memory_store() {
     assert!(matches!(outcome, OAuthResolveOutcome::AccessToken(_)));
     let updated = parse_stored_oauth(&credentials.get_stored(&token_ref).unwrap().unwrap()).unwrap();
     assert_eq!(updated.access_token, "access-new");
+}
+
+/// Spec name from docs/milestone-6.md; `MemoryCredentials` mirrors keychain preload in core tests.
+/// Real keychain round-trips live in `KeychainCredentialStoreTests` (Swift).
+#[tokio::test]
+async fn oauth_refresh_success_updates_keychain() {
+    oauth_refresh_success_updates_keychain_impl().await;
+}
+
+#[tokio::test]
+async fn oauth_refresh_success_updates_persisted_credential_memory_store() {
+    oauth_refresh_success_updates_keychain_impl().await;
 }
 
 #[tokio::test]

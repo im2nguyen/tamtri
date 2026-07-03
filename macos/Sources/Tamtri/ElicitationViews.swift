@@ -76,6 +76,25 @@ struct URLConsentCard: View {
     }
 }
 
+struct URLConsentPresentation: Equatable {
+    let showsUnsafeWarning: Bool
+    let destinationOrigin: String?
+    let openButtonEnabled: Bool
+    let accessibilityLabel: String
+}
+
+enum URLConsentPresentationBuilder {
+    static func build(request: URLConsentRequest) -> URLConsentPresentation {
+        let destination = request.url.flatMap { URLHandoffPolicy.destination(for: $0) }
+        return URLConsentPresentation(
+            showsUnsafeWarning: destination == nil && request.url != nil,
+            destinationOrigin: destination?.origin,
+            openButtonEnabled: destination != nil,
+            accessibilityLabel: "Browser handoff requested"
+        )
+    }
+}
+
 struct URLConsentRequest {
     let requestId: String
     let serverId: String?
