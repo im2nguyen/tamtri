@@ -18,7 +18,8 @@ use crate::config::{
 };
 use crate::conversation::reduce::TurnReducer;
 use crate::conversation::{
-    ContentBlock, Conversation, ElicitationAction, Id, McpServerRef, Message, Role, WorkingDir,
+    attach_root, remove_root, validate_root, ContentBlock, Conversation, ElicitationAction, Id,
+    McpServerRef, Message, Role, Root, RootKind, RootScope, WorkingDir,
 };
 use crate::harness::acp::{AcpAdapter, AgentLaunchSpec};
 use crate::harness::{
@@ -31,7 +32,13 @@ use crate::mcp::oauth::{
     stored_oauth_from_token_response, validate_callback_url,
 };
 use crate::mcp::url_handoff::validate_handoff_url;
+use crate::mcp::app_bridge::{
+    execute_action, finish_execution, parse_app_bridge_rpc, shared_app_bridge_coordinator,
+    AppBridgeResolution, SharedAppBridgeCoordinator,
+};
+use crate::mcp::app::{app_bridge_bootstrap_script, app_sandbox_csp, AppTemplate};
 use crate::mcp::endpoint::{GatewayEndpoint, start_loopback_gateway};
+use crate::mcp::capabilities::{FeatureStatus, ServerCapabilityReport};
 use crate::mcp::gateway::{GatewayEvent, McpGateway, MemoryCredentials};
 use crate::vault::events::{Event, EventKind};
 use crate::vault::fs::FilesystemVault;
@@ -74,6 +81,15 @@ struct CachedConversationDto {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, uniffi::Record)]
+pub struct RootDto {
+    pub id: String,
+    pub name: String,
+    pub uri: String,
+    pub kind: String,
+    pub scope: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, uniffi::Record)]
 pub struct WorkdirFileDto {
     pub relative_path: String,
     pub size: u64,
@@ -112,6 +128,14 @@ pub struct GatewayServerDto {
     pub oauth_authorization_endpoint: String,
     pub oauth_token_endpoint: String,
     pub oauth_scopes: Vec<String>,
+    pub cap_tools: String,
+    pub cap_resources: String,
+    pub cap_prompts: String,
+    pub cap_elicitation: String,
+    pub cap_apps: String,
+    pub cap_tasks: String,
+    pub cap_roots: String,
+    pub cap_sampling: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, uniffi::Record)]
@@ -126,6 +150,23 @@ pub struct OAuthHandoffDto {
 pub struct OAuthCompletionDto {
     pub server_id: String,
     pub oauth_status: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, uniffi::Record)]
+pub struct AppTemplateDto {
+    pub template_ref: String,
+    pub server_id: String,
+    pub html: String,
+    pub allowed_origins: Vec<String>,
+    pub metadata_json: String,
+    pub bridge_script: String,
+    pub content_security_policy: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, uniffi::Record)]
+pub struct AppBridgeSubmissionDto {
+    pub request_id: String,
+    pub needs_consent: bool,
 }
 
 type FfiResult<T> = std::result::Result<T, TamtriError>;
@@ -168,6 +209,10 @@ pub struct TamtriCore {
     observer: Arc<dyn ConversationObserver>,
     conversation_cache: Arc<Mutex<HashMap<Id, CachedConversationDto>>>,
     pending_oauth: Arc<Mutex<HashMap<String, PendingOAuthFlow>>>,
+    gateway_capability_cache: Arc<Mutex<HashMap<String, ServerCapabilityReport>>>,
+    app_bridge: SharedAppBridgeCoordinator,
+    /// Shell-resolved root URIs (security-scoped bookmarks) keyed by conversation id.
+    runtime_roots: Arc<Mutex<HashMap<Id, Vec<Root>>>>,
 }
 
 const CONVERSATION_CACHE_LIMIT: usize = 32;
@@ -192,6 +237,9 @@ impl TamtriCore {
             observer,
             conversation_cache: Arc::new(Mutex::new(HashMap::new())),
             pending_oauth: Arc::new(Mutex::new(HashMap::new())),
+            gateway_capability_cache: Arc::new(Mutex::new(HashMap::new())),
+            app_bridge: shared_app_bridge_coordinator(),
+            runtime_roots: Arc::new(Mutex::new(HashMap::new())),
         })
     }
 
@@ -314,8 +362,17 @@ impl TamtriCore {
         self.cancel_run_inner(&conversation_id).map_err(ffi_err)
     }
 
+    pub fn cancel_task(&self, conversation_id: String, task_id: String) -> FfiResult<()> {
+        self.cancel_task_inner(&conversation_id, &task_id)
+            .map_err(ffi_err)
+    }
+
     pub fn list_gateway_servers(&self) -> FfiResult<Vec<GatewayServerDto>> {
         self.list_gateway_servers_inner().map_err(ffi_err)
+    }
+
+    pub fn refresh_gateway_capabilities(&self) -> FfiResult<Vec<GatewayServerDto>> {
+        self.refresh_gateway_capabilities_inner().map_err(ffi_err)
     }
 
     pub fn set_gateway_credential(&self, credential_ref: String, value: String) -> FfiResult<()> {
@@ -346,6 +403,36 @@ impl TamtriCore {
     pub fn export_gateway_credential(&self, credential_ref: String) -> FfiResult<Option<String>> {
         self.credentials
             .get_stored(&credential_ref)
+            .map_err(ffi_err)
+    }
+
+    pub fn list_roots(&self, conversation_id: String) -> FfiResult<Vec<RootDto>> {
+        self.list_roots_inner(&conversation_id).map_err(ffi_err)
+    }
+
+    pub fn attach_root(
+        &self,
+        conversation_id: String,
+        name: String,
+        uri: String,
+        kind: String,
+        scope: String,
+    ) -> FfiResult<RootDto> {
+        self.attach_root_inner(&conversation_id, &name, &uri, &kind, &scope)
+            .map_err(ffi_err)
+    }
+
+    pub fn remove_root(&self, conversation_id: String, root_id: String) -> FfiResult<()> {
+        self.remove_root_inner(&conversation_id, &root_id)
+            .map_err(ffi_err)
+    }
+
+    pub fn sync_runtime_roots(
+        &self,
+        conversation_id: String,
+        roots: Vec<RootDto>,
+    ) -> FfiResult<()> {
+        self.sync_runtime_roots_inner(&conversation_id, roots)
             .map_err(ffi_err)
     }
 
@@ -426,6 +513,71 @@ impl TamtriCore {
                 ),
             )
             .map_err(ffi_err)
+    }
+
+    pub fn resolve_app_template(
+        &self,
+        conversation_id: String,
+        server_id: String,
+        template_ref: String,
+    ) -> FfiResult<Option<AppTemplateDto>> {
+        self.resolve_app_template_inner(&conversation_id, &server_id, &template_ref)
+            .map_err(ffi_err)
+    }
+
+    pub fn submit_app_bridge_request(
+        &self,
+        conversation_id: String,
+        server_id: String,
+        app_id: String,
+        template_ref: String,
+        request_json: String,
+    ) -> FfiResult<AppBridgeSubmissionDto> {
+        self.submit_app_bridge_request_inner(
+            &conversation_id,
+            &server_id,
+            &app_id,
+            &template_ref,
+            &request_json,
+        )
+        .map_err(ffi_err)
+    }
+
+    pub fn respond_app_bridge_consent(
+        &self,
+        conversation_id: String,
+        request_id: String,
+        option_id: String,
+    ) -> FfiResult<()> {
+        self.respond_app_bridge_consent_inner(&conversation_id, &request_id, &option_id)
+            .map_err(ffi_err)
+    }
+
+    pub fn log_app_navigation_blocked(
+        &self,
+        conversation_id: String,
+        server_id: String,
+        template_ref: String,
+        url: String,
+    ) -> FfiResult<()> {
+        let id = parse_id(&conversation_id)?;
+        self.vault
+            .append_event(
+                id,
+                &Event::new(
+                    EventKind::AppNavigationBlocked,
+                    json!({
+                        "server_id": server_id,
+                        "template_ref": template_ref,
+                        "url": url,
+                    }),
+                ),
+            )
+            .map_err(ffi_err)
+    }
+
+    pub fn app_bridge_bootstrap_script(&self) -> String {
+        app_bridge_bootstrap_script("tamtriAppBridge")
     }
 }
 
@@ -517,6 +669,12 @@ impl TamtriCore {
             self.credentials.clone(),
             Some(gateway_event_tx),
         )?);
+        self.runtime
+            .block_on(gateway.set_roots(roots_for_gateway(
+                &self.runtime_roots,
+                id,
+                &conversation.roots,
+            )));
         let gateway_endpoint = self
             .runtime
             .block_on(start_loopback_gateway(Arc::clone(&gateway)))?;
@@ -554,6 +712,7 @@ impl TamtriCore {
         let conversation_cache = Arc::clone(&self.conversation_cache);
         let gateway_blocks = Arc::new(Mutex::new(Vec::<ContentBlock>::new()));
         let gateway_for_run = Arc::clone(&gateway);
+        let runtime_roots = Arc::clone(&self.runtime_roots);
         self.runtime.spawn(async move {
             let gateway_vault = Arc::clone(&vault);
             let gateway_observer = Arc::clone(&observer);
@@ -663,6 +822,9 @@ impl TamtriCore {
                     if let Ok(mut runs) = active_runs.lock() {
                         runs.remove(&id);
                     }
+                    if let Ok(mut roots) = runtime_roots.lock() {
+                        roots.remove(&id);
+                    }
                 }
                 Err(err) => {
                     let _ = vault.append_event(
@@ -735,6 +897,136 @@ impl TamtriCore {
         Ok(())
     }
 
+    pub fn resolve_app_template_inner(
+        &self,
+        conversation_id: &str,
+        server_id: &str,
+        template_ref: &str,
+    ) -> Result<Option<AppTemplateDto>> {
+        let id = parse_id(conversation_id)?;
+        let gateway = self
+            .active_runs
+            .lock()
+            .map_err(|_| CoreError::Protocol("run registry lock poisoned".to_string()))?
+            .get(&id)
+            .map(|run| Arc::clone(&run.gateway));
+        let Some(gateway) = gateway else {
+            return Ok(None);
+        };
+        let template = self
+            .runtime
+            .block_on(gateway.cached_app_template(server_id, template_ref));
+        Ok(template.map(app_template_to_dto))
+    }
+
+    pub fn submit_app_bridge_request_inner(
+        &self,
+        conversation_id: &str,
+        server_id: &str,
+        app_id: &str,
+        template_ref: &str,
+        request_json: &str,
+    ) -> Result<AppBridgeSubmissionDto> {
+        let id = parse_id(conversation_id)?;
+        if self
+            .active_runs
+            .lock()
+            .map_err(|_| CoreError::Protocol("run registry lock poisoned".to_string()))?
+            .get(&id)
+            .is_none()
+        {
+            return Err(CoreError::NotFound(id));
+        }
+        let request = parse_app_bridge_rpc(request_json)?;
+        let (consent, _response_rx) = self.app_bridge.begin_request(
+            id,
+            server_id,
+            app_id,
+            template_ref,
+            &request,
+        )?;
+        self.vault.append_event(
+            id,
+            &Event::new(
+                EventKind::AppBridgeConsentRequested,
+                json!({
+                    "request_id": consent.request_id,
+                    "server_id": consent.server_id,
+                    "app_id": consent.app_id,
+                    "template_ref": consent.template_ref,
+                    "action": consent.action,
+                    "summary": consent.summary,
+                    "options": consent.options,
+                }),
+            ),
+        )?;
+        self.observer.on_event(UiEvent {
+            conversation_id: id.to_string(),
+            kind: "app_bridge_consent_requested".to_string(),
+            payload_json: serde_json::to_string(&consent).unwrap_or_else(|_| "{}".to_string()),
+        });
+        Ok(AppBridgeSubmissionDto {
+            request_id: consent.request_id,
+            needs_consent: true,
+        })
+    }
+
+    pub fn respond_app_bridge_consent_inner(
+        &self,
+        conversation_id: &str,
+        request_id: &str,
+        option_id: &str,
+    ) -> Result<()> {
+        let id = parse_id(conversation_id)?;
+        let gateway = self
+            .active_runs
+            .lock()
+            .map_err(|_| CoreError::Protocol("run registry lock poisoned".to_string()))?
+            .get(&id)
+            .map(|run| Arc::clone(&run.gateway))
+            .ok_or(CoreError::NotFound(id))?;
+        let resolution = self
+            .app_bridge
+            .resolve_consent(id, request_id, option_id)?;
+        let (response, audit) = match resolution {
+            AppBridgeResolution::Denied { response, audit } => (response, audit),
+            AppBridgeResolution::Approved { pending, audit } => {
+                let execution = self.runtime.block_on(execute_action(
+                    gateway.as_ref(),
+                    &pending.server_id,
+                    &pending.action,
+                ));
+                let response = finish_execution(pending, execution);
+                (response, audit)
+            }
+        };
+        self.vault.append_event(
+            id,
+            &Event::new(
+                EventKind::AppBridgeConsentResolved,
+                json!({
+                    "request_id": request_id,
+                    "server_id": audit.server_id,
+                    "app_id": audit.app_id,
+                    "template_ref": audit.template_ref,
+                    "action_kind": audit.action_kind,
+                    "arguments_summary": audit.arguments_summary,
+                    "resolution": audit.resolution,
+                }),
+            ),
+        )?;
+        self.observer.on_event(UiEvent {
+            conversation_id: id.to_string(),
+            kind: "app_bridge_resolved".to_string(),
+            payload_json: json!({
+                "request_id": request_id,
+                "response_json": response,
+            })
+            .to_string(),
+        });
+        Ok(())
+    }
+
     pub fn cancel_run_inner(&self, conversation_id: &str) -> Result<()> {
         let id = parse_id(conversation_id)?;
         let run = self
@@ -750,14 +1042,59 @@ impl TamtriCore {
         })
     }
 
+    pub fn cancel_task_inner(&self, conversation_id: &str, task_id: &str) -> Result<()> {
+        let id = parse_id(conversation_id)?;
+        let run = self
+            .active_runs
+            .lock()
+            .map_err(|_| CoreError::Protocol("run registry lock poisoned".to_string()))?
+            .get(&id)
+            .cloned()
+            .ok_or(CoreError::NotFound(id))?;
+        self.runtime
+            .block_on(run.gateway.cancel_task(task_id))
+    }
+
     pub fn list_gateway_servers_inner(&self) -> Result<Vec<GatewayServerDto>> {
         let config = load_app_config(self.vault.root())?;
+        let cache = self
+            .gateway_capability_cache
+            .lock()
+            .map_err(|_| CoreError::Protocol("capability cache lock poisoned".to_string()))?;
         config
             .gateway
             .servers
             .into_iter()
-            .map(|server| gateway_server_to_dto(&server, &self.credentials))
+            .map(|server| {
+                gateway_server_to_dto(
+                    &server,
+                    &self.credentials,
+                    cache.get(&server.id),
+                )
+            })
             .collect()
+    }
+
+    pub fn refresh_gateway_capabilities_inner(&self) -> Result<Vec<GatewayServerDto>> {
+        let config = load_app_config(self.vault.root())?;
+        let gateway = McpGateway::new(
+            config.gateway.clone(),
+            self.credentials.clone(),
+            None,
+        )?;
+        let reports = self
+            .runtime
+            .block_on(async { gateway.probe_server_capabilities().await })?;
+        {
+            let mut cache = self
+                .gateway_capability_cache
+                .lock()
+                .map_err(|_| CoreError::Protocol("capability cache lock poisoned".to_string()))?;
+            for report in reports {
+                cache.insert(report.server_id.clone(), report);
+            }
+        }
+        self.list_gateway_servers_inner()
     }
 
     pub fn save_gateway_servers_inner(&self, servers: &[GatewayServerDto]) -> Result<()> {
@@ -897,6 +1234,63 @@ impl TamtriCore {
             server_id: pending.server_id,
             oauth_status: status.to_string(),
         })
+    }
+
+    pub fn list_roots_inner(&self, conversation_id: &str) -> Result<Vec<RootDto>> {
+        let id = parse_id(conversation_id)?;
+        let conversation = self.vault.load(id)?;
+        Ok(conversation.roots.iter().map(root_to_dto).collect())
+    }
+
+    pub fn attach_root_inner(
+        &self,
+        conversation_id: &str,
+        name: &str,
+        uri: &str,
+        kind: &str,
+        scope: &str,
+    ) -> Result<RootDto> {
+        let id = parse_id(conversation_id)?;
+        let mut conversation = self.vault.load(id)?;
+        let root = attach_root(
+            &mut conversation,
+            name,
+            uri,
+            parse_root_kind(kind)?,
+            parse_root_scope(scope)?,
+        )?;
+        self.vault.save_meta(&conversation)?;
+        self.invalidate_conversation_cache(id);
+        Ok(root_to_dto(&root))
+    }
+
+    pub fn remove_root_inner(&self, conversation_id: &str, root_id: &str) -> Result<()> {
+        let id = parse_id(conversation_id)?;
+        let mut conversation = self.vault.load(id)?;
+        remove_root(&mut conversation, root_id)?;
+        self.vault.save_meta(&conversation)?;
+        self.invalidate_conversation_cache(id);
+        Ok(())
+    }
+
+    pub fn sync_runtime_roots_inner(
+        &self,
+        conversation_id: &str,
+        roots: Vec<RootDto>,
+    ) -> Result<()> {
+        let id = parse_id(conversation_id)?;
+        let roots: Vec<Root> = roots
+            .into_iter()
+            .map(|dto| root_from_dto(&dto))
+            .collect::<Result<_>>()?;
+        for root in &roots {
+            validate_root(root)?;
+        }
+        self.runtime_roots
+            .lock()
+            .map_err(|_| CoreError::Protocol("runtime roots lock poisoned".to_string()))?
+            .insert(id, roots);
+        Ok(())
     }
 
     pub fn copy_file_to_workdir_inner(
@@ -1152,6 +1546,37 @@ fn append_event_for_gateway_event(
                 "action": action,
             }),
         ),
+        GatewayEvent::AppReturned {
+            server_id,
+            origin_tool_call_id,
+            uri,
+            template_ref,
+            state,
+        } => (
+            EventKind::AppReturned,
+            json!({
+                "server_id": server_id,
+                "origin_tool_call_id": origin_tool_call_id,
+                "uri": uri,
+                "template_ref": template_ref,
+                "state": state,
+            }),
+        ),
+        GatewayEvent::TaskStarted { state } => (
+            EventKind::TaskStarted,
+            serde_json::to_value(state).unwrap_or_else(|_| json!({})),
+        ),
+        GatewayEvent::TaskUpdated { state } => (
+            EventKind::TaskUpdated,
+            serde_json::to_value(state).unwrap_or_else(|_| json!({})),
+        ),
+        GatewayEvent::TaskCompleted { state, result } => (
+            EventKind::TaskCompleted,
+            json!({
+                "state": state,
+                "result": result,
+            }),
+        ),
         GatewayEvent::OAuthHandoffStarted {
             server_id,
             credential_ref,
@@ -1271,6 +1696,10 @@ fn gateway_event_kind(event: &GatewayEvent) -> &'static str {
         GatewayEvent::DownstreamError { .. } => "gateway_downstream_error",
         GatewayEvent::ElicitationRequested { .. } => "elicitation_requested",
         GatewayEvent::ElicitationResolved { .. } => "elicitation_resolved",
+        GatewayEvent::AppReturned { .. } => "app_returned",
+        GatewayEvent::TaskStarted { .. } => "task_started",
+        GatewayEvent::TaskUpdated { .. } => "task_updated",
+        GatewayEvent::TaskCompleted { .. } => "task_completed",
         GatewayEvent::OAuthHandoffStarted { .. } => "oauth_handoff_started",
         GatewayEvent::OAuthHandoffCompleted { .. } => "oauth_handoff_completed",
         GatewayEvent::OAuthRefreshFailed { .. } => "oauth_refresh_failed",
@@ -1278,31 +1707,61 @@ fn gateway_event_kind(event: &GatewayEvent) -> &'static str {
 }
 
 fn record_gateway_content_block(blocks: &Mutex<Vec<ContentBlock>>, event: &GatewayEvent) {
-    let GatewayEvent::ElicitationRequested {
-        request_id,
-        server_id,
-        origin_tool_call_id,
-        mode,
-        message,
-        schema,
-        url,
-        ..
-    } = event
-    else {
-        return;
-    };
-    let Ok(mut blocks) = blocks.lock() else {
-        return;
-    };
-    blocks.push(ContentBlock::ElicitationRequest {
-        request_id: request_id.clone(),
-        server_id: Some(server_id.clone()),
-        origin_tool_call_id: origin_tool_call_id.clone(),
-        mode: mode.clone(),
-        message: message.clone(),
-        schema: schema.clone(),
-        url: url.as_ref().map(|value| audit_safe_elicitation_url(value)),
-    });
+    match event {
+        GatewayEvent::ElicitationRequested {
+            request_id,
+            server_id,
+            origin_tool_call_id,
+            mode,
+            message,
+            schema,
+            url,
+            ..
+        } => {
+            let Ok(mut blocks) = blocks.lock() else {
+                return;
+            };
+            blocks.push(ContentBlock::ElicitationRequest {
+                request_id: request_id.clone(),
+                server_id: Some(server_id.clone()),
+                origin_tool_call_id: origin_tool_call_id.clone(),
+                mode: mode.clone(),
+                message: message.clone(),
+                schema: schema.clone(),
+                url: url.as_ref().map(|value| audit_safe_elicitation_url(value)),
+            });
+        }
+        GatewayEvent::AppReturned {
+            server_id,
+            origin_tool_call_id,
+            uri,
+            template_ref,
+            state,
+        } => {
+            let Ok(mut blocks) = blocks.lock() else {
+                return;
+            };
+            blocks.push(ContentBlock::AppResource {
+                uri: uri.clone(),
+                template_ref: template_ref.clone(),
+                state: state.clone(),
+                server_id: Some(server_id.clone()),
+                origin_tool_call_id: origin_tool_call_id.clone(),
+            });
+        }
+        GatewayEvent::TaskCompleted { state, .. } => {
+            let Ok(mut blocks) = blocks.lock() else {
+                return;
+            };
+            blocks.push(ContentBlock::TaskRef {
+                task_id: state.task_id.clone(),
+                status: state.status.clone(),
+                title: state.title.clone(),
+                result_summary: state.result.as_ref().map(summarize_task_result),
+            });
+        }
+        _ => {}
+    }
 }
 
 fn parse_elicitation_action(action: &str) -> Result<ElicitationAction> {
@@ -1316,9 +1775,21 @@ fn parse_elicitation_action(action: &str) -> Result<ElicitationAction> {
     }
 }
 
+fn capability_label(
+    report: Option<&ServerCapabilityReport>,
+    pick: impl Fn(&ServerCapabilityReport) -> FeatureStatus,
+) -> String {
+    report
+        .map(pick)
+        .unwrap_or(FeatureStatus::Unknown)
+        .label()
+        .to_string()
+}
+
 fn gateway_server_to_dto(
     server: &GatewayServerConfig,
     credentials: &MemoryCredentials,
+    capability_report: Option<&ServerCapabilityReport>,
 ) -> Result<GatewayServerDto> {
     let credential_refs = server
         .credentials
@@ -1422,6 +1893,14 @@ fn gateway_server_to_dto(
         oauth_authorization_endpoint,
         oauth_token_endpoint,
         oauth_scopes,
+        cap_tools: capability_label(capability_report, |report| report.tools),
+        cap_resources: capability_label(capability_report, |report| report.resources),
+        cap_prompts: capability_label(capability_report, |report| report.prompts),
+        cap_elicitation: capability_label(capability_report, |report| report.elicitation),
+        cap_apps: capability_label(capability_report, |report| report.apps),
+        cap_tasks: capability_label(capability_report, |report| report.tasks),
+        cap_roots: capability_label(capability_report, |report| report.roots),
+        cap_sampling: capability_label(capability_report, |report| report.sampling),
     })
 }
 
@@ -1702,6 +2181,124 @@ fn conversation_to_dto(conversation: &Conversation) -> Result<ConversationDto> {
     })
 }
 
+fn app_template_to_dto(template: AppTemplate) -> AppTemplateDto {
+    let content_security_policy = app_sandbox_csp(&template.allowed_origins);
+    AppTemplateDto {
+        template_ref: template.template_ref,
+        server_id: template.server_id,
+        html: template.html,
+        allowed_origins: template
+            .allowed_origins
+            .into_iter()
+            .map(|origin| origin.0)
+            .collect(),
+        metadata_json: template.metadata.to_string(),
+        bridge_script: app_bridge_bootstrap_script("tamtriAppBridge"),
+        content_security_policy,
+    }
+}
+
+fn root_to_dto(root: &Root) -> RootDto {
+    RootDto {
+        id: root.id.clone(),
+        name: root.name.clone(),
+        uri: root.uri.clone(),
+        kind: root_kind_label(&root.kind).to_string(),
+        scope: root_scope_label(&root.scope).to_string(),
+    }
+}
+
+fn root_from_dto(dto: &RootDto) -> Result<Root> {
+    Ok(Root {
+        id: dto.id.clone(),
+        name: dto.name.clone(),
+        uri: dto.uri.clone(),
+        kind: parse_root_kind(&dto.kind)?,
+        scope: parse_root_scope(&dto.scope)?,
+    })
+}
+
+fn roots_for_gateway(
+    runtime_roots: &Mutex<HashMap<Id, Vec<Root>>>,
+    conversation_id: Id,
+    stored: &[Root],
+) -> Vec<Root> {
+    let Ok(overrides) = runtime_roots.lock() else {
+        return stored.to_vec();
+    };
+    let Some(resolved) = overrides.get(&conversation_id) else {
+        return stored.to_vec();
+    };
+    merge_runtime_roots(stored, resolved)
+}
+
+fn merge_runtime_roots(stored: &[Root], resolved: &[Root]) -> Vec<Root> {
+    let resolved_by_id: HashMap<&str, &Root> = resolved.iter().map(|root| (root.id.as_str(), root)).collect();
+    stored
+        .iter()
+        .filter_map(|stored| {
+            resolved_by_id.get(stored.id.as_str()).map(|resolved| Root {
+                id: stored.id.clone(),
+                name: stored.name.clone(),
+                uri: resolved.uri.clone(),
+                kind: stored.kind.clone(),
+                scope: stored.scope.clone(),
+            })
+        })
+        .collect()
+}
+
+fn summarize_task_result(value: &serde_json::Value) -> String {
+    const MAX: usize = 240;
+    let summary = match value {
+        serde_json::Value::String(text) => text.clone(),
+        serde_json::Value::Object(map) => map
+            .get("message")
+            .or_else(|| map.get("summary"))
+            .and_then(|value| value.as_str())
+            .map(str::to_string)
+            .unwrap_or_else(|| value.to_string()),
+        _ => value.to_string(),
+    };
+    if summary.len() <= MAX {
+        summary
+    } else {
+        format!("{}…", &summary[..MAX])
+    }
+}
+
+fn parse_root_kind(kind: &str) -> Result<RootKind> {
+    match kind {
+        "filesystem" => Ok(RootKind::Filesystem),
+        "knowledge_base" => Ok(RootKind::KnowledgeBase),
+        "other" => Ok(RootKind::Other),
+        _ => Err(CoreError::MalformedVault(format!("unknown root kind: {kind}"))),
+    }
+}
+
+fn parse_root_scope(scope: &str) -> Result<RootScope> {
+    match scope {
+        "conversation" => Ok(RootScope::Conversation),
+        "user" => Ok(RootScope::User),
+        _ => Err(CoreError::MalformedVault(format!("unknown root scope: {scope}"))),
+    }
+}
+
+fn root_kind_label(kind: &RootKind) -> &'static str {
+    match kind {
+        RootKind::Filesystem => "filesystem",
+        RootKind::KnowledgeBase => "knowledge_base",
+        RootKind::Other => "other",
+    }
+}
+
+fn root_scope_label(scope: &RootScope) -> &'static str {
+    match scope {
+        RootScope::Conversation => "conversation",
+        RootScope::User => "user",
+    }
+}
+
 #[cfg(test)]
 mod gateway_stdio_helper_tests {
     use super::gateway_stdio_helper_candidates;
@@ -1719,3 +2316,4 @@ mod gateway_stdio_helper_tests {
         );
     }
 }
+

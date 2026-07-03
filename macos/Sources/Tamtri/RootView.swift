@@ -21,6 +21,21 @@ struct RootView: View {
         .sheet(isPresented: $store.showForkConversation) {
             ForkConversationView()
         }
+        .sheet(isPresented: $store.showConversationRoots) {
+            if let conversation = store.displayedConversation {
+                NavigationStack {
+                    ConversationRootsSettingsView(conversationId: conversation.id)
+                        .padding()
+                        .navigationTitle("Conversation Roots")
+                        .toolbar {
+                            Button("Done") {
+                                store.showConversationRoots = false
+                            }
+                        }
+                }
+                .frame(minWidth: 480, minHeight: 320)
+            }
+        }
         .alert("Tamtri", isPresented: errorPresented) {
             Button("OK") {
                 store.errorMessage = nil
@@ -126,7 +141,7 @@ struct TranscriptView: View {
                 Divider()
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 12) {
-                        ForEach(LiveEventGroups.build(from: liveEvents)) { group in
+                        ForEach(LiveEventGrouping.build(from: liveEvents)) { group in
                             if let toolEvent = group.toolEvent {
                                 VStack(alignment: .leading, spacing: 8) {
                                     ToolCard(event: toolEvent)
@@ -192,56 +207,6 @@ struct TranscriptView: View {
     }
 }
 
-private struct IdentifiedCoreEvent: Identifiable {
-    let id: Int
-    let event: CoreEvent
-}
-
-private struct LiveEventGroup: Identifiable {
-    let id: Int
-    let toolEvent: CoreEvent?
-    let nested: [CoreEvent]
-    let standalone: CoreEvent?
-
-    init(id: Int, toolEvent: CoreEvent? = nil, nested: [CoreEvent] = [], standalone: CoreEvent? = nil) {
-        self.id = id
-        self.toolEvent = toolEvent
-        self.nested = nested
-        self.standalone = standalone
-    }
-}
-
-private enum LiveEventGroups {
-    static func build(from events: [IdentifiedCoreEvent]) -> [LiveEventGroup] {
-        var groups: [LiveEventGroup] = []
-        var index = 0
-        while index < events.count {
-            let item = events[index]
-            if item.event.kind == "tool_call_started",
-               let toolId = EventPayload.string(from: item.event.payloadJSON, key: "id") {
-                var nested: [CoreEvent] = []
-                var next = index + 1
-                while next < events.count {
-                    let candidate = events[next].event
-                    if candidate.kind == "elicitation_requested",
-                       EventPayload.string(from: candidate.payloadJSON, key: "origin_tool_call_id") == toolId {
-                        nested.append(candidate)
-                        next += 1
-                        continue
-                    }
-                    break
-                }
-                groups.append(LiveEventGroup(id: item.id, toolEvent: item.event, nested: nested))
-                index = next
-                continue
-            }
-            groups.append(LiveEventGroup(id: item.id, standalone: item.event))
-            index += 1
-        }
-        return groups
-    }
-}
-
 struct ConversationHeader: View {
     @EnvironmentObject private var store: AppStore
     let conversation: ConversationRecord
@@ -252,6 +217,13 @@ struct ConversationHeader: View {
                 Text(conversation.title)
                     .font(.title2.bold())
                 Spacer()
+                Button {
+                    store.showConversationRoots = true
+                } label: {
+                    Label("Roots", systemImage: "folder")
+                }
+                .labelStyle(.iconOnly)
+                .help("Manage conversation roots")
                 Button {
                     store.showForkConversation = true
                 } label: {
@@ -279,6 +251,21 @@ struct EventRow: View {
         switch event.kind {
         case "permission_requested":
             PermissionCard(event: event)
+        case "app_bridge_consent_requested":
+            AppBridgeConsentCard(event: event)
+        case "app_returned":
+            AppReturnedCard(event: event)
+        case "task_started", "task_updated":
+            if let state = store.liveTaskStates[EventPayload.string(from: event.payloadJSON, key: "task_id") ?? ""] {
+                TaskLiveCard(conversationId: event.conversationId, state: state)
+            } else {
+                TaskLiveCard(conversationId: event.conversationId, state: LiveTaskState(payloadJSON: event.payloadJSON))
+            }
+        case "task_completed":
+            TaskLiveCard(
+                conversationId: event.conversationId,
+                state: LiveTaskState(payloadJSON: event.payloadJSON)
+            )
         case "elicitation_requested":
             ElicitationCard(event: event)
         case "thought_delta":
@@ -411,6 +398,16 @@ struct ContentBlockView: View {
                         .textSelection(.enabled)
                 }
             }
+        case "app_resource":
+            AppPanelView(
+                conversationId: conversationId,
+                serverId: block.serverId,
+                templateRef: block.templateRef,
+                uri: block.uri,
+                state: block.state
+            )
+        case "task_ref":
+            TaskRefCard(block: block)
         case "artifact":
             // Frozen attachments stay in messages.jsonl for replay/export;
             // live previews belong in the Files inspector, not the transcript.
@@ -418,6 +415,263 @@ struct ContentBlockView: View {
         default:
             EmptyView()
         }
+    }
+}
+
+struct AppPanelView: View {
+    @EnvironmentObject private var store: AppStore
+    let conversationId: String
+    let serverId: String?
+    let templateRef: String?
+    let uri: String?
+    let state: JSONValue?
+    @State private var template: AppTemplateRecord?
+    @State private var loadError: String?
+    @State private var webViewID = UUID()
+    @State private var pendingBridgeResponse: String?
+
+    init(conversationId: String, block: TranscriptContentBlock) {
+        self.conversationId = conversationId
+        self.serverId = block.serverId
+        self.templateRef = block.templateRef
+        self.uri = block.uri
+        self.state = block.state
+    }
+
+    init(
+        conversationId: String,
+        serverId: String?,
+        templateRef: String?,
+        uri: String?,
+        state: JSONValue?
+    ) {
+        self.conversationId = conversationId
+        self.serverId = serverId
+        self.templateRef = templateRef
+        self.uri = uri
+        self.state = state
+    }
+
+    var body: some View {
+        CompactCard(title: appTitle, systemImage: "app.dashed") {
+            VStack(alignment: .leading, spacing: 8) {
+                if let serverId {
+                    Text("Server: \(serverId)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                if let state {
+                    Text(state.truncatedDescription)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                }
+                if let template {
+                    SandboxedHTMLView(
+                        html: template.html,
+                        policy: .app(
+                            allowedOrigins: template.allowedOrigins.map(WebOrigin.init(mcpOrigin:)),
+                            appId: uri ?? templateRef ?? "app",
+                            serverId: template.serverId,
+                            templateRef: template.templateRef
+                        ),
+                        bridgeContext: AppBridgeContext(
+                            conversationId: conversationId,
+                            serverId: template.serverId,
+                            appId: uri ?? template.templateRef,
+                            templateRef: template.templateRef,
+                            bridgeScript: template.bridgeScript,
+                            webViewID: webViewID
+                        ),
+                        pendingBridgeResponse: pendingBridgeResponse,
+                        onBridgeRequest: { requestJSON, viewID in
+                            store.submitAppBridgeRequest(
+                                conversationId: conversationId,
+                                serverId: template.serverId,
+                                appId: uri ?? template.templateRef,
+                                templateRef: template.templateRef,
+                                requestJSON: requestJSON,
+                                webViewID: viewID
+                            )
+                        },
+                        onBlockedNavigation: { url in
+                            store.logAppNavigationBlocked(
+                                conversationId: conversationId,
+                                serverId: template.serverId,
+                                templateRef: template.templateRef,
+                                url: url.absoluteString
+                            )
+                        }
+                    )
+                    .frame(minHeight: 260)
+                    .accessibilityHidden(true)
+                } else if let loadError {
+                    Text(loadError)
+                        .foregroundStyle(.secondary)
+                } else {
+                    Text("App offline — template unavailable without an active gateway run.")
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("MCP App \(appTitle)")
+        .accessibilityValue(template == nil ? "offline" : "loaded")
+        .task(id: appLoadKey) {
+            await loadTemplate()
+        }
+        .onChange(of: store.bridgeDelivery) { _, delivery in
+            guard let delivery, delivery.webViewID == webViewID else { return }
+            pendingBridgeResponse = delivery.responseJSON
+        }
+    }
+
+    private var appLoadKey: String {
+        [conversationId, serverId, templateRef].compactMap { $0 }.joined(separator: "|")
+    }
+
+    private var appTitle: String {
+        templateRef ?? uri ?? "MCP App"
+    }
+
+    private func loadTemplate() async {
+        guard let serverId, let templateRef else {
+            loadError = "App metadata missing server or template reference."
+            return
+        }
+        do {
+            template = try await store.resolveAppTemplate(
+                conversationId: conversationId,
+                serverId: serverId,
+                templateRef: templateRef
+            )
+            if template == nil {
+                loadError = "App template not loaded. Start a run or reconnect to the gateway server."
+            }
+        } catch {
+            loadError = error.localizedDescription
+        }
+    }
+}
+
+struct AppReturnedCard: View {
+    let event: CoreEvent
+
+    var body: some View {
+        AppPanelView(
+            conversationId: event.conversationId,
+            serverId: EventPayload.string(from: event.payloadJSON, key: "server_id"),
+            templateRef: EventPayload.string(from: event.payloadJSON, key: "template_ref"),
+            uri: EventPayload.string(from: event.payloadJSON, key: "uri"),
+            state: JSONValue.from(json: event.payloadJSON)?.value(at: "state")
+        )
+    }
+}
+
+struct TaskLiveCard: View {
+    @EnvironmentObject private var store: AppStore
+    let conversationId: String
+    let state: LiveTaskState
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Label(taskTitle, systemImage: statusIcon)
+                .font(.headline)
+            HStack {
+                Text(state.serverId)
+                Text(state.status.replacingOccurrences(of: "_", with: " "))
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            if let progress = state.progressMessage, !progress.isEmpty {
+                Text(progress)
+            }
+            if !state.isTerminal {
+                Button("Cancel task") {
+                    store.cancelTask(conversationId: conversationId, taskId: state.taskId)
+                }
+                .keyboardShortcut(.cancelAction)
+            }
+        }
+        .padding(10)
+        .background(.quaternary, in: RoundedRectangle(cornerRadius: 8))
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Task \(taskTitle)")
+        .accessibilityValue(accessibilityStatus)
+        .accessibilityAddTraits(.updatesFrequently)
+    }
+
+    private var taskTitle: String { state.title ?? state.taskId }
+    private var statusIcon: String {
+        switch state.status {
+        case "completed": "checkmark.circle"
+        case "failed": "xmark.circle"
+        default: "clock"
+        }
+    }
+    private var accessibilityStatus: String {
+        [state.status, state.progressMessage].compactMap { $0 }.joined(separator: ", ")
+    }
+}
+
+struct TaskRefCard: View {
+    let block: TranscriptContentBlock
+
+    var body: some View {
+        CompactCard(title: block.taskTitle ?? block.taskId ?? "Task", systemImage: "checklist") {
+            Text("Status: \(block.taskStatus ?? "unknown")")
+            if let summary = block.taskResultSummary, !summary.isEmpty {
+                Text(summary)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+            }
+        }
+        .accessibilityLabel("Task \(block.taskId ?? "unknown")")
+        .accessibilityValue([block.taskStatus, block.taskResultSummary].compactMap { $0 }.joined(separator: ", "))
+    }
+}
+
+struct AppBridgeConsentCard: View {
+    @EnvironmentObject private var store: AppStore
+    let event: CoreEvent
+    private var request: AppBridgeConsentPayload? {
+        try? JSONDecoder().decode(AppBridgeConsentPayload.self, from: Data(event.payloadJSON.utf8))
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Label("App action needs consent", systemImage: "hand.raised")
+                .font(.headline)
+            if let request {
+                Text(request.summary)
+                    .textSelection(.enabled)
+                Text("Server: \(request.serverId) · App: \(request.appId)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            HStack {
+                if let request {
+                    ForEach(request.options.filter { $0.id == "deny" }) { option in
+                        Button(option.label) {
+                            store.respondAppBridgeConsent(requestId: request.requestId, optionId: option.id)
+                        }
+                    }
+                    ForEach(request.options.filter { $0.id != "deny" }) { option in
+                        Button(option.label) {
+                            store.respondAppBridgeConsent(requestId: request.requestId, optionId: option.id)
+                        }
+                    }
+                    .keyboardShortcut(.defaultAction)
+                } else {
+                    Text("Unable to parse app bridge consent request")
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+        .padding(10)
+        .background(.yellow.opacity(0.18), in: RoundedRectangle(cornerRadius: 8))
+        .accessibilityLabel("App bridge consent requested")
     }
 }
 
@@ -596,31 +850,76 @@ func artifactIsImageMime(_ mimeType: String?) -> Bool {
 
 struct SandboxedHTMLView: NSViewRepresentable {
     let html: String
+    var policy: WebContentPolicy = .artifactNoNetwork
+    var bridgeContext: AppBridgeContext?
+    var pendingBridgeResponse: String?
+    var onBridgeRequest: ((String, UUID) -> Void)?
     var onBlockedNavigation: ((URL) -> Void)?
 
     func makeNSView(context: Context) -> WKWebView {
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = .nonPersistent()
         configuration.preferences.javaScriptCanOpenWindowsAutomatically = false
+        if bridgeContext != nil {
+            configuration.userContentController.add(context.coordinator, name: AppWebViewBridge.handlerName)
+        }
         let webView = WKWebView(frame: .zero, configuration: configuration)
         webView.navigationDelegate = context.coordinator
+        context.coordinator.webView = webView
         return webView
     }
 
     func updateNSView(_ webView: WKWebView, context: Context) {
+        context.coordinator.policy = policy
+        context.coordinator.bridgeContext = bridgeContext
+        context.coordinator.onBridgeRequest = onBridgeRequest
         context.coordinator.onBlockedNavigation = onBlockedNavigation
-        webView.loadHTMLString(artifactSandboxedHTML(html), baseURL: nil)
+        if let pendingBridgeResponse, pendingBridgeResponse != context.coordinator.lastDeliveredResponse {
+            context.coordinator.deliverBridgeResponse(pendingBridgeResponse)
+            context.coordinator.lastDeliveredResponse = pendingBridgeResponse
+        }
+        let bridgeScript = bridgeContext?.bridgeScript
+        webView.loadHTMLString(sandboxedHTML(for: html, policy: policy, bridgeScript: bridgeScript), baseURL: nil)
     }
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(onBlockedNavigation: onBlockedNavigation)
+        Coordinator(
+            policy: policy,
+            bridgeContext: bridgeContext,
+            onBridgeRequest: onBridgeRequest,
+            onBlockedNavigation: onBlockedNavigation
+        )
     }
 
-    final class Coordinator: NSObject, WKNavigationDelegate {
+    final class Coordinator: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
+        var policy: WebContentPolicy
+        var bridgeContext: AppBridgeContext?
+        var onBridgeRequest: ((String, UUID) -> Void)?
         var onBlockedNavigation: ((URL) -> Void)?
+        var lastDeliveredResponse: String?
+        weak var webView: WKWebView?
 
-        init(onBlockedNavigation: ((URL) -> Void)?) {
+        init(
+            policy: WebContentPolicy,
+            bridgeContext: AppBridgeContext?,
+            onBridgeRequest: ((String, UUID) -> Void)?,
+            onBlockedNavigation: ((URL) -> Void)?
+        ) {
+            self.policy = policy
+            self.bridgeContext = bridgeContext
+            self.onBridgeRequest = onBridgeRequest
             self.onBlockedNavigation = onBlockedNavigation
+        }
+
+        func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
+            guard message.name == AppWebViewBridge.handlerName,
+                  case .app = policy,
+                  let body = message.body as? String,
+                  let bridgeContext
+            else {
+                return
+            }
+            onBridgeRequest?(body, bridgeContext.webViewID)
         }
 
         func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction, decisionHandler: @escaping @MainActor @Sendable (WKNavigationActionPolicy) -> Void) {
@@ -628,32 +927,39 @@ struct SandboxedHTMLView: NSViewRepresentable {
                 decisionHandler(.allow)
                 return
             }
-            if ArtifactNavigationPolicy.allows(url) {
+            if WebNavigationPolicy.allows(url, policy: policy) {
                 decisionHandler(.allow)
             } else {
                 onBlockedNavigation?(url)
                 decisionHandler(.cancel)
             }
         }
-    }
-}
 
-struct ArtifactNavigationPolicy {
-    static func allows(_ url: URL?) -> Bool {
-        guard let url else { return true }
-        return url.scheme == "about" || url.scheme == nil
-    }
-}
+        func webView(
+            _ webView: WKWebView,
+            decidePolicyFor navigationResponse: WKNavigationResponse,
+            decisionHandler: @escaping @MainActor @Sendable (WKNavigationResponsePolicy) -> Void
+        ) {
+            guard let url = navigationResponse.response.url else {
+                decisionHandler(.allow)
+                return
+            }
+            if WebNavigationPolicy.allows(url, policy: policy) {
+                decisionHandler(.allow)
+            } else {
+                onBlockedNavigation?(url)
+                decisionHandler(.cancel)
+            }
+        }
 
-func artifactSandboxedHTML(_ html: String) -> String {
-    let csp = "<meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; img-src data:; style-src 'unsafe-inline'; script-src 'none'; base-uri 'none'; form-action 'none'\">"
-    if let headRange = html.range(of: "<head", options: [.caseInsensitive]),
-       let close = html[headRange.upperBound...].firstIndex(of: ">") {
-        var copy = html
-        copy.insert(contentsOf: csp, at: html.index(after: close))
-        return copy
+        func deliverBridgeResponse(_ responseJSON: String) {
+            guard let webView else { return }
+            let escaped = responseJSON
+                .replacingOccurrences(of: "\\", with: "\\\\")
+                .replacingOccurrences(of: "'", with: "\\'")
+            webView.evaluateJavaScript("window.__tamtriAppBridgeDeliver('\(escaped)');", completionHandler: nil)
+        }
     }
-    return "<!doctype html><html><head>\(csp)</head><body>\(html)</body></html>"
 }
 
 struct CSVPreview: View {
@@ -1419,6 +1725,11 @@ struct SettingsView: View {
                     .font(.title2.bold())
                 Spacer()
                 Button {
+                    store.refreshGatewayCapabilities()
+                } label: {
+                    Label("Probe capabilities", systemImage: "antenna.radiowaves.left.and.right")
+                }
+                Button {
                     store.refreshGatewayServers()
                 } label: {
                     Label("Refresh", systemImage: "arrow.clockwise")
@@ -1466,13 +1777,20 @@ struct SettingsView: View {
                     showAddServer = true
                 }
                 Spacer()
-                Link("20 Questions testing guide", destination: URL(string: "https://github.com/im2nguyen/tamtri/blob/main/docs/testing-elicitation.md")!)
+                Link("20 Questions testing guide", destination: URL(string: "https://github.com/im2nguyen/tamtri/blob/main/docs/testing/twenty-questions.md")!)
                     .font(.caption)
             }
 
             Text("Agent-native tools are not exposed by this harness yet.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
+
+            Text("Capability badges: supported (green) means tamtri and the server both wire the feature. server only (orange) means the downstream server advertises it but tamtri has not enabled it yet. Sampling is always declined — the harness owns the model.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            Link("Apps, Tasks, and Roots guides", destination: URL(string: "https://github.com/im2nguyen/tamtri/blob/main/docs/testing/README.md")!)
+                .font(.caption)
         }
         .padding()
         .frame(width: 560, height: 480)
@@ -1518,6 +1836,126 @@ struct SettingsView: View {
     }
 }
 
+struct GatewayCapabilityBadges: View {
+    let server: GatewayServerRecord
+
+    private let features: [(label: String, keyPath: KeyPath<GatewayServerRecord, String>)] = [
+        ("Tools", \.capTools),
+        ("Resources", \.capResources),
+        ("Prompts", \.capPrompts),
+        ("Elicitation", \.capElicitation),
+        ("Apps", \.capApps),
+        ("Tasks", \.capTasks),
+        ("Roots", \.capRoots),
+        ("Sampling", \.capSampling),
+    ]
+
+    var body: some View {
+        FlowLayout(spacing: 6) {
+            ForEach(features, id: \.label) { feature in
+                CapabilityBadge(title: feature.label, status: server[keyPath: feature.keyPath])
+            }
+        }
+    }
+}
+
+private struct CapabilityBadge: View {
+    let title: String
+    let status: String
+
+    var body: some View {
+        Text("\(title): \(displayStatus)")
+            .font(.caption2)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(backgroundColor.opacity(0.15), in: Capsule())
+            .foregroundStyle(foregroundColor)
+            .accessibilityLabel(accessibilityText)
+            .help(helpText)
+    }
+
+    private var effectiveStatus: String {
+        if title == "Sampling" { "declined" }
+        else { status }
+    }
+
+    private var displayStatus: String {
+        effectiveStatus.replacingOccurrences(of: "_", with: " ")
+    }
+
+    private var accessibilityText: String {
+        if title == "Sampling" {
+            "Sampling declined by design. The model lives in the harness."
+        } else {
+            "\(title) \(displayStatus)"
+        }
+    }
+
+    private var helpText: String {
+        if title == "Sampling" {
+            "tamtri declines MCP sampling; the harness owns the model."
+        } else {
+            ""
+        }
+    }
+
+    private var foregroundColor: Color {
+        switch effectiveStatus {
+        case "supported": .green
+        case "server_only": .orange
+        case "declined": .secondary
+        case "unknown": .secondary
+        default: .secondary
+        }
+    }
+
+    private var backgroundColor: Color {
+        foregroundColor
+    }
+}
+
+/// Simple horizontal flow for capability chips.
+private struct FlowLayout: Layout {
+    var spacing: CGFloat = 8
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let result = arrange(proposal: proposal, subviews: subviews)
+        return result.size
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let result = arrange(proposal: proposal, subviews: subviews)
+        for (index, position) in result.positions.enumerated() {
+            subviews[index].place(
+                at: CGPoint(x: bounds.minX + position.x, y: bounds.minY + position.y),
+                proposal: .unspecified
+            )
+        }
+    }
+
+    private func arrange(proposal: ProposedViewSize, subviews: Subviews) -> (size: CGSize, positions: [CGPoint]) {
+        let maxWidth = proposal.width ?? .infinity
+        var x: CGFloat = 0
+        var y: CGFloat = 0
+        var rowHeight: CGFloat = 0
+        var positions: [CGPoint] = []
+
+        for subview in subviews {
+            let size = subview.sizeThatFits(.unspecified)
+            if x + size.width > maxWidth, x > 0 {
+                x = 0
+                y += rowHeight + spacing
+                rowHeight = 0
+            }
+            positions.append(CGPoint(x: x, y: y))
+            rowHeight = max(rowHeight, size.height)
+            x += size.width + spacing
+        }
+
+        return (CGSize(width: maxWidth, height: y + rowHeight), positions)
+    }
+}
+
 struct GatewayServerRow: View {
     @EnvironmentObject private var store: AppStore
     let server: GatewayServerRecord
@@ -1545,6 +1983,7 @@ struct GatewayServerRow: View {
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
+            GatewayCapabilityBadges(server: server)
             if server.credentialRefs.isEmpty && server.oauthTokenRef.isEmpty {
                 Text("No credentials required")
                     .font(.caption)

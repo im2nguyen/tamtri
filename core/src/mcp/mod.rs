@@ -1,12 +1,18 @@
+pub mod app;
+pub mod app_bridge;
 pub mod bridge;
+pub mod capabilities;
 pub mod client;
 pub mod elicitation;
 pub mod endpoint;
 pub mod gateway;
+pub mod gateway_tasks;
 pub mod oauth;
 pub mod jsonrpc;
 pub mod protocol;
+pub mod roots;
 pub mod server;
+pub mod tasks;
 pub mod transport;
 pub mod url_handoff;
 

@@ -1,3 +1,11 @@
+dictionary RootDto {
+  string id;
+  string name;
+  string uri;
+  string kind;
+  string scope;
+};
+
 dictionary ConversationSummaryDto {
   string id;
   string title;
@@ -36,6 +44,14 @@ dictionary GatewayServerDto {
   string oauth_authorization_endpoint;
   string oauth_token_endpoint;
   sequence<string> oauth_scopes;
+  string cap_tools;
+  string cap_resources;
+  string cap_prompts;
+  string cap_elicitation;
+  string cap_apps;
+  string cap_tasks;
+  string cap_roots;
+  string cap_sampling;
 };
 
 dictionary GatewayEnvVarDto {
@@ -53,6 +69,21 @@ dictionary OAuthHandoffDto {
 dictionary OAuthCompletionDto {
   string server_id;
   string oauth_status;
+};
+
+dictionary AppTemplateDto {
+  string template_ref;
+  string server_id;
+  string html;
+  sequence<string> allowed_origins;
+  string metadata_json;
+  string bridge_script;
+  string content_security_policy;
+};
+
+dictionary AppBridgeSubmissionDto {
+  string request_id;
+  boolean needs_consent;
 };
 
 [Error]
@@ -89,7 +120,19 @@ interface TamtriCore {
   [Throws=TamtriError]
   void cancel_run(string conversation_id);
   [Throws=TamtriError]
+  void cancel_task(string conversation_id, string task_id);
+  [Throws=TamtriError]
+  sequence<RootDto> list_roots(string conversation_id);
+  [Throws=TamtriError]
+  RootDto attach_root(string conversation_id, string name, string uri, string kind, string scope);
+  [Throws=TamtriError]
+  void remove_root(string conversation_id, string root_id);
+  [Throws=TamtriError]
+  void sync_runtime_roots(string conversation_id, sequence<RootDto> roots);
+  [Throws=TamtriError]
   sequence<GatewayServerDto> list_gateway_servers();
+  [Throws=TamtriError]
+  sequence<GatewayServerDto> refresh_gateway_capabilities();
   [Throws=TamtriError]
   void save_gateway_servers(sequence<GatewayServerDto> servers);
   [Throws=TamtriError]
@@ -100,6 +143,15 @@ interface TamtriCore {
   OAuthHandoffDto start_oauth_flow(string server_id, string redirect_uri);
   [Throws=TamtriError]
   OAuthCompletionDto complete_oauth_callback(string callback_url);
+  [Throws=TamtriError]
+  AppTemplateDto? resolve_app_template(string conversation_id, string server_id, string template_ref);
+  [Throws=TamtriError]
+  AppBridgeSubmissionDto submit_app_bridge_request(string conversation_id, string server_id, string app_id, string template_ref, string request_json);
+  [Throws=TamtriError]
+  void respond_app_bridge_consent(string conversation_id, string request_id, string option_id);
+  [Throws=TamtriError]
+  void log_app_navigation_blocked(string conversation_id, string server_id, string template_ref, string url);
+  string app_bridge_bootstrap_script();
 };
 
 namespace tamtri {};

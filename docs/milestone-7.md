@@ -1,5 +1,7 @@
 # Milestone 7: Apps + Tasks + Roots
 
+**Status: complete (branch `m7/web-policy-and-capability-gates`).** Apps, Tasks, and Roots are wired end-to-end with RC capability gates, fixtures, settings badges, accessibility fallbacks, and docs. Sampling remains declined by design.
+
 Seventh build session. The remaining rich MCP primitives come online. Apps reuse the M5 webview host or React renderer island with a stricter declared-origin policy and a consent-gated UI-to-host bridge. Tasks turn long-running server work into durable task cards. Roots let users attach filesystem or knowledge roots per conversation and expose them through the gateway.
 
 This milestone completes the planned MCP coverage for V1, except sampling. Sampling stays declined because tamtri is not the model; the model lives in the harness.

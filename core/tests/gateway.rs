@@ -161,6 +161,7 @@ async fn gateway_list_tools_skips_unreachable_servers() {
     assert!(saw_broken_error);
 }
 
+
 #[tokio::test]
 async fn gateway_resources_route_to_downstream() {
     let command = env!("CARGO_BIN_EXE_mock-mcp-server");

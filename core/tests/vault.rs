@@ -58,6 +58,8 @@ fn all_blocks_message() -> Message {
                 uri: "ui://app".into(),
                 template_ref: "template".into(),
                 state: json!({"open": true}),
+                server_id: Some("mock".into()),
+                origin_tool_call_id: Some("tool-1".into()),
             },
             ContentBlock::artifact(
                 "attachments/report.html",
@@ -84,6 +86,8 @@ fn all_blocks_message() -> Message {
             ContentBlock::TaskRef {
                 task_id: "task-1".into(),
                 status: TaskStatus::Running,
+                title: None,
+                result_summary: None,
             },
         ],
     }

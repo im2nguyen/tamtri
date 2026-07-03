@@ -60,4 +60,12 @@ Milestone 5 writes `artifact_snapshotted` when a renderable file is copied from 
 
 Blocked artifact or workdir HTML navigation (external `http`, `https`, `file`, or custom schemes) is logged as `artifact_navigation_blocked` with `{ "url": "<blocked-url>" }`.
 
-Standalone event appends take the same per-conversation advisory lock as message writes. Reads tolerate a torn final line in memory. Writers repair torn tails before appending.
+Milestone 7 adds gateway receipts for Apps, Tasks, and Roots:
+
+- `app_returned` — `{ "server_id", "template_ref", "uri", "origin_tool_call_id?", "state" }` (state is JSON; no secrets).
+- `app_bridge_consent_requested` / `app_bridge_resolved` — app-initiated bridge actions with `request_id`, `server_id`, `app_id`, `template_ref`, action summary, and resolution. No secret values.
+- `app_navigation_blocked` — `{ "server_id", "template_ref", "url" }` when an App webview hits an undeclared origin.
+- `task_started`, `task_updated`, `task_completed` — task state snapshots (`task_id`, `server_id`, `status`, optional `title`, `progress`, `result`). Full payloads mirror `TaskState` in core.
+- `roots_listed` — `{ "count" }` when a downstream server requests roots through the gateway (paths only, never bookmark bytes).
+
+Standalone event appends take the same per-conversation advisory lock as message writes.

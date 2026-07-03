@@ -3,6 +3,7 @@ use std::sync::Arc;
 use serde_json::{Value, json};
 
 use crate::Result;
+use crate::mcp::capabilities::upstream_gateway_capabilities;
 use crate::mcp::gateway::McpGateway;
 use crate::mcp::protocol::{Implementation, MCP_PROTOCOL_VERSION};
 use crate::rpc::dispatch::{InboundMessage, RpcConnection};
@@ -42,22 +43,17 @@ pub(crate) async fn handle_gateway_request(
     params: Option<Value>,
 ) -> std::result::Result<Value, JsonRpcError> {
     match method {
-        "initialize" => Ok(json!({
-            "protocolVersion": MCP_PROTOCOL_VERSION,
-            "capabilities": {
-                "tools": {"listChanged": false},
-                "resources": {"listChanged": false},
-                "prompts": {"listChanged": false},
-                "elicitation": {
-                    "form": {},
-                    "url": {}
+        "initialize" => {
+            let capabilities = upstream_gateway_capabilities();
+            Ok(json!({
+                "protocolVersion": MCP_PROTOCOL_VERSION,
+                "capabilities": capabilities,
+                "serverInfo": Implementation {
+                    name: "tamtri-gateway".to_string(),
+                    version: env!("CARGO_PKG_VERSION").to_string(),
                 }
-            },
-            "serverInfo": Implementation {
-                name: "tamtri-gateway".to_string(),
-                version: env!("CARGO_PKG_VERSION").to_string(),
-            }
-        })),
+            }))
+        }
         "ping" => Ok(json!({})),
         "tools/list" => gateway
             .list_tools()
@@ -143,6 +139,15 @@ pub(crate) async fn handle_gateway_request(
                 .map(|result| serde_json::to_value(result).unwrap_or_else(|_| json!({})))
                 .map_err(to_jsonrpc_error)
         }
+        "sampling/create" => Err(JsonRpcError {
+            code: crate::rpc::jsonrpc::METHOD_NOT_FOUND,
+            message: "sampling is not supported".to_string(),
+            data: None,
+        }),
+        "roots/list" => gateway
+            .list_roots()
+            .await
+            .map_err(to_jsonrpc_error),
         _ => Err(JsonRpcError {
             code: crate::rpc::jsonrpc::METHOD_NOT_FOUND,
             message: "method not found".to_string(),
@@ -161,6 +166,8 @@ fn to_jsonrpc_error(err: crate::CoreError) -> JsonRpcError {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use super::*;
     use crate::config::GatewayConfig;
     use crate::mcp::gateway::NoCredentials;
@@ -174,5 +181,18 @@ mod tests {
             .unwrap();
         assert_eq!(result["serverInfo"]["name"], "tamtri-gateway");
         assert_eq!(result["capabilities"]["tools"]["listChanged"], false);
+        assert!(result["capabilities"]["sampling"].is_null());
+        assert!(result["capabilities"]["tasks"].is_null());
+    }
+
+    #[tokio::test]
+    async fn gateway_sampling_declined_cleanly() {
+        let gateway =
+            McpGateway::new(GatewayConfig::default(), Arc::new(NoCredentials), None).unwrap();
+        let err = handle_gateway_request(&gateway, "sampling/create", Some(json!({})))
+            .await
+            .expect_err("sampling should be declined");
+        assert_eq!(err.code, crate::rpc::jsonrpc::METHOD_NOT_FOUND);
+        assert!(err.message.contains("sampling"));
     }
 }

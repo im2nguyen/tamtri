@@ -115,7 +115,15 @@ struct GatewayServerDraft: Equatable {
             oauthClientId: resolvedOauthClientId.trimmingCharacters(in: .whitespacesAndNewlines),
             oauthAuthorizationEndpoint: resolvedOauthAuthorizationEndpoint.trimmingCharacters(in: .whitespacesAndNewlines),
             oauthTokenEndpoint: resolvedOauthTokenEndpoint.trimmingCharacters(in: .whitespacesAndNewlines),
-            oauthScopes: resolvedOauthScopes
+            oauthScopes: resolvedOauthScopes,
+            capTools: existing?.capTools ?? "unknown",
+            capResources: existing?.capResources ?? "unknown",
+            capPrompts: existing?.capPrompts ?? "unknown",
+            capElicitation: existing?.capElicitation ?? "unknown",
+            capApps: existing?.capApps ?? "unknown",
+            capTasks: existing?.capTasks ?? "unknown",
+            capRoots: existing?.capRoots ?? "unknown",
+            capSampling: existing?.capSampling ?? "unknown"
         )
     }
 

@@ -66,6 +66,10 @@ pub enum ContentBlock {
         uri: String,
         template_ref: String,
         state: serde_json::Value,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        server_id: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        origin_tool_call_id: Option<String>,
     },
     Artifact {
         path: String,
@@ -97,6 +101,10 @@ pub enum ContentBlock {
     TaskRef {
         task_id: String,
         status: TaskStatus,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        title: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        result_summary: Option<String>,
     },
 }
 
@@ -256,7 +264,50 @@ pub struct McpServerRef {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Root {
+    #[serde(default)]
+    pub id: String,
+    #[serde(default, deserialize_with = "deserialize_root_name")]
+    pub name: String,
     pub uri: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub name: Option<String>,
+    #[serde(default)]
+    pub kind: RootKind,
+    #[serde(default)]
+    pub scope: RootScope,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum RootKind {
+    #[default]
+    Filesystem,
+    KnowledgeBase,
+    Other,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum RootScope {
+    #[default]
+    Conversation,
+    User,
+}
+
+impl Root {
+    pub fn normalize_legacy(mut self) -> Self {
+        if self.id.is_empty() {
+            self.id = uuid::Uuid::now_v7().to_string();
+        }
+        if self.name.is_empty() {
+            self.name = self.uri.clone();
+        }
+        self
+    }
+}
+
+fn deserialize_root_name<'de, D>(deserializer: D) -> std::result::Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<String>::deserialize(deserializer)?;
+    Ok(value.unwrap_or_default())
 }

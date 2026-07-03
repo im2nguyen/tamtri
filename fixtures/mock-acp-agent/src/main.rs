@@ -66,7 +66,6 @@ fn main() {
                     )
                 }
                 Some("session/prompt") => {
-                    let _ = call_gateway_elicit_url(&mcp_servers);
                     if let Some(cwd) = &cwd {
                         let _ = std::fs::create_dir_all(cwd);
                         let _ = std::fs::write(
@@ -99,6 +98,7 @@ fn main() {
                             }
                         }),
                     );
+                    let _ = call_gateway_elicit_url(&mcp_servers);
                 }
                 _ => write_msg(
                     &mut stdout,
