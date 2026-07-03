@@ -26,6 +26,13 @@ fn stdio_server(id: &str, command: &str) -> GatewayServerConfig {
 }
 
 async fn start_progress_task(gateway: Arc<McpGateway>) -> (String, String) {
+    start_progress_task_with_origin(gateway, "tool-task-1").await
+}
+
+async fn start_progress_task_with_origin(
+    gateway: Arc<McpGateway>,
+    origin_tool_call_id: &str,
+) -> (String, String) {
     let tools = gateway.list_tools().await.expect("list tools");
     let exposed = tools
         .iter()
@@ -34,7 +41,11 @@ async fn start_progress_task(gateway: Arc<McpGateway>) -> (String, String) {
         .expect("progress_task");
     let mut rx = gateway.subscribe();
     gateway
-        .call_tool(&exposed, json!({}))
+        .call_tool_with_meta(
+            &exposed,
+            json!({}),
+            Some(json!({"toolCallId": origin_tool_call_id})),
+        )
         .await
         .expect("call progress_task");
     loop {
@@ -118,12 +129,17 @@ async fn task_completion_persists_task_ref() {
     .await
     .expect("task should complete");
     assert_eq!(completed.status, TaskStatus::Completed);
+    assert_eq!(
+        completed.origin_tool_call_id.as_deref(),
+        Some("tool-task-1")
+    );
 
     let block = ContentBlock::TaskRef {
         task_id: completed.task_id.clone(),
         status: completed.status.clone(),
         title: completed.title.clone(),
         result_summary: completed.result.as_ref().map(|value| value.to_string()),
+        origin_tool_call_id: completed.origin_tool_call_id.clone(),
     };
     assert_eq!(
         block,
@@ -132,10 +148,105 @@ async fn task_completion_persists_task_ref() {
             status: TaskStatus::Completed,
             title: completed.title.clone(),
             result_summary: completed.result.as_ref().map(|value| value.to_string()),
+            origin_tool_call_id: Some("tool-task-1".to_string()),
         }
     );
     let serialized = serde_json::to_string(&block).expect("serialize task ref");
     assert!(serialized.contains("task_ref"));
+    assert!(serialized.contains("origin_tool_call_id"));
+    assert!(serialized.contains("tool-task-1"));
+}
+
+#[tokio::test]
+async fn task_ref_origin_persisted_in_messages_jsonl() {
+    use chrono::Utc;
+    use std::fs;
+    use tamtri_core::conversation::{Conversation, Id, Message, Role};
+    use tamtri_core::vault::ConversationVault;
+    use tamtri_core::vault::fs::FilesystemVault;
+
+    let command = env!("CARGO_BIN_EXE_m7-task-mcp");
+    let (tx, _rx) = mpsc::unbounded_channel();
+    let gateway = Arc::new(
+        McpGateway::new(
+            GatewayConfig {
+                default_call_timeout_secs: 300,
+                servers: vec![stdio_server("tasks", command)],
+            },
+            Arc::new(NoCredentials),
+            Some(tx),
+        )
+        .unwrap(),
+    );
+
+    let (_exposed, task_id) = start_progress_task(Arc::clone(&gateway)).await;
+    let mut rx = gateway.subscribe();
+    let completed = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let event = rx.recv().await.expect("event");
+            if let GatewayEvent::TaskCompleted { state, .. } = event
+                && state.task_id == task_id
+            {
+                return state;
+            }
+        }
+    })
+    .await
+    .expect("task should complete");
+
+    let block = ContentBlock::TaskRef {
+        task_id: completed.task_id.clone(),
+        status: completed.status.clone(),
+        title: completed.title.clone(),
+        result_summary: completed.result.as_ref().map(|value| value.to_string()),
+        origin_tool_call_id: completed.origin_tool_call_id.clone(),
+    };
+
+    let dir = tempfile::tempdir().unwrap();
+    let vault = FilesystemVault::new(dir.path().to_path_buf()).unwrap();
+    let mut conversation = Conversation::new("Task replay");
+    conversation.push_message(Message {
+        id: Id::now_v7(),
+        role: Role::Assistant,
+        harness_id: None,
+        content: vec![
+            ContentBlock::ToolCall {
+                id: "tool-task-1".into(),
+                name: "tasks__progress_task".into(),
+                input: json!({}),
+            },
+            block.clone(),
+        ],
+        created_at: Utc::now(),
+    });
+    vault.create(&conversation).unwrap();
+
+    let messages_path = dir
+        .path()
+        .join("conversations")
+        .read_dir()
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path()
+        .join("messages.jsonl");
+    let messages_text = fs::read_to_string(&messages_path).unwrap();
+    assert!(
+        messages_text.contains("origin_tool_call_id"),
+        "messages.jsonl should include origin_tool_call_id: {messages_text}"
+    );
+    assert!(messages_text.contains("tool-task-1"));
+
+    let loaded = vault.load(conversation.id).unwrap();
+    match &loaded.messages[0].content[1] {
+        ContentBlock::TaskRef {
+            origin_tool_call_id,
+            ..
+        } => assert_eq!(origin_tool_call_id.as_deref(), Some("tool-task-1")),
+        other => panic!("expected task_ref block, got {other:?}"),
+    }
+    assert_eq!(loaded.messages[0].content[1], block);
 }
 
 #[tokio::test]

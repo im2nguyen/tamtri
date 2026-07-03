@@ -2028,6 +2028,7 @@ fn record_gateway_content_block(blocks: &Mutex<Vec<ContentBlock>>, event: &Gatew
                 status: state.status.clone(),
                 title: state.title.clone(),
                 result_summary: state.result.as_ref().map(summarize_task_result),
+                origin_tool_call_id: state.origin_tool_call_id.clone(),
             });
         }
         _ => {}

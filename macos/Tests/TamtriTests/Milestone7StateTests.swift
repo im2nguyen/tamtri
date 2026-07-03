@@ -232,12 +232,13 @@ final class Milestone7StateTests: XCTestCase {
 
     func testTranscriptTaskRefParsesTitleAndResultSummary() throws {
         let json = """
-        {"type":"task_ref","task_id":"task-42","status":"completed","title":"Build report","result_summary":"Done"}
+        {"type":"task_ref","task_id":"task-42","status":"completed","title":"Build report","result_summary":"Done","origin_tool_call_id":"tool-42"}
         """
         let block = try JSONDecoder().decode(TranscriptContentBlock.self, from: Data(json.utf8))
         XCTAssertEqual(block.taskId, "task-42")
         XCTAssertEqual(block.taskStatus, "completed")
         XCTAssertEqual(block.taskTitle, "Build report")
         XCTAssertEqual(block.taskResultSummary, "Done")
+        XCTAssertEqual(block.originToolCallId, "tool-42")
     }
 }
