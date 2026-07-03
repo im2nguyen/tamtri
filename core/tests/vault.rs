@@ -582,8 +582,17 @@ fn duplicate_id_resolves_to_newest() {
 
     assert_eq!(vault.list().unwrap().len(), 1);
     assert_eq!(vault.load(c.id).unwrap().title, "Duplicate newer");
+    let expected_winner = copy.file_name().unwrap().to_string_lossy();
+    let expected_loser = original.file_name().unwrap().to_string_lossy();
     assert!(vault.issues().unwrap().iter().any(|issue| {
-        matches!(issue, VaultIssue::DuplicateId { id, losers, .. } if *id == c.id && losers.len() == 1)
+        matches!(
+            issue,
+            VaultIssue::DuplicateId { id, winner, losers }
+                if *id == c.id
+                    && winner.file_name().unwrap().to_string_lossy() == expected_winner
+                    && losers.len() == 1
+                    && losers[0].file_name().unwrap().to_string_lossy() == expected_loser
+        )
     }));
 }
 
@@ -723,36 +732,14 @@ fn artifact_inline_respects_threshold() {
     ));
 }
 
-#[test]
-fn artifact_path_traversal_rejected() {
-    assert!(
-        ContentBlock::artifact(
-            "attachments/../secrets.txt",
-            "text/plain",
-            1,
-            "abc",
-            Some("x".into()),
-        )
-        .is_err()
-    );
-    assert!(
-        ContentBlock::artifact(
-            "attachments/./a.txt",
-            "text/plain",
-            1,
-            "abc",
-            Some("x".into()),
-        )
-        .is_err()
-    );
-
+fn assert_load_rejects_artifact_path(path: &str) {
     let (dir, vault) = vault();
     let c = Conversation::new("Traversal");
     vault.create(&c).unwrap();
     let dir = conversation_dir(dir.path(), c.id);
     let mut bad = message("bad");
     bad.content = vec![ContentBlock::Artifact {
-        path: "attachments/../secrets.txt".into(),
+        path: path.to_string(),
         mime_type: "text/plain".into(),
         size: 1,
         sha256: "abc".into(),
@@ -761,10 +748,29 @@ fn artifact_path_traversal_rejected() {
     let raw = serde_json::to_string(&bad).unwrap();
     fs::write(dir.join("messages.jsonl"), format!("{raw}\n")).unwrap();
 
-    assert!(matches!(
-        vault.load(c.id),
-        Err(CoreError::MalformedVault(_))
-    ));
+    assert!(
+        matches!(vault.load(c.id), Err(CoreError::MalformedVault(_))),
+        "load should reject artifact path: {path}"
+    );
+}
+
+#[test]
+fn artifact_path_traversal_rejected() {
+    let bad_paths = [
+        "attachments/../secrets.txt",
+        "/attachments/a.txt",
+        "workdir/report.html",
+        "secrets.txt",
+        "attachments/./a.txt",
+    ];
+
+    for path in bad_paths {
+        assert!(
+            ContentBlock::artifact(path, "text/plain", 1, "abc", Some("x".into())).is_err(),
+            "constructor should reject artifact path: {path}"
+        );
+        assert_load_rejects_artifact_path(path);
+    }
 }
 
 #[test]
