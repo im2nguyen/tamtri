@@ -22,7 +22,7 @@ tamtri stores conversations as a legible vault, not an opaque app database. The 
 
 `attachments/` contains curated rendered artifacts. Anything the transcript renders is a content-hashed snapshot under `attachments/`, frozen at render time. `workdir/` stays messy, mutable, and local. Milestone 5 snapshots renderable `FileChanged` paths from the conversation workdir into `attachments/<sha256-prefix>-<safe-basename>` before appending an `Artifact` block, so reloading from `messages.jsonl` plus `attachments/` does not depend on the mutable workdir copy.
 
-ACP agents are launched with the conversation `workdir/` as their process cwd, and the same path is sent in `session/new.cwd`. If a harness creates files without emitting explicit file-change notifications, Tamtri scans renderable files under `workdir/` at turn end and snapshots them through the same `attachments/` pipeline.
+ACP agents are launched with the conversation `workdir/` as their process cwd, and the same path is sent in `session/new.cwd`. At turn end Tamtri snapshots only paths collected in the turn reducer's `referenced_paths` list (from `FileChanged`, tool-result diffs, and write/edit tool inputs). There is no full `workdir/` directory scan, so incidental files such as a dropped input CSV are not snapshotted unless the harness actually touched them.
 
 Construct artifact blocks through `ContentBlock::artifact(path, mime_type, size, sha256, inline)`. `ContentBlock::Artifact.path` must be a vault-relative file under `attachments/`. Absolute paths and any `.` or `..` component are rejected. This blocks path traversal from imported bundles. Small UTF-8 text artifacts may inline in `messages.jsonl` up to `ARTIFACT_INLINE_MAX_BYTES` (`32 KiB`); larger text, binary artifacts, and inline content with non-text MIME types are stored as files and referenced by path, size, MIME type, and SHA-256. The message codec runs the same validator on deserialization, so `load` and import reject malformed artifact blocks with `MalformedVault`.
 
@@ -38,7 +38,7 @@ Reads are lock-free and read-only. A torn final `messages.jsonl` line is ignored
 
 Writes take an exclusive advisory lock on that conversation's `messages.jsonl`, then repair any torn final line on disk before appending. There is no vault-wide lock, so different conversations can be written concurrently and external tools can browse the vault at any time.
 
-Folder names are cosmetic. The id in `meta.json` is the truth, so Finder renames do not break load or list. Duplicate ids from Finder copies or sync conflicts resolve deterministically to the newest `updated_at`, with path-name ordering as the tie breaker. tamtri never auto-deletes the losing folders; it reports them through `VaultIssue::DuplicateId`.
+Folder names are cosmetic. The id in `meta.json` is the truth, so Finder renames do not break load or list. The `<shortid>` suffix is the first 8 hex characters of the conversation id's simple form (no hyphens), not the full 32-character id. Duplicate ids from Finder copies or sync conflicts resolve deterministically to the newest `updated_at`, with path-name ordering as the tie breaker. tamtri never auto-deletes the losing folders; it reports them through `VaultIssue::DuplicateId`.
 
 ## Sync Stance
 

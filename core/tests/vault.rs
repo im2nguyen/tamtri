@@ -88,6 +88,7 @@ fn all_blocks_message() -> Message {
                 status: TaskStatus::Running,
                 title: None,
                 result_summary: None,
+                origin_tool_call_id: Some("tool-1".into()),
             },
         ],
     }
@@ -213,6 +214,30 @@ fn import_folder_as_new_assigns_new_id() {
 }
 
 #[test]
+fn import_rejects_malformed_artifact() {
+    let (dir, source) = vault();
+    let c = Conversation::new("Import traversal");
+    source.create(&c).unwrap();
+    let src = conversation_dir(dir.path(), c.id);
+    let mut bad = message("bad");
+    bad.content = vec![ContentBlock::Artifact {
+        path: "attachments/../secrets.txt".into(),
+        mime_type: "text/plain".into(),
+        size: 1,
+        sha256: "abc".into(),
+        inline: Some("x".into()),
+    }];
+    let raw = serde_json::to_string(&bad).unwrap();
+    fs::write(src.join("messages.jsonl"), format!("{raw}\n")).unwrap();
+
+    let (_target_dir, target) = vault();
+    assert!(matches!(
+        target.import_folder_as_new(&src),
+        Err(CoreError::MalformedVault(_))
+    ));
+}
+
+#[test]
 fn import_folder_as_new_copies_attachments() {
     let (dir, source) = vault();
     let c = Conversation::new("Import attachments");
@@ -246,6 +271,22 @@ fn save_meta_round_trip() {
     let loaded = vault.load(c.id).unwrap();
     assert_eq!(loaded.title, "Updated title");
     assert_eq!(loaded.updated_at, c.updated_at);
+}
+
+#[test]
+fn issues_reports_unreadable_folder() {
+    let (dir, vault) = vault();
+    let c = Conversation::new("Bad meta");
+    vault.create(&c).unwrap();
+    let conv_dir = conversation_dir(dir.path(), c.id);
+    fs::write(conv_dir.join("meta.json"), "{not json").unwrap();
+
+    assert!(vault.issues().unwrap().iter().any(|issue| {
+        matches!(
+            issue,
+            VaultIssue::UnreadableFolder { path, .. } if *path == conv_dir
+        )
+    }));
 }
 
 #[test]
