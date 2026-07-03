@@ -38,6 +38,7 @@ impl StdioTransport {
         }
         preserve_env(&mut cmd, "PATH");
         preserve_env(&mut cmd, "HOME");
+        preserve_env(&mut cmd, "HERMES_HOME");
         preserve_env(&mut cmd, "TMPDIR");
         preserve_env(&mut cmd, "LANG");
         for (key, value) in env {

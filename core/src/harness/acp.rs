@@ -580,7 +580,10 @@ fn string_field_opt(value: &Value, keys: &[&str]) -> Option<String> {
 
 fn format_harness_run_error(err: &CoreError) -> String {
     match err {
-        CoreError::JsonRpc { code: -32603, message } => format!(
+        CoreError::JsonRpc {
+            code: -32603,
+            message,
+        } if message.eq_ignore_ascii_case("internal error") => format!(
             "json-rpc error -32603: {message}. Gateway tools need tamtri-gateway-stdio (rebuild tamtri) and a valid twenty-questions path in Settings → Gateway; disable unreachable servers."
         ),
         _ => err.to_string(),
@@ -724,7 +727,7 @@ mod tests {
     }
 
     #[test]
-    fn format_harness_run_error_adds_gateway_hint_for_internal_error() {
+    fn format_harness_run_error_adds_gateway_hint_for_generic_internal_error() {
         let err = CoreError::JsonRpc {
             code: -32603,
             message: "Internal error".to_string(),
@@ -732,6 +735,17 @@ mod tests {
         let message = format_harness_run_error(&err);
         assert!(message.contains("tamtri-gateway-stdio"));
         assert!(message.contains("twenty-questions"));
+    }
+
+    #[test]
+    fn format_harness_run_error_preserves_specific_harness_message() {
+        let err = CoreError::JsonRpc {
+            code: -32603,
+            message: "No LLM provider configured. Run `hermes model`.".to_string(),
+        };
+        let message = format_harness_run_error(&err);
+        assert!(message.contains("No LLM provider configured"));
+        assert!(!message.contains("tamtri-gateway-stdio"));
     }
 
     #[test]

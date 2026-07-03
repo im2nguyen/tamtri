@@ -229,7 +229,7 @@ async fn route_incoming(
                 let result = if let Some(error) = response.error {
                     Err(CoreError::JsonRpc {
                         code: error.code,
-                        message: error.message,
+                        message: error.user_message(),
                     })
                 } else {
                     response.result.ok_or_else(|| {

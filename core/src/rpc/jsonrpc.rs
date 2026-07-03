@@ -95,6 +95,25 @@ pub struct JsonRpcError {
     pub data: Option<serde_json::Value>,
 }
 
+impl JsonRpcError {
+    /// Prefer structured error details (e.g. Hermes `data.details`) over generic messages.
+    pub fn user_message(&self) -> String {
+        if let Some(data) = &self.data {
+            if let Some(details) = data.get("details").and_then(serde_json::Value::as_str)
+                && !details.is_empty()
+            {
+                return details.to_string();
+            }
+            if let Some(text) = data.as_str()
+                && !text.is_empty()
+            {
+                return text.to_string();
+            }
+        }
+        self.message.clone()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum IncomingMessage {
     Response(JsonRpcResponse),
@@ -137,5 +156,31 @@ impl IncomingMessage {
                 "message has neither method nor id".to_string(),
             )),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn user_message_prefers_data_details() {
+        let error = JsonRpcError {
+            code: -32603,
+            message: "Internal error".to_string(),
+            data: Some(json!({"details": "No LLM provider configured."})),
+        };
+        assert_eq!(error.user_message(), "No LLM provider configured.");
+    }
+
+    #[test]
+    fn user_message_falls_back_to_message() {
+        let error = JsonRpcError {
+            code: -32601,
+            message: "Method not found".to_string(),
+            data: None,
+        };
+        assert_eq!(error.user_message(), "Method not found");
     }
 }
