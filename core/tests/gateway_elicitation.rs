@@ -426,6 +426,56 @@ fn url_elicitation_rejects_userinfo() {
 }
 
 #[tokio::test]
+async fn gateway_elicitation_user_cancel_round_trip() {
+    let command = env!("CARGO_BIN_EXE_mock-mcp-server");
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    let gateway = Arc::new(
+        McpGateway::new(
+            GatewayConfig {
+                default_call_timeout_secs: 300,
+                servers: vec![stdio_server("mock", command)],
+            },
+            Arc::new(NoCredentials),
+            Some(tx),
+        )
+        .unwrap(),
+    );
+
+    let exposed = gateway
+        .list_tools()
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|tool| tool.original_name == "elicit")
+        .map(|tool| tool.exposed_name)
+        .expect("elicit tool");
+
+    let gateway_for_call = Arc::clone(&gateway);
+    let call_task = tokio::spawn(async move { gateway_for_call.call_tool(&exposed, json!({})).await });
+
+    let request_id = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if let Some(GatewayEvent::ElicitationRequested { request_id, .. }) = rx.recv().await {
+                return request_id;
+            }
+        }
+    })
+    .await
+    .expect("elicitation request timed out");
+
+    gateway
+        .respond_elicitation(&request_id, ElicitationAction::Cancel, None)
+        .await
+        .unwrap();
+
+    let result = call_task.await.unwrap().unwrap();
+    assert_eq!(
+        result.structured_content.unwrap()["elicitation"],
+        "cancel"
+    );
+}
+
+#[tokio::test]
 async fn gateway_elicitation_cancel_on_run_cancel() {
     let command = env!("CARGO_BIN_EXE_mock-mcp-server");
     let (tx, mut rx) = mpsc::unbounded_channel();

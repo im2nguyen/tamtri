@@ -228,8 +228,7 @@ pub fn upstream_gateway_capabilities_for(
     support: TamtriFeatureSupport,
 ) -> ServerCapabilities {
     use super::protocol::{
-        ElicitationCapability, PromptsCapability, ResourcesCapability, RootsCapability,
-        ToolsCapability,
+        PromptsCapability, ResourcesCapability, RootsCapability, ToolsCapability,
     };
 
     ServerCapabilities {
@@ -243,10 +242,8 @@ pub fn upstream_gateway_capabilities_for(
         prompts: Some(PromptsCapability {
             list_changed: Some(false),
         }),
-        elicitation: Some(ElicitationCapability {
-            form: Some(serde_json::json!({})),
-            url: Some(serde_json::json!({})),
-        }),
+        // Downstream servers elicit via the gateway client; agents must not elicit tamtri directly.
+        elicitation: None,
         sampling: None,
         tasks: None,
         roots: if support.roots {
@@ -306,11 +303,11 @@ mod tests {
     }
 
     #[test]
-    fn upstream_gateway_omits_sampling() {
+    fn upstream_gateway_omits_sampling_and_elicitation() {
         let caps = upstream_gateway_capabilities();
         assert!(caps.sampling.is_none());
+        assert!(caps.elicitation.is_none());
         assert!(caps.tools.is_some());
-        assert!(caps.elicitation.is_some());
     }
 
     #[test]

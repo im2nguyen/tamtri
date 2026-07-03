@@ -6,6 +6,7 @@ pub mod client;
 pub mod elicitation;
 pub mod endpoint;
 pub mod gateway;
+pub mod gateway_content;
 pub mod gateway_tasks;
 pub mod oauth;
 pub mod jsonrpc;

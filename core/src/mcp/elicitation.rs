@@ -1,6 +1,6 @@
 use serde_json::{Map, Value, json};
 
-use crate::conversation::{ElicitationAction, ElicitationMode};
+use crate::conversation::{ContentBlock, ElicitationAction, ElicitationMode};
 use crate::mcp::protocol::ElicitationCreateParams;
 use crate::mcp::url_handoff::{redact_url_for_audit, validate_handoff_url};
 use crate::{CoreError, Result};
@@ -144,6 +144,38 @@ pub fn validate_elicitation_url(raw: &str) -> Result<String> {
 
 pub fn audit_safe_elicitation_url(raw: &str) -> String {
     redact_url_for_audit(raw)
+}
+
+pub fn elicitation_request_block(
+    request_id: String,
+    server_id: String,
+    origin_tool_call_id: Option<String>,
+    mode: ElicitationMode,
+    message: String,
+    schema: Option<Value>,
+    url: Option<String>,
+) -> ContentBlock {
+    ContentBlock::ElicitationRequest {
+        request_id,
+        server_id: Some(server_id),
+        origin_tool_call_id,
+        mode,
+        message,
+        schema,
+        url: url.as_ref().map(|value| audit_safe_elicitation_url(value)),
+    }
+}
+
+pub fn elicitation_response_block(
+    request_id: String,
+    action: ElicitationAction,
+    data: Option<Value>,
+) -> ContentBlock {
+    ContentBlock::ElicitationResponse {
+        request_id,
+        action,
+        data: data.map(|value| sanitize_transcript_data(&value)),
+    }
 }
 
 #[cfg(test)]

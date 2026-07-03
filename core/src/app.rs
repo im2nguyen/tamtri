@@ -26,7 +26,9 @@ use crate::harness::{
     ContextSeed, ConversationContext, HarnessAdapter, HarnessEvent, RunControl, TurnEndReason,
     TurnInput,
 };
-use crate::mcp::elicitation::{audit_safe_elicitation_url, sanitize_transcript_data};
+use crate::mcp::elicitation::{
+    audit_safe_elicitation_url, elicitation_request_block, elicitation_response_block,
+};
 use crate::mcp::oauth::{
     PkceChallenge, build_authorization_url, exchange_authorization_code, generate_pkce,
     oauth_connection_status, oauth_status_label, parse_stored_oauth, serialize_stored_oauth,
@@ -1087,15 +1089,14 @@ impl TamtriCore {
             .ok_or(CoreError::NotFound(id))?;
         self.runtime
             .block_on(run.gateway.respond_elicitation(request_id, action.clone(), data.clone()))?;
-        let response_data = data.map(|value| sanitize_transcript_data(&value));
         run.gateway_blocks
             .lock()
             .map_err(|_| CoreError::Protocol("gateway block lock poisoned".to_string()))?
-            .push(ContentBlock::ElicitationResponse {
-                request_id: request_id.to_string(),
+            .push(elicitation_response_block(
+                request_id.to_string(),
                 action,
-                data: response_data,
-            });
+                data,
+            ));
         Ok(())
     }
 
@@ -2078,15 +2079,15 @@ fn record_gateway_content_block(blocks: &Mutex<Vec<ContentBlock>>, event: &Gatew
             let Ok(mut blocks) = blocks.lock() else {
                 return;
             };
-            blocks.push(ContentBlock::ElicitationRequest {
-                request_id: request_id.clone(),
-                server_id: Some(server_id.clone()),
-                origin_tool_call_id: origin_tool_call_id.clone(),
-                mode: mode.clone(),
-                message: message.clone(),
-                schema: schema.clone(),
-                url: url.as_ref().map(|value| audit_safe_elicitation_url(value)),
-            });
+            blocks.push(elicitation_request_block(
+                request_id.clone(),
+                server_id.clone(),
+                origin_tool_call_id.clone(),
+                mode.clone(),
+                message.clone(),
+                schema.clone(),
+                url.clone(),
+            ));
         }
         GatewayEvent::AppReturned {
             server_id,

@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use tamtri_core::conversation::reduce::TurnReducer;
 use tamtri_core::conversation::ContentBlock;
 use tamtri_core::harness::HarnessEvent;
+use tamtri_core::mcp::gateway_content::{GatewayContentReducer, GatewayReducerInput};
 
 fn fixtures_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/reducer")
@@ -32,6 +33,19 @@ fn reduce_fixture(case: &str) {
     assert_eq!(reduced.message.content, expected, "fixture case: {case}");
 }
 
+fn reduce_gateway_fixture(case: &str) {
+    let dir = fixtures_dir();
+    let raw = fs::read_to_string(dir.join(format!("{case}.events.json"))).expect("read events fixture");
+    let inputs: Vec<GatewayReducerInput> = serde_json::from_str(&raw).expect("parse gateway events");
+    let expected = load_expected_blocks(&dir.join(format!("{case}.expected.json")));
+
+    let mut reducer = GatewayContentReducer::new();
+    for input in &inputs {
+        reducer.apply_input(input);
+    }
+    assert_eq!(reducer.finish(), expected, "gateway fixture case: {case}");
+}
+
 #[test]
 fn reducer_golden_files() {
     for case in [
@@ -45,5 +59,12 @@ fn reducer_golden_files() {
         "lifecycle_no_blocks",
     ] {
         reduce_fixture(case);
+    }
+}
+
+#[test]
+fn gateway_reducer_golden_files() {
+    for case in ["elicitation_request_response"] {
+        reduce_gateway_fixture(case);
     }
 }

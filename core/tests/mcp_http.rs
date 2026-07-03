@@ -8,14 +8,30 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::mpsc;
 
 #[tokio::test]
-async fn streamable_http_json_response_and_session_header() {
-    let (url, mut seen_rx) = spawn_http_fixture(false).await;
+async fn streamable_http_json_response() {
+    let (url, _seen_rx) = spawn_http_fixture(false, false).await;
     let client = McpClient::connect_http(&url, &[], McpClientConfig::default())
         .await
         .unwrap();
 
     let tools = client.list_tools().await.unwrap();
     assert_eq!(tools[0].name, "http_echo");
+
+    let result = client
+        .call_tool("http_echo", json!({"message": "hello"}), None)
+        .await
+        .unwrap();
+    assert_eq!(result.content[0]["text"], "hello from json");
+}
+
+#[tokio::test]
+async fn streamable_http_preserves_session_header() {
+    let (url, mut seen_rx) = spawn_http_fixture(false, false).await;
+    let client = McpClient::connect_http(&url, &[], McpClientConfig::default())
+        .await
+        .unwrap();
+
+    let _ = client.list_tools().await.unwrap();
 
     let mut saw_session_header = false;
     for _ in 0..4 {
@@ -37,8 +53,21 @@ async fn streamable_http_json_response_and_session_header() {
 }
 
 #[tokio::test]
+async fn streamable_http_error_status() {
+    let (url, _seen_rx) = spawn_http_fixture(false, true).await;
+    let result = McpClient::connect_http(&url, &[], McpClientConfig::default()).await;
+    let Err(err) = result else {
+        panic!("expected connect to fail with HTTP 500");
+    };
+    assert!(
+        err.to_string().contains("500"),
+        "expected HTTP error status in connect error, got: {err}"
+    );
+}
+
+#[tokio::test]
 async fn streamable_http_sse_response() {
-    let (url, _seen_rx) = spawn_http_fixture(true).await;
+    let (url, _seen_rx) = spawn_http_fixture(true, false).await;
     let client = McpClient::connect_http(&url, &[], McpClientConfig::default())
         .await
         .unwrap();
@@ -57,7 +86,7 @@ async fn remote_http_server_uses_oauth_header_without_logging_value() {
     use tamtri_core::mcp::oauth::{StoredOAuthBundle, serialize_stored_oauth};
 
     let expected_token = "secret-access-token-123";
-    let (url, mut seen_rx) = spawn_http_fixture(false).await;
+    let (url, mut seen_rx) = spawn_http_fixture(false, false).await;
     let credentials = Arc::new(MemoryCredentials::default());
     let token_ref = "keychain://remote-oauth".to_string();
     let bundle = StoredOAuthBundle {
@@ -145,6 +174,7 @@ async fn remote_http_server_uses_oauth_header_without_logging_value() {
 
 async fn spawn_http_fixture(
     sse_tools_call: bool,
+    error_status: bool,
 ) -> (String, mpsc::Receiver<HashMap<String, String>>) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -157,7 +187,7 @@ async fn spawn_http_fixture(
             };
             let seen_tx = Arc::clone(&seen_tx);
             tokio::spawn(async move {
-                let _ = handle_connection(socket, seen_tx, sse_tools_call).await;
+                let _ = handle_connection(socket, seen_tx, sse_tools_call, error_status).await;
             });
         }
     });
@@ -168,12 +198,26 @@ async fn handle_connection(
     mut socket: TcpStream,
     seen_tx: Arc<mpsc::Sender<HashMap<String, String>>>,
     sse_tools_call: bool,
+    error_status: bool,
 ) -> std::io::Result<()> {
     let (headers, body) = read_request(&mut socket).await?;
     let _ = seen_tx.send(headers).await;
     let message: Value = serde_json::from_slice(&body).unwrap();
     let method = message.get("method").and_then(Value::as_str).unwrap_or("");
     match method {
+        "initialize" if error_status => {
+            write_json(
+                &mut socket,
+                500,
+                &[],
+                json!({
+                    "jsonrpc": "2.0",
+                    "id": message["id"].clone(),
+                    "error": {"code": -32000, "message": "server unavailable"}
+                }),
+            )
+            .await
+        }
         "initialize" => {
             write_json(
                 &mut socket,
@@ -357,6 +401,7 @@ fn status_text(status: u16) -> &'static str {
     match status {
         200 => "OK",
         202 => "Accepted",
+        500 => "Internal Server Error",
         _ => "OK",
     }
 }

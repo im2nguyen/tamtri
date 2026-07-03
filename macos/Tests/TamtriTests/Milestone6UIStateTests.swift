@@ -115,4 +115,98 @@ final class Milestone6UIStateTests: XCTestCase {
         ])
         XCTAssertEqual(ElicitationCardRouter.cardKind(mode: "form", schema: schema), .unsupportedSchema)
     }
+
+    func testLiveEventGroupingNestsElicitationUnderToolCall() {
+        let events = [
+            IdentifiedCoreEvent(
+                id: 0,
+                event: CoreEvent(
+                    conversationId: "c1",
+                    kind: "tool_call_started",
+                    payloadJSON: #"{"id":"tool-9","name":"elicit"}"#
+                )
+            ),
+            IdentifiedCoreEvent(
+                id: 1,
+                event: CoreEvent(
+                    conversationId: "c1",
+                    kind: "elicitation_requested",
+                    payloadJSON: #"{"request_id":"req-1","server_id":"mock","origin_tool_call_id":"tool-9","mode":"form","message":"What is your name?"}"#
+                )
+            ),
+        ]
+
+        let groups = LiveEventGrouping.build(from: events)
+        XCTAssertEqual(groups.count, 1)
+        XCTAssertEqual(groups[0].nested.count, 1)
+        XCTAssertEqual(groups[0].nested[0].kind, "elicitation_requested")
+    }
+
+    func testTranscriptContentGroupingNestsElicitationUnderToolCall() {
+        let blocks = [
+            TranscriptContentBlock(
+                type: "tool_call",
+                text: nil,
+                name: "elicit",
+                input: nil,
+                callId: "tool-9",
+                output: nil,
+                path: nil,
+                mimeType: nil,
+                size: nil,
+                sha256: nil,
+                inline: nil,
+                requestId: nil,
+                serverId: nil,
+                originToolCallId: nil,
+                mode: nil,
+                message: nil,
+                schema: nil,
+                url: nil,
+                action: nil,
+                data: nil,
+                uri: nil,
+                templateRef: nil,
+                state: nil,
+                taskId: nil,
+                taskStatus: nil,
+                taskTitle: nil,
+                taskResultSummary: nil
+            ),
+            TranscriptContentBlock(
+                type: "elicitation_request",
+                text: nil,
+                name: nil,
+                input: nil,
+                callId: nil,
+                output: nil,
+                path: nil,
+                mimeType: nil,
+                size: nil,
+                sha256: nil,
+                inline: nil,
+                requestId: "req-1",
+                serverId: "mock",
+                originToolCallId: "tool-9",
+                mode: "form",
+                message: "What is your name?",
+                schema: nil,
+                url: nil,
+                action: nil,
+                data: nil,
+                uri: nil,
+                templateRef: nil,
+                state: nil,
+                taskId: nil,
+                taskStatus: nil,
+                taskTitle: nil,
+                taskResultSummary: nil
+            ),
+        ]
+
+        let groups = TranscriptContentGrouping.build(from: blocks)
+        XCTAssertEqual(groups.count, 1)
+        XCTAssertEqual(groups[0].nested.count, 1)
+        XCTAssertEqual(groups[0].nested[0].type, "elicitation_request")
+    }
 }
