@@ -29,6 +29,8 @@ pub enum EventKind {
     PermissionResolved,
     ToolCallStarted,
     ToolCallCompleted,
+    ArtifactSnapshotted,
+    ArtifactNavigationBlocked,
     GatewayServerConnected,
     GatewayToolRouted,
     GatewayProgress,

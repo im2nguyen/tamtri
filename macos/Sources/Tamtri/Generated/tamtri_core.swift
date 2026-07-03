@@ -471,6 +471,22 @@ private let UNIFFI_CALLBACK_UNEXPECTED_ERROR: Int32 = 2
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterUInt64: FfiConverterPrimitive {
+    typealias FfiType = UInt64
+    typealias SwiftType = UInt64
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> UInt64 {
+        return try lift(readInt(&buf))
+    }
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        writeInt(&buf, lower(value))
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterBool : FfiConverter {
     typealias FfiType = Int8
     typealias SwiftType = Bool
@@ -535,6 +551,24 @@ fileprivate struct FfiConverterString: FfiConverter {
         let len = Int32(value.utf8.count)
         writeInt(&buf, len)
         writeBytes(&buf, value.utf8)
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterData: FfiConverterRustBuffer {
+    typealias SwiftType = Data
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> Data {
+        let len: Int32 = try readInt(&buf)
+        return Data(try readBytes(&buf, count: Int(len)))
+    }
+
+    public static func write(_ value: Data, into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        writeBytes(&buf, value)
     }
 }
 
@@ -743,6 +777,10 @@ public protocol TamtriCoreProtocol: AnyObject, Sendable {
     
     func cancelRun(conversationId: String) throws 
     
+    func conversationWorkdirPath(conversationId: String) throws  -> String
+    
+    func copyFileToWorkdir(conversationId: String, sourcePath: String) throws  -> String
+    
     func createConversation(title: String, harnessId: String, modelId: String) throws  -> ConversationDto
     
     func deleteConversation(id: String) throws 
@@ -753,7 +791,15 @@ public protocol TamtriCoreProtocol: AnyObject, Sendable {
     
     func listGatewayServers() throws  -> [GatewayServerDto]
     
+    func listWorkdirFiles(conversationId: String) throws  -> [WorkdirFileDto]
+    
     func loadConversation(id: String) throws  -> ConversationDto
+    
+    func logArtifactNavigationBlocked(conversationId: String, url: String) throws 
+    
+    func readAttachmentVerified(conversationId: String, path: String, size: UInt64, sha256: String) throws  -> Data
+    
+    func readWorkdirFile(conversationId: String, relativePath: String) throws  -> WorkdirFileContentDto
     
     func registerAcpAgent(id: String, displayName: String, command: String, args: [String]) throws 
     
@@ -762,6 +808,10 @@ public protocol TamtriCoreProtocol: AnyObject, Sendable {
     func sendMessage(conversationId: String, text: String) throws 
     
     func setGatewayCredential(credentialRef: String, value: String) throws 
+    
+    func verifiedAttachmentPath(conversationId: String, path: String, size: UInt64, sha256: String) throws  -> String
+    
+    func verifyArtifactInline(size: UInt64, sha256: String, inlineContent: String) throws 
     
 }
 open class TamtriCore: TamtriCoreProtocol, @unchecked Sendable {
@@ -836,6 +886,27 @@ open func cancelRun(conversationId: String)throws   {try rustCallWithError(FfiCo
 }
 }
     
+open func conversationWorkdirPath(conversationId: String)throws  -> String  {
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeTamtriError_lift) {
+        uniffiCallStatus in
+    uniffi_tamtri_core_fn_method_tamtricore_conversation_workdir_path(
+            self.uniffiCloneHandle(),
+        FfiConverterString.lower(conversationId),uniffiCallStatus
+    )
+})
+}
+    
+open func copyFileToWorkdir(conversationId: String, sourcePath: String)throws  -> String  {
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeTamtriError_lift) {
+        uniffiCallStatus in
+    uniffi_tamtri_core_fn_method_tamtricore_copy_file_to_workdir(
+            self.uniffiCloneHandle(),
+        FfiConverterString.lower(conversationId),
+        FfiConverterString.lower(sourcePath),uniffiCallStatus
+    )
+})
+}
+    
 open func createConversation(title: String, harnessId: String, modelId: String)throws  -> ConversationDto  {
     return try  FfiConverterTypeConversationDto_lift(try rustCallWithError(FfiConverterTypeTamtriError_lift) {
         uniffiCallStatus in
@@ -887,12 +958,56 @@ open func listGatewayServers()throws  -> [GatewayServerDto]  {
 })
 }
     
+open func listWorkdirFiles(conversationId: String)throws  -> [WorkdirFileDto]  {
+    return try  FfiConverterSequenceTypeWorkdirFileDto.lift(try rustCallWithError(FfiConverterTypeTamtriError_lift) {
+        uniffiCallStatus in
+    uniffi_tamtri_core_fn_method_tamtricore_list_workdir_files(
+            self.uniffiCloneHandle(),
+        FfiConverterString.lower(conversationId),uniffiCallStatus
+    )
+})
+}
+    
 open func loadConversation(id: String)throws  -> ConversationDto  {
     return try  FfiConverterTypeConversationDto_lift(try rustCallWithError(FfiConverterTypeTamtriError_lift) {
         uniffiCallStatus in
     uniffi_tamtri_core_fn_method_tamtricore_load_conversation(
             self.uniffiCloneHandle(),
         FfiConverterString.lower(id),uniffiCallStatus
+    )
+})
+}
+    
+open func logArtifactNavigationBlocked(conversationId: String, url: String)throws   {try rustCallWithError(FfiConverterTypeTamtriError_lift) {
+        uniffiCallStatus in
+    uniffi_tamtri_core_fn_method_tamtricore_log_artifact_navigation_blocked(
+            self.uniffiCloneHandle(),
+        FfiConverterString.lower(conversationId),
+        FfiConverterString.lower(url),uniffiCallStatus
+    )
+}
+}
+    
+open func readAttachmentVerified(conversationId: String, path: String, size: UInt64, sha256: String)throws  -> Data  {
+    return try  FfiConverterData.lift(try rustCallWithError(FfiConverterTypeTamtriError_lift) {
+        uniffiCallStatus in
+    uniffi_tamtri_core_fn_method_tamtricore_read_attachment_verified(
+            self.uniffiCloneHandle(),
+        FfiConverterString.lower(conversationId),
+        FfiConverterString.lower(path),
+        FfiConverterUInt64.lower(size),
+        FfiConverterString.lower(sha256),uniffiCallStatus
+    )
+})
+}
+    
+open func readWorkdirFile(conversationId: String, relativePath: String)throws  -> WorkdirFileContentDto  {
+    return try  FfiConverterTypeWorkdirFileContentDto_lift(try rustCallWithError(FfiConverterTypeTamtriError_lift) {
+        uniffiCallStatus in
+    uniffi_tamtri_core_fn_method_tamtricore_read_workdir_file(
+            self.uniffiCloneHandle(),
+        FfiConverterString.lower(conversationId),
+        FfiConverterString.lower(relativePath),uniffiCallStatus
     )
 })
 }
@@ -936,6 +1051,30 @@ open func setGatewayCredential(credentialRef: String, value: String)throws   {tr
             self.uniffiCloneHandle(),
         FfiConverterString.lower(credentialRef),
         FfiConverterString.lower(value),uniffiCallStatus
+    )
+}
+}
+    
+open func verifiedAttachmentPath(conversationId: String, path: String, size: UInt64, sha256: String)throws  -> String  {
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeTamtriError_lift) {
+        uniffiCallStatus in
+    uniffi_tamtri_core_fn_method_tamtricore_verified_attachment_path(
+            self.uniffiCloneHandle(),
+        FfiConverterString.lower(conversationId),
+        FfiConverterString.lower(path),
+        FfiConverterUInt64.lower(size),
+        FfiConverterString.lower(sha256),uniffiCallStatus
+    )
+})
+}
+    
+open func verifyArtifactInline(size: UInt64, sha256: String, inlineContent: String)throws   {try rustCallWithError(FfiConverterTypeTamtriError_lift) {
+        uniffiCallStatus in
+    uniffi_tamtri_core_fn_method_tamtricore_verify_artifact_inline(
+            self.uniffiCloneHandle(),
+        FfiConverterUInt64.lower(size),
+        FfiConverterString.lower(sha256),
+        FfiConverterString.lower(inlineContent),uniffiCallStatus
     )
 }
 }
@@ -1244,6 +1383,122 @@ public func FfiConverterTypeUiEvent_lower(_ value: UiEvent) -> RustBuffer {
 }
 
 
+public struct WorkdirFileContentDto: Equatable, Hashable {
+    public var mimeType: String?
+    public var data: Data
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(mimeType: String?, data: Data) {
+        self.mimeType = mimeType
+        self.data = data
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension WorkdirFileContentDto: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeWorkdirFileContentDto: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> WorkdirFileContentDto {
+        return
+            try WorkdirFileContentDto(
+                mimeType: FfiConverterOptionString.read(from: &buf), 
+                data: FfiConverterData.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: WorkdirFileContentDto, into buf: inout [UInt8]) {
+        FfiConverterOptionString.write(value.mimeType, into: &buf)
+        FfiConverterData.write(value.data, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeWorkdirFileContentDto_lift(_ buf: RustBuffer) throws -> WorkdirFileContentDto {
+    return try FfiConverterTypeWorkdirFileContentDto.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeWorkdirFileContentDto_lower(_ value: WorkdirFileContentDto) -> RustBuffer {
+    return FfiConverterTypeWorkdirFileContentDto.lower(value)
+}
+
+
+public struct WorkdirFileDto: Equatable, Hashable {
+    public var relativePath: String
+    public var size: UInt64
+    public var mimeType: String?
+    public var modifiedAt: UInt64
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(relativePath: String, size: UInt64, mimeType: String?, modifiedAt: UInt64) {
+        self.relativePath = relativePath
+        self.size = size
+        self.mimeType = mimeType
+        self.modifiedAt = modifiedAt
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension WorkdirFileDto: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeWorkdirFileDto: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> WorkdirFileDto {
+        return
+            try WorkdirFileDto(
+                relativePath: FfiConverterString.read(from: &buf), 
+                size: FfiConverterUInt64.read(from: &buf), 
+                mimeType: FfiConverterOptionString.read(from: &buf), 
+                modifiedAt: FfiConverterUInt64.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: WorkdirFileDto, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.relativePath, into: &buf)
+        FfiConverterUInt64.write(value.size, into: &buf)
+        FfiConverterOptionString.write(value.mimeType, into: &buf)
+        FfiConverterUInt64.write(value.modifiedAt, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeWorkdirFileDto_lift(_ buf: RustBuffer) throws -> WorkdirFileDto {
+    return try FfiConverterTypeWorkdirFileDto.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeWorkdirFileDto_lower(_ value: WorkdirFileDto) -> RustBuffer {
+    return FfiConverterTypeWorkdirFileDto.lower(value)
+}
+
+
 public 
 enum TamtriError: Swift.Error, Equatable, Hashable, Foundation.LocalizedError {
 
@@ -1417,6 +1672,31 @@ fileprivate struct FfiConverterSequenceTypeGatewayServerDto: FfiConverterRustBuf
     }
 }
 
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterSequenceTypeWorkdirFileDto: FfiConverterRustBuffer {
+    typealias SwiftType = [WorkdirFileDto]
+
+    public static func write(_ value: [WorkdirFileDto], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeWorkdirFileDto.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [WorkdirFileDto] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [WorkdirFileDto]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeWorkdirFileDto.read(from: &buf))
+        }
+        return seq
+    }
+}
+
 private enum InitializationResult {
     case ok
     case contractVersionMismatch
@@ -1438,6 +1718,12 @@ private let initializationResult: InitializationResult = {
     if (uniffi_tamtri_core_checksum_method_tamtricore_cancel_run() != 38316) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_tamtri_core_checksum_method_tamtricore_conversation_workdir_path() != 50463) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tamtri_core_checksum_method_tamtricore_copy_file_to_workdir() != 48306) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_tamtri_core_checksum_method_tamtricore_create_conversation() != 2414) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -1453,7 +1739,19 @@ private let initializationResult: InitializationResult = {
     if (uniffi_tamtri_core_checksum_method_tamtricore_list_gateway_servers() != 49649) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_tamtri_core_checksum_method_tamtricore_list_workdir_files() != 42205) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_tamtri_core_checksum_method_tamtricore_load_conversation() != 24394) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tamtri_core_checksum_method_tamtricore_log_artifact_navigation_blocked() != 955) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tamtri_core_checksum_method_tamtricore_read_attachment_verified() != 60323) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tamtri_core_checksum_method_tamtricore_read_workdir_file() != 53471) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_tamtri_core_checksum_method_tamtricore_register_acp_agent() != 43935) {
@@ -1466,6 +1764,12 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_tamtri_core_checksum_method_tamtricore_set_gateway_credential() != 36422) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tamtri_core_checksum_method_tamtricore_verified_attachment_path() != 25850) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tamtri_core_checksum_method_tamtricore_verify_artifact_inline() != 64758) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_tamtri_core_checksum_constructor_tamtricore_new() != 23658) {

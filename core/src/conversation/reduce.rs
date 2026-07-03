@@ -5,10 +5,18 @@ use crate::Result;
 use crate::conversation::{ContentBlock, Id, Message, Role};
 use crate::harness::{HarnessEvent, ToolContent, ToolStatus};
 
+use crate::harness::Diff;
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct RecordedFileChange {
+    pub tool_call_id: String,
+    pub diff: Diff,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct ReducedTurn {
     pub message: Message,
-    pub file_changes: Vec<crate::harness::Diff>,
+    pub file_changes: Vec<RecordedFileChange>,
 }
 
 #[derive(Debug, Clone)]
@@ -17,7 +25,7 @@ pub struct TurnReducer {
     blocks: Vec<ContentBlock>,
     text_buffer: String,
     thought_buffer: String,
-    file_changes: Vec<crate::harness::Diff>,
+    file_changes: Vec<RecordedFileChange>,
 }
 
 impl TurnReducer {
@@ -64,8 +72,15 @@ impl TurnReducer {
                     });
                 }
             }
-            HarnessEvent::FileChanged { diff, .. } => {
-                self.file_changes.push(diff.clone());
+            HarnessEvent::FileChanged {
+                tool_call_id,
+                diff,
+                ..
+            } => {
+                self.file_changes.push(RecordedFileChange {
+                    tool_call_id: tool_call_id.clone(),
+                    diff: diff.clone(),
+                });
             }
             HarnessEvent::PermissionRequested {
                 request_id,
@@ -249,7 +264,13 @@ mod tests {
             })
             .unwrap();
         let reduced = reducer.finish();
-        assert_eq!(reduced.file_changes, vec![diff]);
+        assert_eq!(
+            reduced.file_changes,
+            vec![RecordedFileChange {
+                tool_call_id: "tool-1".into(),
+                diff: diff.clone(),
+            }]
+        );
         assert!(reduced.message.content.is_empty());
     }
 }

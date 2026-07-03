@@ -20,11 +20,17 @@ tamtri stores conversations as a legible vault, not an opaque app database. The 
 
 `events.jsonl` is the local audit log for permission receipts, command execution, and gateway routing. It is not portable by default, and secrets never persist to either log.
 
-`attachments/` contains curated rendered artifacts. Anything the transcript renders is a content-hashed snapshot under `attachments/`, frozen at render time. `workdir/` stays messy, mutable, and local.
+`attachments/` contains curated rendered artifacts. Anything the transcript renders is a content-hashed snapshot under `attachments/`, frozen at render time. `workdir/` stays messy, mutable, and local. Milestone 5 snapshots renderable `FileChanged` paths from the conversation workdir into `attachments/<sha256-prefix>-<safe-basename>` before appending an `Artifact` block, so reloading from `messages.jsonl` plus `attachments/` does not depend on the mutable workdir copy.
+
+ACP agents are launched with the conversation `workdir/` as their process cwd, and the same path is sent in `session/new.cwd`. If a harness creates files without emitting explicit file-change notifications, Tamtri scans renderable files under `workdir/` at turn end and snapshots them through the same `attachments/` pipeline.
 
 Construct artifact blocks through `ContentBlock::artifact(path, mime_type, size, sha256, inline)`. `ContentBlock::Artifact.path` must be a vault-relative file under `attachments/`. Absolute paths and any `.` or `..` component are rejected. This blocks path traversal from imported bundles. Small UTF-8 text artifacts may inline in `messages.jsonl` up to `ARTIFACT_INLINE_MAX_BYTES` (`32 KiB`); larger text, binary artifacts, and inline content with non-text MIME types are stored as files and referenced by path, size, MIME type, and SHA-256. The message codec runs the same validator on deserialization, so `load` and import reject malformed artifact blocks with `MalformedVault`.
 
 `workdir/` is reserved for the default `VaultLocal` working directory. Harness outputs can be messy here; rendered artifacts are snapshotted separately into `attachments/` before being referenced by the transcript.
+
+Artifact previews use a conservative MIME policy: HTML, markdown, CSV/TSV, SVG, JSON, plain text, and common image formats are recognized by extension plus lightweight byte sniffing. Small UTF-8 text-like artifacts inline in the transcript up to the 32 KiB threshold; larger text and binary artifacts remain file-backed under `attachments/`.
+
+Renderers must read file-backed artifacts through a verified attachment path. The verifier re-runs the artifact path rules, checks the file exists, and rejects size or SHA-256 mismatches before any active renderer such as HTML or SVG receives bytes.
 
 ## Repair Rules
 

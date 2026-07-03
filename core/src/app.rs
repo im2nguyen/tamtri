@@ -1,12 +1,15 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::fs;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
+use std::time::UNIX_EPOCH;
 
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tokio::runtime::{Builder, Runtime};
 
+use crate::artifact::{detect_mime, verify_inline_artifact, ArtifactSnapshot, ArtifactSnapshotter, verify_attachment};
 use crate::config::load_app_config;
 use crate::conversation::reduce::TurnReducer;
 use crate::conversation::{
@@ -49,6 +52,20 @@ pub struct ConversationDto {
     pub active_harness_id: Option<String>,
     pub model_id: Option<String>,
     pub messages_json: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, uniffi::Record)]
+pub struct WorkdirFileDto {
+    pub relative_path: String,
+    pub size: u64,
+    pub mime_type: Option<String>,
+    pub modified_at: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, uniffi::Record)]
+pub struct WorkdirFileContentDto {
+    pub mime_type: Option<String>,
+    pub data: Vec<u8>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, uniffi::Record)]
@@ -200,6 +217,85 @@ impl TamtriCore {
     pub fn set_gateway_credential(&self, credential_ref: String, value: String) -> FfiResult<()> {
         self.credentials.set(credential_ref, value).map_err(ffi_err)
     }
+
+    pub fn copy_file_to_workdir(
+        &self,
+        conversation_id: String,
+        source_path: String,
+    ) -> FfiResult<String> {
+        self.copy_file_to_workdir_inner(&conversation_id, source_path.into())
+            .map_err(ffi_err)
+    }
+
+    pub fn list_workdir_files(
+        &self,
+        conversation_id: String,
+    ) -> FfiResult<Vec<WorkdirFileDto>> {
+        self.list_workdir_files_inner(&conversation_id)
+            .map_err(ffi_err)
+    }
+
+    pub fn conversation_workdir_path(&self, conversation_id: String) -> FfiResult<String> {
+        self.conversation_workdir_path_inner(&conversation_id)
+            .map_err(ffi_err)
+    }
+
+    pub fn read_workdir_file(
+        &self,
+        conversation_id: String,
+        relative_path: String,
+    ) -> FfiResult<WorkdirFileContentDto> {
+        self.read_workdir_file_inner(&conversation_id, &relative_path)
+            .map_err(ffi_err)
+    }
+
+    pub fn read_attachment_verified(
+        &self,
+        conversation_id: String,
+        path: String,
+        size: u64,
+        sha256: String,
+    ) -> FfiResult<Vec<u8>> {
+        self.read_attachment_verified_inner(&conversation_id, &path, size, &sha256)
+            .map_err(ffi_err)
+    }
+
+    pub fn verified_attachment_path(
+        &self,
+        conversation_id: String,
+        path: String,
+        size: u64,
+        sha256: String,
+    ) -> FfiResult<String> {
+        self.verified_attachment_path_inner(&conversation_id, &path, size, &sha256)
+            .map_err(ffi_err)
+    }
+
+    pub fn verify_artifact_inline(
+        &self,
+        size: u64,
+        sha256: String,
+        inline_content: String,
+    ) -> FfiResult<()> {
+        verify_inline_artifact(size, &sha256, &inline_content).map_err(ffi_err)
+    }
+
+    pub fn log_artifact_navigation_blocked(
+        &self,
+        conversation_id: String,
+        url: String,
+    ) -> FfiResult<()> {
+        let id = parse_id(&conversation_id)?;
+        self.vault
+            .append_event(
+                id,
+                &Event::new(
+                    EventKind::ArtifactNavigationBlocked,
+                    json!({ "url": url }),
+                ),
+            )
+            .map_err(ffi_err)
+    }
 }
 
 impl TamtriCore {
@@ -256,6 +352,11 @@ impl TamtriCore {
             .clone()
             .unwrap_or_else(|| "default".to_string());
         let adapter = self.adapter(&harness_id)?;
+        let conversation_dir = self.vault.conversation_folder(id)?;
+        let workdir_path = self
+            .vault
+            .conversation_workdir(id)?
+            .unwrap_or_else(|| self.vault.root().join("conversations"));
         let app_config = load_app_config(self.vault.root())?;
         let (gateway_event_tx, gateway_event_rx) = tokio::sync::mpsc::unbounded_channel();
         let gateway = Arc::new(McpGateway::new(
@@ -282,10 +383,7 @@ impl TamtriCore {
                 messages: conversation.messages.clone(),
             },
             working_dir: WorkingDir::VaultLocal,
-            working_dir_path: self
-                .vault
-                .conversation_workdir(id)?
-                .unwrap_or_else(|| self.vault.root().join("conversations")),
+            working_dir_path: workdir_path.clone(),
             roots: conversation.roots.clone(),
             mcp_servers: vec![gateway_mcp_ref(&gateway_endpoint)],
             model_id,
@@ -322,12 +420,64 @@ impl TamtriCore {
                         let _ = reducer.apply(&event);
                         if matches!(event, HarnessEvent::TurnEnded { .. }) {
                             let reduced = reducer.finish();
-                            if !reduced.message.content.is_empty() {
-                                let _ = vault.append_message(id, &reduced.message);
+                            let mut message = reduced.message;
+                            let snapshotter =
+                                ArtifactSnapshotter::new(&workdir_path, &conversation_dir);
+                            let mut snapshotted = HashSet::new();
+                            for change in &reduced.file_changes {
+                                match snapshotter.snapshot_file_changed(&change.diff) {
+                                    Ok(Some(snapshot)) => {
+                                        snapshotted.insert(snapshot.attachment_path.clone());
+                                        append_artifact_snapshot(
+                                            &vault,
+                                            id,
+                                            snapshot,
+                                            Some(&change.tool_call_id),
+                                            &mut message,
+                                        );
+                                    }
+                                    Ok(None) => {}
+                                    Err(err) => {
+                                        let _ = vault.append_event(
+                                            id,
+                                            &Event::new(
+                                                EventKind::Error,
+                                                json!({ "message": err.to_string() }),
+                                            ),
+                                        );
+                                    }
+                                }
+                            }
+                            match snapshotter.snapshot_renderable_files() {
+                                Ok(snapshots) => {
+                                    for snapshot in snapshots {
+                                        if snapshotted.insert(snapshot.attachment_path.clone()) {
+                                            append_artifact_snapshot(
+                                                &vault,
+                                                id,
+                                                snapshot,
+                                                None,
+                                                &mut message,
+                                            );
+                                        }
+                                    }
+                                }
+                                Err(err) => {
+                                    let _ = vault.append_event(
+                                        id,
+                                        &Event::new(
+                                            EventKind::Error,
+                                            json!({ "message": err.to_string() }),
+                                        ),
+                                    );
+                                }
+                            }
+                            if !message.content.is_empty() {
+                                let _ = vault.append_message(id, &message);
                                 observer.on_event(UiEvent {
                                     conversation_id: id.to_string(),
                                     kind: "message_committed".to_string(),
-                                    payload_json: serde_json::to_string(&reduced.message)
+                                    payload_json: serde_json::to_string(&message)
                                         .unwrap_or_else(|_| "{}".to_string()),
                                 });
                             }
@@ -427,6 +577,92 @@ impl TamtriCore {
             .collect()
     }
 
+    pub fn copy_file_to_workdir_inner(
+        &self,
+        conversation_id: &str,
+        source_path: PathBuf,
+    ) -> Result<String> {
+        let id = parse_id(conversation_id)?;
+        let workdir = self
+            .vault
+            .conversation_workdir(id)?
+            .ok_or_else(|| CoreError::Protocol("conversation has no workdir".to_string()))?;
+        fs::create_dir_all(&workdir)?;
+        let filename = source_path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .ok_or_else(|| CoreError::Protocol("source file has no filename".to_string()))?;
+        let safe_name = safe_workdir_filename(filename);
+        fs::copy(&source_path, workdir.join(&safe_name))?;
+        Ok(safe_name)
+    }
+
+    pub fn list_workdir_files_inner(&self, conversation_id: &str) -> Result<Vec<WorkdirFileDto>> {
+        let id = parse_id(conversation_id)?;
+        let workdir = self
+            .vault
+            .conversation_workdir(id)?
+            .ok_or_else(|| CoreError::Protocol("conversation has no workdir".to_string()))?;
+        if !workdir.exists() {
+            return Ok(Vec::new());
+        }
+        let mut files = Vec::new();
+        collect_workdir_files(&workdir, &workdir, &mut files)?;
+        files.sort_by(|a, b| a.relative_path.cmp(&b.relative_path));
+        Ok(files)
+    }
+
+    pub fn conversation_workdir_path_inner(&self, conversation_id: &str) -> Result<String> {
+        let id = parse_id(conversation_id)?;
+        let workdir = self
+            .vault
+            .conversation_workdir(id)?
+            .ok_or_else(|| CoreError::Protocol("conversation has no workdir".to_string()))?;
+        Ok(workdir.to_string_lossy().into_owned())
+    }
+
+    pub fn read_workdir_file_inner(
+        &self,
+        conversation_id: &str,
+        relative_path: &str,
+    ) -> Result<WorkdirFileContentDto> {
+        let id = parse_id(conversation_id)?;
+        let workdir = self
+            .vault
+            .conversation_workdir(id)?
+            .ok_or_else(|| CoreError::Protocol("conversation has no workdir".to_string()))?;
+        let path = resolve_workdir_relative_path(&workdir, relative_path)?;
+        let bytes = fs::read(&path)?;
+        let mime_type = detect_mime(&path, &bytes);
+        Ok(WorkdirFileContentDto { mime_type, data: bytes })
+    }
+
+    pub fn read_attachment_verified_inner(
+        &self,
+        conversation_id: &str,
+        path: &str,
+        size: u64,
+        sha256: &str,
+    ) -> Result<Vec<u8>> {
+        let id = parse_id(conversation_id)?;
+        let conversation_dir = self.vault.conversation_folder(id)?;
+        let attachment = verify_attachment(&conversation_dir, path, size, sha256)?;
+        Ok(fs::read(attachment)?)
+    }
+
+    pub fn verified_attachment_path_inner(
+        &self,
+        conversation_id: &str,
+        path: &str,
+        size: u64,
+        sha256: &str,
+    ) -> Result<String> {
+        let id = parse_id(conversation_id)?;
+        let conversation_dir = self.vault.conversation_folder(id)?;
+        let attachment = verify_attachment(&conversation_dir, path, size, sha256)?;
+        Ok(attachment.to_string_lossy().to_string())
+    }
+
     fn adapter(&self, harness_id: &str) -> Result<Arc<dyn HarnessAdapter>> {
         self.adapters
             .lock()
@@ -486,6 +722,27 @@ fn append_event_for_harness_event(
         _ => return Ok(()),
     };
     vault.append_event(id, &Event::new(kind, payload))
+}
+
+fn append_artifact_snapshot(
+    vault: &FilesystemVault,
+    id: Id,
+    snapshot: ArtifactSnapshot,
+    tool_call_id: Option<&str>,
+    message: &mut Message,
+) {
+    let mut payload = json!({
+        "original_path": snapshot.original_path.to_string_lossy(),
+        "attachment_path": snapshot.attachment_path,
+        "mime_type": snapshot.mime_type,
+        "size": snapshot.size,
+        "sha256": snapshot.sha256,
+    });
+    if let Some(tool_call_id) = tool_call_id {
+        payload["tool_call_id"] = json!(tool_call_id);
+    }
+    let _ = vault.append_event(id, &Event::new(EventKind::ArtifactSnapshotted, payload));
+    message.content.push(snapshot.block);
 }
 
 fn append_event_for_gateway_event(
@@ -645,6 +902,82 @@ fn gateway_stdio_helper_path() -> Option<String> {
         .into_iter()
         .find(|path| path.is_file())
         .map(|path| path.to_string_lossy().to_string())
+}
+
+fn collect_workdir_files(
+    root: &std::path::Path,
+    dir: &std::path::Path,
+    files: &mut Vec<WorkdirFileDto>,
+) -> Result<()> {
+    for entry in fs::read_dir(dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        let file_name = entry.file_name();
+        let name = file_name.to_string_lossy();
+        if name.starts_with('.') {
+            continue;
+        }
+        if path.is_dir() {
+            collect_workdir_files(root, &path, files)?;
+        } else if path.is_file() {
+            let relative = path
+                .strip_prefix(root)
+                .map_err(|err| CoreError::Protocol(format!("workdir listing escaped root: {err}")))?;
+            let metadata = entry.metadata()?;
+            let size = metadata.len();
+            let modified_at = metadata
+                .modified()
+                .ok()
+                .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
+                .map(|duration| duration.as_secs())
+                .unwrap_or(0);
+            let mime_type = fs::read(&path)
+                .ok()
+                .and_then(|bytes| detect_mime(&path, &bytes));
+            files.push(WorkdirFileDto {
+                relative_path: relative.to_string_lossy().into_owned(),
+                size,
+                mime_type,
+                modified_at,
+            });
+        }
+    }
+    Ok(())
+}
+
+fn resolve_workdir_relative_path(workdir: &std::path::Path, relative_path: &str) -> Result<PathBuf> {
+    let path = std::path::Path::new(relative_path);
+    if path.is_absolute() {
+        return Err(CoreError::MalformedVault(
+            "workdir path must be relative".to_string(),
+        ));
+    }
+    for component in path.components() {
+        if matches!(component, std::path::Component::ParentDir) {
+            return Err(CoreError::MalformedVault(
+                "workdir path must not contain traversal".to_string(),
+            ));
+        }
+    }
+    Ok(workdir.join(path))
+}
+
+fn safe_workdir_filename(name: &str) -> String {
+    let cleaned = name
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || matches!(ch, '.' | '-' | '_') {
+                ch
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>();
+    if cleaned.is_empty() {
+        "attachment".to_string()
+    } else {
+        cleaned
+    }
 }
 
 fn parse_id(id: &str) -> Result<Id> {

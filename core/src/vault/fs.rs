@@ -50,6 +50,10 @@ impl FilesystemVault {
         Ok(Some(dir.join("workdir")))
     }
 
+    pub fn conversation_folder(&self, id: Id) -> Result<PathBuf> {
+        self.resolve_folder(id)
+    }
+
     fn conversations_dir(&self) -> PathBuf {
         self.root.join("conversations")
     }

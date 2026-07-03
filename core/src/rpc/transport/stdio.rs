@@ -1,3 +1,4 @@
+use std::path::Path;
 use std::process::Stdio;
 
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -16,12 +17,25 @@ pub struct StdioTransport {
 
 impl StdioTransport {
     pub async fn spawn(command: &str, args: &[String], env: &[(String, String)]) -> Result<Self> {
+        Self::spawn_with_cwd(command, args, env, None).await
+    }
+
+    pub async fn spawn_with_cwd(
+        command: &str,
+        args: &[String],
+        env: &[(String, String)],
+        cwd: Option<&Path>,
+    ) -> Result<Self> {
         let mut cmd = Command::new(command);
         cmd.args(args)
             .env_clear()
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
+        if let Some(cwd) = cwd {
+            std::fs::create_dir_all(cwd)?;
+            cmd.current_dir(cwd);
+        }
         preserve_env(&mut cmd, "PATH");
         preserve_env(&mut cmd, "HOME");
         preserve_env(&mut cmd, "TMPDIR");
