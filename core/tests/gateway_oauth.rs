@@ -238,8 +238,10 @@ fn oauth_pkce_flow_records_handoff_receipts_and_stores_token_ref_only() {
     assert_eq!(servers[0].oauth_status, "connected");
 }
 
+/// `MemoryCredentials` stands in for the macOS keychain preload path (`AppStore.reloadGatewayServers`).
+/// Real keychain round-trips live in `KeychainCredentialStoreTests` (Swift).
 #[tokio::test]
-async fn oauth_refresh_success_updates_keychain() {
+async fn oauth_refresh_success_updates_persisted_credential_memory_store() {
     let (token_endpoint, _) = spawn_oauth_token_server().await;
     let credentials = Arc::new(MemoryCredentials::default());
     let token_ref = "keychain://remote".to_string();

@@ -159,4 +159,45 @@ final class ElicitationSchemaFormTests: XCTestCase {
         )
         XCTAssertNil(result)
     }
+
+    func testURLHandoffPolicyRejectsPlainHTTPNonLoopback() {
+        XCTAssertNil(URLHandoffPolicy.destination(for: "http://example.com/oauth"))
+    }
+
+    func testURLHandoffPolicyAcceptsHTTPS() {
+        let destination = URLHandoffPolicy.destination(for: "https://example.com/oauth?state=abc")
+        XCTAssertNotNil(destination)
+        XCTAssertEqual(destination?.origin, "https://example.com")
+        XCTAssertFalse(destination?.displayURL.contains("state=") ?? true)
+    }
+
+    func testURLHandoffPolicyRejectsUserinfo() {
+        XCTAssertNil(URLHandoffPolicy.destination(for: "https://user:pass@example.com/oauth"))
+    }
+
+    func testSchemaLooksSecretBlocksApiKeyField() {
+        let schema: JSONValue = .object([
+            "type": .string("object"),
+            "properties": .object([
+                "api_key": .object([
+                    "type": .string("string"),
+                    "title": .string("API key")
+                ])
+            ])
+        ])
+        XCTAssertTrue(ElicitationSchemaPolicy.schemaLooksSecret(schema))
+    }
+
+    func testSchemaLooksSecretAllowsBenignForm() {
+        let schema: JSONValue = .object([
+            "type": .string("object"),
+            "properties": .object([
+                "name": .object([
+                    "type": .string("string"),
+                    "title": .string("Name")
+                ])
+            ])
+        ])
+        XCTAssertFalse(ElicitationSchemaPolicy.schemaLooksSecret(schema))
+    }
 }

@@ -23,6 +23,18 @@ final class KeychainCredentialStoreTests: XCTestCase {
         XCTAssertEqual(OAuthTokenStore.load(for: ref), #"{"access_token":"x"}"#)
     }
 
+    /// Mirrors `AppStore.reloadGatewayServers` keychain preload into core memory.
+    func testKeychainPreloadRoundTripMatchesReloadPath() throws {
+        let ref = "tamtri-reload-test-\(UUID().uuidString)"
+        defer { delete(ref: ref) }
+
+        try KeychainCredentialStore.save(value: "gateway-token", for: ref)
+        let loaded = KeychainCredentialStore.load(for: ref)
+        XCTAssertEqual(loaded, "gateway-token")
+        try KeychainCredentialStore.save(value: "rotated-token", for: ref)
+        XCTAssertEqual(KeychainCredentialStore.load(for: ref), "rotated-token")
+    }
+
     private func delete(ref: String) {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
