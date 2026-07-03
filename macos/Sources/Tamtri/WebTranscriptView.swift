@@ -103,24 +103,55 @@ struct WebTranscriptView: NSViewRepresentable {
       if (!s) return '';
       return s.length > MAX_PREVIEW ? s.slice(0, MAX_PREVIEW) + '…' : s;
     }
-    function renderBlock(block) {
+    function renderBlock(block, nested) {
+      const nestedHtml = (nested || []).map(renderNestedBlock).join('');
       switch (block.type) {
         case 'text':
           return '<div class="text">' + esc(block.text) + '</div>';
         case 'thinking':
           return '<details><summary>Thinking</summary><pre>' + esc(block.text) + '</pre></details>';
         case 'tool_call':
-          return '<div class="tool"><div class="tool-title">Tool: ' + esc(block.name || 'call') + '</div><pre>' + esc(truncate(block.input)) + '</pre></div>';
+          return '<div class="tool"><div class="tool-title">Tool: ' + esc(block.name || 'call') + '</div><pre>' + esc(truncate(block.input)) + '</pre>' + nestedHtml + '</div>';
         case 'tool_result':
           return '<div class="tool"><div class="tool-title">Tool result</div><pre>' + esc(truncate(block.output)) + '</pre></div>';
+        case 'elicitation_request':
+        case 'elicitation_response':
+          return renderNestedBlock(block);
         default:
           return '';
       }
     }
+    function renderNestedBlock(block) {
+      if (block.type === 'elicitation_request') {
+        return '<div class="tool"><div class="tool-title">Elicitation</div><div class="text">' + esc(block.message || '') + '</div></div>';
+      }
+      if (block.type === 'elicitation_response') {
+        return '<div class="tool"><div class="tool-title">Elicitation response</div><div class="text">' + esc(block.action || '') + '</div></div>';
+      }
+      return '';
+    }
     function renderMessage(msg) {
       const role = esc(msg.role || 'message');
       const harness = msg.harness_id ? '<span class="muted"> · ' + esc(msg.harness_id) + '</span>' : '';
-      const blocks = Array.isArray(msg.content) ? msg.content.map(renderBlock).join('') : '';
+      const content = Array.isArray(msg.content) ? msg.content : [];
+      const nestedByTool = new Map();
+      const roots = [];
+      for (const block of content) {
+        const origin = block.origin_tool_call_id;
+        if ((block.type === 'elicitation_request' || block.type === 'elicitation_response') && origin) {
+          const list = nestedByTool.get(origin) || [];
+          list.push(block);
+          nestedByTool.set(origin, list);
+        } else {
+          roots.push(block);
+        }
+      }
+      const blocks = roots.map((block) => {
+        if (block.type === 'tool_call' && block.call_id) {
+          return renderBlock(block, nestedByTool.get(block.call_id) || []);
+        }
+        return renderBlock(block);
+      }).join('');
       return '<article class="message"><div class="meta">' + role + harness + '</div>' + blocks + '</article>';
     }
     window.tamtriSetTranscript = function(jsonText) {

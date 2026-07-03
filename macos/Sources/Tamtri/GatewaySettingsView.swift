@@ -71,7 +71,11 @@ struct GatewayServerDraft: Equatable {
             stdioEnv: GatewayServerDraft.parseEnv(stdioEnvText),
             httpEndpoint: httpEndpoint.trimmingCharacters(in: .whitespacesAndNewlines),
             credentialRefs: existing?.credentialRefs ?? [],
-            missingCredentialRefs: existing?.missingCredentialRefs ?? []
+            missingCredentialRefs: existing?.missingCredentialRefs ?? [],
+            oauthStatus: existing?.oauthStatus ?? "not_configured",
+            oauthTokenRef: existing?.oauthTokenRef ?? "",
+            oauthClientId: existing?.oauthClientId ?? "",
+            oauthAuthorizationEndpoint: existing?.oauthAuthorizationEndpoint ?? ""
         )
     }
 

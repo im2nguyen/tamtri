@@ -127,6 +127,26 @@ actor TamtriBindingClient: CoreClient {
         try core.setGatewayCredential(credentialRef: credentialRef, value: value)
     }
 
+    func startOAuthFlow(serverId: String, redirectURI: String) async throws -> OAuthHandoff {
+        let dto = try core.startOauthFlow(serverId: serverId, redirectUri: redirectURI)
+        return OAuthHandoff(
+            serverId: dto.serverId,
+            authorizationURL: dto.authorizationUrl,
+            state: dto.state,
+            redirectURI: dto.redirectUri
+        )
+    }
+
+    func completeOAuthCallback(callbackURL: String) async throws -> OAuthCompletion {
+        let dto = try core.completeOauthCallback(callbackUrl: callbackURL)
+        if let server = try await listGatewayServers().first(where: { $0.id == dto.serverId }),
+           !server.oauthTokenRef.isEmpty,
+           let value = try core.exportGatewayCredential(credentialRef: server.oauthTokenRef) {
+            try KeychainCredentialStore.save(value: value, for: server.oauthTokenRef)
+        }
+        return OAuthCompletion(serverId: dto.serverId, oauthStatus: dto.oauthStatus)
+    }
+
     nonisolated private func registerDevelopmentAgentsIfPresent() throws {
         if let command = mockAgentPath() {
             try core.registerAcpAgent(
@@ -144,24 +164,6 @@ actor TamtriBindingClient: CoreClient {
                 command: command,
                 args: ["acp"]
             )
-        }
-    }
-}
-
-private enum KeychainCredentialStore {
-    static func save(value: String, for credentialRef: String) throws {
-        let data = Data(value.utf8)
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: "tamtri.gateway",
-            kSecAttrAccount as String: credentialRef
-        ]
-        SecItemDelete(query as CFDictionary)
-        var item = query
-        item[kSecValueData as String] = data
-        let status = SecItemAdd(item as CFDictionary, nil)
-        guard status == errSecSuccess else {
-            throw NSError(domain: NSOSStatusErrorDomain, code: Int(status))
         }
     }
 }
@@ -206,7 +208,11 @@ private func gatewayServerRecord(from dto: GatewayServerDto) -> GatewayServerRec
         stdioEnv: dto.stdioEnv.map { GatewayEnvVar(name: $0.name, value: $0.value) },
         httpEndpoint: dto.httpEndpoint,
         credentialRefs: dto.credentialRefs,
-        missingCredentialRefs: dto.missingCredentialRefs
+        missingCredentialRefs: dto.missingCredentialRefs,
+        oauthStatus: dto.oauthStatus,
+        oauthTokenRef: dto.oauthTokenRef,
+        oauthClientId: dto.oauthClientId,
+        oauthAuthorizationEndpoint: dto.oauthAuthorizationEndpoint
     )
 }
 
@@ -222,7 +228,11 @@ private func gatewayServerDto(from record: GatewayServerRecord) -> GatewayServer
         stdioEnv: record.stdioEnv.map { GatewayEnvVarDto(name: $0.name, value: $0.value) },
         httpEndpoint: record.httpEndpoint,
         credentialRefs: record.credentialRefs,
-        missingCredentialRefs: record.missingCredentialRefs
+        missingCredentialRefs: record.missingCredentialRefs,
+        oauthStatus: record.oauthStatus,
+        oauthTokenRef: record.oauthTokenRef,
+        oauthClientId: record.oauthClientId,
+        oauthAuthorizationEndpoint: record.oauthAuthorizationEndpoint
     )
 }
 

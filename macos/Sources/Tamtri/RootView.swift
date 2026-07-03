@@ -126,8 +126,18 @@ struct TranscriptView: View {
                 Divider()
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 12) {
-                        ForEach(liveEvents) { item in
-                            EventRow(event: item.event)
+                        ForEach(LiveEventGroups.build(from: liveEvents)) { group in
+                            if let toolEvent = group.toolEvent {
+                                VStack(alignment: .leading, spacing: 8) {
+                                    ToolCard(event: toolEvent)
+                                    ForEach(Array(group.nested.enumerated()), id: \.offset) { _, nested in
+                                        EventRow(event: nested)
+                                            .padding(.leading, 16)
+                                    }
+                                }
+                            } else if let event = group.standalone {
+                                EventRow(event: event)
+                            }
                         }
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -185,6 +195,51 @@ struct TranscriptView: View {
 private struct IdentifiedCoreEvent: Identifiable {
     let id: Int
     let event: CoreEvent
+}
+
+private struct LiveEventGroup: Identifiable {
+    let id: Int
+    let toolEvent: CoreEvent?
+    let nested: [CoreEvent]
+    let standalone: CoreEvent?
+
+    init(id: Int, toolEvent: CoreEvent? = nil, nested: [CoreEvent] = [], standalone: CoreEvent? = nil) {
+        self.id = id
+        self.toolEvent = toolEvent
+        self.nested = nested
+        self.standalone = standalone
+    }
+}
+
+private enum LiveEventGroups {
+    static func build(from events: [IdentifiedCoreEvent]) -> [LiveEventGroup] {
+        var groups: [LiveEventGroup] = []
+        var index = 0
+        while index < events.count {
+            let item = events[index]
+            if item.event.kind == "tool_call_started",
+               let toolId = EventPayload.string(from: item.event.payloadJSON, key: "id") {
+                var nested: [CoreEvent] = []
+                var next = index + 1
+                while next < events.count {
+                    let candidate = events[next].event
+                    if candidate.kind == "elicitation_requested",
+                       EventPayload.string(from: candidate.payloadJSON, key: "origin_tool_call_id") == toolId {
+                        nested.append(candidate)
+                        next += 1
+                        continue
+                    }
+                    break
+                }
+                groups.append(LiveEventGroup(id: item.id, toolEvent: item.event, nested: nested))
+                index = next
+                continue
+            }
+            groups.append(LiveEventGroup(id: item.id, standalone: item.event))
+            index += 1
+        }
+        return groups
+    }
 }
 
 struct ConversationHeader: View {
@@ -714,7 +769,9 @@ struct PermissionCard: View {
 struct ElicitationCard: View {
     @EnvironmentObject private var store: AppStore
     let event: CoreEvent
-    @State private var answerText = ""
+    @State private var fieldValues: [String: String] = [:]
+    @State private var booleanValues: [String: Bool] = [:]
+    @State private var validationMessage: String?
 
     private var request: ElicitationPayload? {
         try? JSONDecoder().decode(ElicitationPayload.self, from: Data(event.payloadJSON.utf8))
@@ -731,62 +788,113 @@ struct ElicitationCard: View {
                     url: request.url
                 )
             )
+        } else if ElicitationSchemaPolicy.schemaLooksSecret(request?.schema) {
+            SecretElicitationBlockedCard(
+                onDecline: { respond(action: "decline") },
+                onCancel: { respond(action: "cancel") }
+            )
+        } else if !ElicitationSchemaPolicy.schemaIsRenderable(request?.schema) {
+            UnsupportedElicitationSchemaCard(
+                message: request?.message ?? "The server sent a form tamtri cannot render.",
+                onDecline: { respond(action: "decline") },
+                onCancel: { respond(action: "cancel") }
+            )
         } else {
             formCard
         }
     }
 
     private var formCard: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        let fields = ElicitationSchemaParser.fields(from: request?.schema)
+        return VStack(alignment: .leading, spacing: 10) {
             Label("Follow-up from \(request?.serverId ?? "gateway server")", systemImage: "questionmark.bubble")
                 .font(.headline)
-            if let origin = request?.originToolCallId, !origin.isEmpty {
-                Text("Related to tool call \(origin)")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
             if let request {
                 Text(request.message)
                     .textSelection(.enabled)
-                if request.mode == "form" {
-                    TextField("Your answer", text: $answerText)
+                if fields.isEmpty {
+                    TextField("Your answer", text: binding(for: "name", default: ""))
                         .textFieldStyle(.roundedBorder)
+                } else {
+                    ElicitationSchemaForm(
+                        fields: fields,
+                        values: $fieldValues,
+                        booleans: $booleanValues,
+                        validationMessage: $validationMessage
+                    )
                 }
             }
             HStack {
-                Button("Decline") {
-                    respond(action: "decline")
-                }
-                Button("Cancel", role: .cancel) {
-                    respond(action: "cancel")
-                }
-                Button("Submit") {
-                    respond(action: "accept")
-                }
-                .keyboardShortcut(.defaultAction)
+                Button("Decline") { respond(action: "decline") }
+                Button("Cancel", role: .cancel) { respond(action: "cancel") }
+                Button("Submit") { respond(action: "accept") }
+                    .keyboardShortcut(.defaultAction)
             }
         }
         .padding(10)
         .background(.teal.opacity(0.12), in: RoundedRectangle(cornerRadius: 8))
         .accessibilityLabel("Elicitation requested")
+        .onAppear {
+            seedDefaults(from: fields)
+        }
+    }
+
+    private func seedDefaults(from fields: [ElicitationSchemaField]) {
+        for field in fields where fieldValues[field.id] == nil {
+            if field.type == "boolean" {
+                booleanValues[field.id] = false
+            } else if let first = field.enumValues.first {
+                fieldValues[field.id] = first
+            } else {
+                fieldValues[field.id] = ""
+            }
+        }
+    }
+
+    private func binding(for key: String, default defaultValue: String) -> Binding<String> {
+        Binding(
+            get: { fieldValues[key, default: defaultValue] },
+            set: { fieldValues[key] = $0 }
+        )
     }
 
     private func respond(action: String) {
         guard let request else { return }
         let dataJSON: String?
-        if action == "accept" {
-            let field = request.primaryFieldName ?? "name"
-            let payload = [field: answerText]
-            if let data = try? JSONSerialization.data(withJSONObject: payload),
-               let json = String(data: data, encoding: .utf8) {
-                dataJSON = json
+            if action == "accept" {
+                let fields = ElicitationSchemaParser.fields(from: request.schema)
+                if fields.isEmpty {
+                    let field = request.primaryFieldName ?? "name"
+                    dataJSON = jsonString([field: fieldValues[field, default: ""]])
+                } else {
+                    guard let built = ElicitationSchemaFormBuilder.buildPayload(
+                        fields: fields,
+                        values: fieldValues,
+                        booleans: booleanValues
+                    ) else {
+                        validationMessage = "Complete all required fields."
+                        return
+                    }
+                    if let error = built.error {
+                        validationMessage = error
+                        return
+                    }
+                    dataJSON = jsonString(built.payload)
+                }
             } else {
-                dataJSON = nil
-            }
-        } else {
             dataJSON = nil
         }
         store.respondElicitation(requestId: request.requestId, action: action, dataJSON: dataJSON)
+    }
+
+    private func jsonString(_ payload: [String: Any]) -> String? {
+        guard JSONSerialization.isValidJSONObject(payload),
+              let data = try? JSONSerialization.data(withJSONObject: payload),
+              let json = String(data: data, encoding: .utf8)
+        else {
+            return nil
+        }
+        return json
     }
 }
 
@@ -938,6 +1046,10 @@ private struct EventPayload: Decodable {
 
     static func text(from json: String) -> String {
         (try? JSONDecoder().decode(EventPayload.self, from: Data(json.utf8)).text) ?? ""
+    }
+
+    static func string(from json: String, key: String) -> String? {
+        JSONValue.from(json: json)?.string(at: key)
     }
 }
 
@@ -1427,11 +1539,26 @@ struct GatewayServerRow: View {
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
-            if server.credentialRefs.isEmpty {
+            if server.credentialRefs.isEmpty && server.oauthTokenRef.isEmpty {
                 Text("No credentials required")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             } else {
+                if !server.oauthTokenRef.isEmpty {
+                    HStack {
+                        oauthStatusIcon(for: server.oauthStatus)
+                        Text("OAuth: \(server.oauthStatus.replacingOccurrences(of: "_", with: " "))")
+                        Spacer()
+                        if server.oauthStatus == "connected" {
+                            Text("Connected").foregroundStyle(.green)
+                        } else {
+                            Button("Connect") {
+                                store.connectOAuth(for: server)
+                            }
+                        }
+                    }
+                    .font(.caption)
+                }
                 ForEach(server.credentialRefs, id: \.self) { credentialRef in
                     HStack {
                         Image(systemName: server.missingCredentialRefs.contains(credentialRef) ? "key.slash" : "key.fill")
@@ -1459,5 +1586,19 @@ struct GatewayServerRow: View {
             get: { credentialValues[credentialRef, default: ""] },
             set: { credentialValues[credentialRef] = $0 }
         )
+    }
+
+    @ViewBuilder
+    private func oauthStatusIcon(for status: String) -> some View {
+        switch status {
+        case "connected":
+            Image(systemName: "checkmark.seal.fill").foregroundStyle(.green)
+        case "reauth_required", "expired":
+            Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+        case "missing":
+            Image(systemName: "key.slash").foregroundStyle(.secondary)
+        default:
+            Image(systemName: "key").foregroundStyle(.secondary)
+        }
     }
 }

@@ -1,4 +1,5 @@
 import AppKit
+import AppKit
 import Foundation
 
 @MainActor
@@ -352,6 +353,15 @@ final class AppStore: ObservableObject {
         Task {
             do {
                 gatewayServers = try await core.listGatewayServers()
+                for server in gatewayServers where !server.oauthTokenRef.isEmpty {
+                    if let stored = OAuthTokenStore.load(for: server.oauthTokenRef) {
+                        try await core.setGatewayCredential(
+                            credentialRef: server.oauthTokenRef,
+                            value: stored
+                        )
+                    }
+                }
+                gatewayServers = try await core.listGatewayServers()
             } catch {
                 errorMessage = error.localizedDescription
             }
@@ -379,6 +389,42 @@ final class AppStore: ObservableObject {
                 try await core.setGatewayCredential(credentialRef: credentialRef, value: value)
                 refreshGatewayServers()
             } catch {
+                errorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    private var oauthListener: OAuthLoopbackListener?
+
+    func connectOAuth(for server: GatewayServerRecord) {
+        Task {
+            do {
+                let redirectURI = "http://127.0.0.1:3847/callback"
+                let listener = OAuthLoopbackListener(port: 3847)
+                oauthListener = listener
+                try listener.start { [weak self] callbackURL in
+                    Task { @MainActor in
+                        guard let self else { return }
+                        do {
+                            _ = try await self.core.completeOAuthCallback(callbackURL: callbackURL)
+                            self.oauthListener = nil
+                            self.refreshGatewayServers()
+                        } catch {
+                            self.errorMessage = error.localizedDescription
+                        }
+                    }
+                }
+                let handoff = try await core.startOAuthFlow(
+                    serverId: server.id,
+                    redirectURI: redirectURI
+                )
+                guard let url = URL(string: handoff.authorizationURL) else {
+                    throw NSError(domain: "tamtri.oauth", code: 2)
+                }
+                NSWorkspace.shared.open(url)
+            } catch {
+                oauthListener?.stop()
+                oauthListener = nil
                 errorMessage = error.localizedDescription
             }
         }

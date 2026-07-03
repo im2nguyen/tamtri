@@ -53,6 +53,10 @@ struct GatewayServerRecord: Identifiable, Equatable {
     let httpEndpoint: String
     let credentialRefs: [String]
     let missingCredentialRefs: [String]
+    let oauthStatus: String
+    let oauthTokenRef: String
+    let oauthClientId: String
+    let oauthAuthorizationEndpoint: String
 }
 
 struct WorkdirFileRecord: Equatable, Identifiable, Hashable {
@@ -93,6 +97,20 @@ protocol CoreClient: Sendable {
     func listGatewayServers() async throws -> [GatewayServerRecord]
     func saveGatewayServers(_ servers: [GatewayServerRecord]) async throws
     func setGatewayCredential(credentialRef: String, value: String) async throws
+    func startOAuthFlow(serverId: String, redirectURI: String) async throws -> OAuthHandoff
+    func completeOAuthCallback(callbackURL: String) async throws -> OAuthCompletion
+}
+
+struct OAuthHandoff: Equatable {
+    let serverId: String
+    let authorizationURL: String
+    let state: String
+    let redirectURI: String
+}
+
+struct OAuthCompletion: Equatable {
+    let serverId: String
+    let oauthStatus: String
 }
 
 actor MockCoreClient: CoreClient {
@@ -202,7 +220,11 @@ actor MockCoreClient: CoreClient {
                 stdioEnv: [],
                 httpEndpoint: "",
                 credentialRefs: [],
-                missingCredentialRefs: []
+                missingCredentialRefs: [],
+                oauthStatus: "not_configured",
+                oauthTokenRef: "",
+                oauthClientId: "",
+                oauthAuthorizationEndpoint: ""
             )
         ]
     }
@@ -210,4 +232,10 @@ actor MockCoreClient: CoreClient {
     func saveGatewayServers(_ servers: [GatewayServerRecord]) async throws {}
 
     func setGatewayCredential(credentialRef: String, value: String) async throws {}
+    func startOAuthFlow(serverId: String, redirectURI: String) async throws -> OAuthHandoff {
+        OAuthHandoff(serverId: serverId, authorizationURL: "https://example.com", state: "mock", redirectURI: redirectURI)
+    }
+    func completeOAuthCallback(callbackURL: String) async throws -> OAuthCompletion {
+        OAuthCompletion(serverId: "mock", oauthStatus: "connected")
+    }
 }

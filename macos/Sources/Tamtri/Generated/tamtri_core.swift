@@ -777,6 +777,8 @@ public protocol TamtriCoreProtocol: AnyObject, Sendable {
     
     func cancelRun(conversationId: String) throws 
     
+    func completeOauthCallback(callbackUrl: String) throws  -> OAuthCompletionDto
+    
     func conversationWorkdirPath(conversationId: String) throws  -> String
     
     func copyFileToWorkdir(conversationId: String, sourcePath: String) throws  -> String
@@ -784,6 +786,8 @@ public protocol TamtriCoreProtocol: AnyObject, Sendable {
     func createConversation(title: String, harnessId: String, modelId: String) throws  -> ConversationDto
     
     func deleteConversation(id: String) throws 
+    
+    func exportGatewayCredential(credentialRef: String) throws  -> String?
     
     func forkConversation(id: String, harnessId: String, modelId: String) throws  -> ConversationDto
     
@@ -812,6 +816,8 @@ public protocol TamtriCoreProtocol: AnyObject, Sendable {
     func sendMessage(conversationId: String, text: String) throws 
     
     func setGatewayCredential(credentialRef: String, value: String) throws 
+    
+    func startOauthFlow(serverId: String, redirectUri: String) throws  -> OAuthHandoffDto
     
     func verifiedAttachmentPath(conversationId: String, path: String, size: UInt64, sha256: String) throws  -> String
     
@@ -890,6 +896,16 @@ open func cancelRun(conversationId: String)throws   {try rustCallWithError(FfiCo
 }
 }
     
+open func completeOauthCallback(callbackUrl: String)throws  -> OAuthCompletionDto  {
+    return try  FfiConverterTypeOAuthCompletionDto_lift(try rustCallWithError(FfiConverterTypeTamtriError_lift) {
+        uniffiCallStatus in
+    uniffi_tamtri_core_fn_method_tamtricore_complete_oauth_callback(
+            self.uniffiCloneHandle(),
+        FfiConverterString.lower(callbackUrl),uniffiCallStatus
+    )
+})
+}
+    
 open func conversationWorkdirPath(conversationId: String)throws  -> String  {
     return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeTamtriError_lift) {
         uniffiCallStatus in
@@ -930,6 +946,16 @@ open func deleteConversation(id: String)throws   {try rustCallWithError(FfiConve
         FfiConverterString.lower(id),uniffiCallStatus
     )
 }
+}
+    
+open func exportGatewayCredential(credentialRef: String)throws  -> String?  {
+    return try  FfiConverterOptionString.lift(try rustCallWithError(FfiConverterTypeTamtriError_lift) {
+        uniffiCallStatus in
+    uniffi_tamtri_core_fn_method_tamtricore_export_gateway_credential(
+            self.uniffiCloneHandle(),
+        FfiConverterString.lower(credentialRef),uniffiCallStatus
+    )
+})
 }
     
 open func forkConversation(id: String, harnessId: String, modelId: String)throws  -> ConversationDto  {
@@ -1078,6 +1104,17 @@ open func setGatewayCredential(credentialRef: String, value: String)throws   {tr
         FfiConverterString.lower(value),uniffiCallStatus
     )
 }
+}
+    
+open func startOauthFlow(serverId: String, redirectUri: String)throws  -> OAuthHandoffDto  {
+    return try  FfiConverterTypeOAuthHandoffDto_lift(try rustCallWithError(FfiConverterTypeTamtriError_lift) {
+        uniffiCallStatus in
+    uniffi_tamtri_core_fn_method_tamtricore_start_oauth_flow(
+            self.uniffiCloneHandle(),
+        FfiConverterString.lower(serverId),
+        FfiConverterString.lower(redirectUri),uniffiCallStatus
+    )
+})
 }
     
 open func verifiedAttachmentPath(conversationId: String, path: String, size: UInt64, sha256: String)throws  -> String  {
@@ -1342,10 +1379,14 @@ public struct GatewayServerDto: Equatable, Hashable {
     public var httpEndpoint: String
     public var credentialRefs: [String]
     public var missingCredentialRefs: [String]
+    public var oauthStatus: String
+    public var oauthTokenRef: String
+    public var oauthClientId: String
+    public var oauthAuthorizationEndpoint: String
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(id: String, displayName: String, enabled: Bool, scope: String, transport: String, stdioCommand: String, stdioArgs: [String], stdioEnv: [GatewayEnvVarDto], httpEndpoint: String, credentialRefs: [String], missingCredentialRefs: [String]) {
+    public init(id: String, displayName: String, enabled: Bool, scope: String, transport: String, stdioCommand: String, stdioArgs: [String], stdioEnv: [GatewayEnvVarDto], httpEndpoint: String, credentialRefs: [String], missingCredentialRefs: [String], oauthStatus: String, oauthTokenRef: String, oauthClientId: String, oauthAuthorizationEndpoint: String) {
         self.id = id
         self.displayName = displayName
         self.enabled = enabled
@@ -1357,6 +1398,10 @@ public struct GatewayServerDto: Equatable, Hashable {
         self.httpEndpoint = httpEndpoint
         self.credentialRefs = credentialRefs
         self.missingCredentialRefs = missingCredentialRefs
+        self.oauthStatus = oauthStatus
+        self.oauthTokenRef = oauthTokenRef
+        self.oauthClientId = oauthClientId
+        self.oauthAuthorizationEndpoint = oauthAuthorizationEndpoint
     }
 
     
@@ -1385,7 +1430,11 @@ public struct FfiConverterTypeGatewayServerDto: FfiConverterRustBuffer {
                 stdioEnv: FfiConverterSequenceTypeGatewayEnvVarDto.read(from: &buf), 
                 httpEndpoint: FfiConverterString.read(from: &buf), 
                 credentialRefs: FfiConverterSequenceString.read(from: &buf), 
-                missingCredentialRefs: FfiConverterSequenceString.read(from: &buf)
+                missingCredentialRefs: FfiConverterSequenceString.read(from: &buf), 
+                oauthStatus: FfiConverterString.read(from: &buf), 
+                oauthTokenRef: FfiConverterString.read(from: &buf), 
+                oauthClientId: FfiConverterString.read(from: &buf), 
+                oauthAuthorizationEndpoint: FfiConverterString.read(from: &buf)
         )
     }
 
@@ -1401,6 +1450,10 @@ public struct FfiConverterTypeGatewayServerDto: FfiConverterRustBuffer {
         FfiConverterString.write(value.httpEndpoint, into: &buf)
         FfiConverterSequenceString.write(value.credentialRefs, into: &buf)
         FfiConverterSequenceString.write(value.missingCredentialRefs, into: &buf)
+        FfiConverterString.write(value.oauthStatus, into: &buf)
+        FfiConverterString.write(value.oauthTokenRef, into: &buf)
+        FfiConverterString.write(value.oauthClientId, into: &buf)
+        FfiConverterString.write(value.oauthAuthorizationEndpoint, into: &buf)
     }
 }
 
@@ -1417,6 +1470,122 @@ public func FfiConverterTypeGatewayServerDto_lift(_ buf: RustBuffer) throws -> G
 #endif
 public func FfiConverterTypeGatewayServerDto_lower(_ value: GatewayServerDto) -> RustBuffer {
     return FfiConverterTypeGatewayServerDto.lower(value)
+}
+
+
+public struct OAuthCompletionDto: Equatable, Hashable {
+    public var serverId: String
+    public var oauthStatus: String
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(serverId: String, oauthStatus: String) {
+        self.serverId = serverId
+        self.oauthStatus = oauthStatus
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension OAuthCompletionDto: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeOAuthCompletionDto: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> OAuthCompletionDto {
+        return
+            try OAuthCompletionDto(
+                serverId: FfiConverterString.read(from: &buf), 
+                oauthStatus: FfiConverterString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: OAuthCompletionDto, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.serverId, into: &buf)
+        FfiConverterString.write(value.oauthStatus, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeOAuthCompletionDto_lift(_ buf: RustBuffer) throws -> OAuthCompletionDto {
+    return try FfiConverterTypeOAuthCompletionDto.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeOAuthCompletionDto_lower(_ value: OAuthCompletionDto) -> RustBuffer {
+    return FfiConverterTypeOAuthCompletionDto.lower(value)
+}
+
+
+public struct OAuthHandoffDto: Equatable, Hashable {
+    public var serverId: String
+    public var authorizationUrl: String
+    public var state: String
+    public var redirectUri: String
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(serverId: String, authorizationUrl: String, state: String, redirectUri: String) {
+        self.serverId = serverId
+        self.authorizationUrl = authorizationUrl
+        self.state = state
+        self.redirectUri = redirectUri
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension OAuthHandoffDto: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeOAuthHandoffDto: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> OAuthHandoffDto {
+        return
+            try OAuthHandoffDto(
+                serverId: FfiConverterString.read(from: &buf), 
+                authorizationUrl: FfiConverterString.read(from: &buf), 
+                state: FfiConverterString.read(from: &buf), 
+                redirectUri: FfiConverterString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: OAuthHandoffDto, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.serverId, into: &buf)
+        FfiConverterString.write(value.authorizationUrl, into: &buf)
+        FfiConverterString.write(value.state, into: &buf)
+        FfiConverterString.write(value.redirectUri, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeOAuthHandoffDto_lift(_ buf: RustBuffer) throws -> OAuthHandoffDto {
+    return try FfiConverterTypeOAuthHandoffDto.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeOAuthHandoffDto_lower(_ value: OAuthHandoffDto) -> RustBuffer {
+    return FfiConverterTypeOAuthHandoffDto.lower(value)
 }
 
 
@@ -1838,6 +2007,9 @@ private let initializationResult: InitializationResult = {
     if (uniffi_tamtri_core_checksum_method_tamtricore_cancel_run() != 38316) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_tamtri_core_checksum_method_tamtricore_complete_oauth_callback() != 30265) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_tamtri_core_checksum_method_tamtricore_conversation_workdir_path() != 50463) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -1848,6 +2020,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_tamtri_core_checksum_method_tamtricore_delete_conversation() != 29140) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tamtri_core_checksum_method_tamtricore_export_gateway_credential() != 22588) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_tamtri_core_checksum_method_tamtricore_fork_conversation() != 28321) {
@@ -1890,6 +2065,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_tamtri_core_checksum_method_tamtricore_set_gateway_credential() != 36422) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tamtri_core_checksum_method_tamtricore_start_oauth_flow() != 16366) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_tamtri_core_checksum_method_tamtricore_verified_attachment_path() != 25850) {
