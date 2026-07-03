@@ -20,8 +20,6 @@ pub enum CoreError {
     JsonRpc { code: i64, message: String },
     #[error("transport closed")]
     TransportClosed,
-    #[error("protocol version mismatch: server {0}")]
-    VersionMismatch(String),
     #[error("request timed out: {method}")]
     Timeout { method: String },
 }

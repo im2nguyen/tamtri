@@ -1,5 +1,16 @@
 # MCP Client And Gateway
 
+## M2 baseline (stdio tools client)
+
+Milestone 2 shipped a sequential stdio MCP client before the shared `rpc::dispatch` loop arrived in Milestone 3 (ACP) and Milestone 4 (gateway promotion). The baseline behavior still applies to every RPC connection:
+
+- **Timeouts.** `McpClientConfig` carries `init_timeout` (default 30s for `initialize`, `notifications/initialized`, and list calls) and `call_timeout` (default 300s for `tools/call`). Every request is wrapped in `tokio::time::timeout`.
+- **Poison on timeout.** When a request times out, `RpcHandle` sets a poison flag, drops the pending entry, and sends `RpcCommand::Poison` to the reader task. The next call on that handle returns `CoreError::TransportClosed`. The timed-out method returns `CoreError::Timeout { method }`. Late responses on the wire are ignored. Callers must reconnect; there is no resync after a stale reply may be in flight.
+- **Protocol version.** The client sends `MCP_PROTOCOL_VERSION` (`2025-11-25`). If the server negotiates a different version, core logs a warning and continues. Handshake failure is a JSON-RPC error, not a dedicated mismatch variant.
+- **Server-initiated requests while pending.** Notifications are logged and skipped. `ping` gets an empty `{}` result. Any other server request gets JSON-RPC `-32601` so compliant servers do not hang.
+- **Message classification.** `IncomingMessage::from_line` classifies by field presence. Serde untagged fallthrough is not used on the read path.
+- **Layout.** JSON-RPC types live in `core/src/rpc/jsonrpc.rs` (re-exported from `core/src/mcp/jsonrpc.rs`). Stdio framing is in `core/src/rpc/transport/stdio.rs`. The M2 client loop lived in `core/src/mcp/client.rs` until Milestone 4 moved it onto `rpc::dispatch::RpcConnection`.
+
 Milestone 4 promotes the M2 MCP client onto the shared JSON-RPC dispatch loop introduced for ACP in M3. The public client surface stays `&self`, but requests now correlate through a background reader and pending-request map, so unrelated calls can be in flight concurrently.
 
 ## Client Surface

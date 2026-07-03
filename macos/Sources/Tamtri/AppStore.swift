@@ -1,5 +1,4 @@
 import AppKit
-import AppKit
 import Foundation
 
 @MainActor
@@ -28,6 +27,7 @@ final class AppStore: ObservableObject {
     @Published var bridgeDelivery: BridgeDelivery?
     @Published var liveTaskStates: [String: LiveTaskState] = [:]
     @Published var showConversationRoots = false
+    @Published private(set) var isRunActive = false
 
     private let core: CoreClient
     private var conversationCache: [String: ConversationRecord] = [:]
@@ -55,13 +55,21 @@ final class AppStore: ObservableObject {
             for await event in core.events {
                 await MainActor.run {
                     self.liveEvents.append(event)
+                    if event.kind == "turn_started", event.conversationId == self.selectedConversationId {
+                        self.isRunActive = true
+                    }
                     if event.kind == "turn_ended" || event.kind == "message_committed" {
                         self.conversationCache.removeValue(forKey: event.conversationId)
                         let preferNewest = event.kind == "turn_ended"
                         Task { await self.refreshWorkdirFiles(preferNewest: preferNewest, force: preferNewest) }
-                        if event.kind == "turn_ended", event.conversationId == self.selectedConversationId {
-                            Task { await self.reloadSelectedConversation() }
+                        if event.conversationId == self.selectedConversationId {
+                            if event.kind == "message_committed" || event.kind == "turn_ended" {
+                                Task { await self.reloadSelectedConversation() }
+                            }
                         }
+                    }
+                    if event.kind == "turn_ended", event.conversationId == self.selectedConversationId {
+                        self.isRunActive = false
                     }
                     if event.kind == "gateway_credential_updated" {
                         Task { @MainActor in
@@ -242,12 +250,25 @@ final class AppStore: ObservableObject {
         let text = composerText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
         composerText = ""
+        isRunActive = true
         Task {
             do {
                 let roots = try await listRoots(conversationId: conversation.id)
                 let resolved = try RootBookmarkAccess.beginAccess(conversationId: conversation.id, roots: roots)
                 try await core.syncRuntimeRoots(conversationId: conversation.id, roots: resolved)
                 try await core.sendMessage(conversationId: conversation.id, text: text)
+            } catch {
+                isRunActive = false
+                errorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    func cancelRun() {
+        guard let conversation = selectedConversation else { return }
+        Task {
+            do {
+                try await core.cancelRun(conversationId: conversation.id)
             } catch {
                 errorMessage = error.localizedDescription
             }

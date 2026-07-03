@@ -18,6 +18,7 @@ struct TamtriApp: App {
                 .task {
                     await store.refresh()
                     await store.refreshGatewayServers()
+                    await store.refreshHarnessAgents()
                 }
                 .onAppear {
                     appDelegate.onTerminate = {

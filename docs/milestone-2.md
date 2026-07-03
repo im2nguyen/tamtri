@@ -40,7 +40,7 @@ tracing-subscriber = "0.3"
 - stdio transport framing: newline-delimited JSON. One JSON-RPC message per line on stdin/stdout. Server logs go to stderr; capture and forward to `tracing`, never parse stderr as protocol.
 - Lifecycle: client sends `initialize` (request), server replies, client sends `notifications/initialized` (notification), then normal operation.
 
-## Task 1: JSON-RPC layer (`mcp/jsonrpc.rs`)
+## Task 1: JSON-RPC layer (`rpc/jsonrpc.rs`, re-exported as `mcp/jsonrpc.rs`)
 
 Minimal, correct JSON-RPC 2.0 types. Derive serde on all.
 
@@ -116,7 +116,7 @@ impl IncomingMessage {
 
 Parsing (and minimally answering) server-initiated requests now is what keeps Milestone 4 from being a rewrite.
 
-## Task 2: Transport (`mcp/transport/`)
+## Task 2: Transport (`rpc/transport/`)
 
 Trait (`transport/mod.rs`):
 
@@ -131,7 +131,7 @@ pub trait Transport: Send {
 }
 ```
 
-`StdioTransport` (`transport/stdio.rs`):
+`StdioTransport` (`rpc/transport/stdio.rs`):
 - Spawn with `tokio::process::Command`, piping stdin, stdout, stderr.
 - Child environment is scrubbed by default: start from a clean env, set `PATH`, `HOME`, `TMPDIR`, `LANG`, then apply the explicitly provided `env` pairs. Never inherit the full parent environment; the gateway story is credential hygiene, and leaking the host env to every downstream server contradicts it.
 - Write each outgoing message as compact JSON followed by `\n` to child stdin.
@@ -292,8 +292,6 @@ Protocol(String),
 JsonRpc { code: i64, message: String },
 #[error("transport closed")]
 TransportClosed,
-#[error("protocol version mismatch: server {0}")]
-VersionMismatch(String),
 #[error("request timed out: {method}")]
 Timeout { method: String },
 ```

@@ -212,4 +212,37 @@ enum JSONValue: Decodable, Equatable, CustomStringConvertible {
         }
         return value
     }
+
+    func toJSONString() -> String? {
+        guard let data = try? JSONEncoder().encode(EncodableJSONValue(self)) else {
+            return nil
+        }
+        return String(data: data, encoding: .utf8)
+    }
+}
+
+private struct EncodableJSONValue: Encodable {
+    let value: JSONValue
+
+    init(_ value: JSONValue) {
+        self.value = value
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        switch value {
+        case .string(let v):
+            try container.encode(v)
+        case .number(let v):
+            try container.encode(v)
+        case .bool(let v):
+            try container.encode(v)
+        case .null:
+            try container.encodeNil()
+        case .array(let values):
+            try container.encode(values.map(EncodableJSONValue.init))
+        case .object(let object):
+            try container.encode(object.mapValues(EncodableJSONValue.init))
+        }
+    }
 }

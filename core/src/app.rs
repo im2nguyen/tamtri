@@ -801,6 +801,11 @@ impl TamtriCore {
             id,
             &Event::new(EventKind::TurnStarted, json!({ "harness_id": harness_id })),
         )?;
+        self.observer.on_event(UiEvent {
+            conversation_id: id.to_string(),
+            kind: "turn_started".to_string(),
+            payload_json: json!({ "harness_id": harness_id }).to_string(),
+        });
 
         let vault = Arc::clone(&self.vault);
         let active_runs = Arc::clone(&self.active_runs);
@@ -851,8 +856,13 @@ impl TamtriCore {
                     }
                     let mut reducer = TurnReducer::new(harness_id_for_run.clone());
                     while let Some(event) = run.events.recv().await {
-                        emit(&observer, id, &event);
-                        let _ = append_event_for_harness_event(&vault, id, &event);
+                        emit(&observer, id, &event, &harness_display_for_run);
+                        let _ = append_event_for_harness_event(
+                            &vault,
+                            id,
+                            &event,
+                            Some(&harness_display_for_run),
+                        );
                         let _ = reducer.apply(&event);
                         if matches!(event, HarnessEvent::TurnEnded { .. }) {
                             let reduced = reducer.finish();
@@ -1586,11 +1596,30 @@ impl TamtriCore {
     }
 }
 
-fn emit(observer: &Arc<dyn ConversationObserver>, conversation_id: Id, event: &HarnessEvent) {
+fn emit(
+    observer: &Arc<dyn ConversationObserver>,
+    conversation_id: Id,
+    event: &HarnessEvent,
+    harness_display_name: &str,
+) {
+    let payload_json = match event {
+        HarnessEvent::PermissionRequested { .. } => {
+            let mut value =
+                serde_json::to_value(event).unwrap_or_else(|_| serde_json::Value::Object(Default::default()));
+            if let Some(obj) = value.as_object_mut() {
+                obj.insert(
+                    "harness_display_name".to_string(),
+                    json!(harness_display_name),
+                );
+            }
+            value.to_string()
+        }
+        _ => serde_json::to_string(event).unwrap_or_else(|_| "{}".to_string()),
+    };
     observer.on_event(UiEvent {
         conversation_id: conversation_id.to_string(),
         kind: event_kind(event).to_string(),
-        payload_json: serde_json::to_string(event).unwrap_or_else(|_| "{}".to_string()),
+        payload_json,
     });
 }
 
@@ -1598,6 +1627,7 @@ fn append_event_for_harness_event(
     vault: &FilesystemVault,
     id: Id,
     event: &HarnessEvent,
+    harness_display_name: Option<&str>,
 ) -> Result<()> {
     let (kind, payload) = match event {
         HarnessEvent::ToolCallStarted {
@@ -1619,10 +1649,18 @@ fn append_event_for_harness_event(
             action,
             detail,
             options,
-        } => (
-            EventKind::PermissionRequested,
-            json!({ "request_id": request_id, "action": action, "detail": detail, "options": options }),
-        ),
+        } => {
+            let mut payload = json!({
+                "request_id": request_id,
+                "action": action,
+                "detail": detail,
+                "options": options,
+            });
+            if let Some(name) = harness_display_name {
+                payload["harness_display_name"] = json!(name);
+            }
+            (EventKind::PermissionRequested, payload)
+        }
         HarnessEvent::PermissionResolved {
             request_id,
             option_id,
@@ -1769,10 +1807,11 @@ fn append_event_for_gateway_event(
         ),
         GatewayEvent::TaskCompleted { state, result } => (
             EventKind::TaskCompleted,
-            json!({
-                "state": state,
-                "result": result,
-            }),
+            json!({"state": state, "result": result}),
+        ),
+        GatewayEvent::RootsListed { server_id, count } => (
+            EventKind::RootsListed,
+            json!({ "server_id": server_id, "count": count }),
         ),
         GatewayEvent::OAuthHandoffStarted {
             server_id,
@@ -1897,6 +1936,7 @@ fn gateway_event_kind(event: &GatewayEvent) -> &'static str {
         GatewayEvent::TaskStarted { .. } => "task_started",
         GatewayEvent::TaskUpdated { .. } => "task_updated",
         GatewayEvent::TaskCompleted { .. } => "task_completed",
+        GatewayEvent::RootsListed { .. } => "roots_listed",
         GatewayEvent::OAuthHandoffStarted { .. } => "oauth_handoff_started",
         GatewayEvent::OAuthHandoffCompleted { .. } => "oauth_handoff_completed",
         GatewayEvent::OAuthRefreshFailed { .. } => "oauth_refresh_failed",
