@@ -35,10 +35,16 @@ final class AppStore: ObservableObject {
     @Published var searchResults: [SearchHitRecord] = []
     @Published var searchScopeMessage = ""
     @Published var importSummaryMessage: String?
+    @Published var designedErrorState: DesignedErrorState?
+    @Published var missingBookmarkState: DesignedErrorState?
     @Published private(set) var isRunActive = false
 
     var hasReadyHarness: Bool {
         harnessHealthEntries.contains { $0.status == "ready" }
+    }
+
+    var isVaultEmpty: Bool {
+        conversations.isEmpty
     }
 
     private let core: CoreClient
@@ -141,6 +147,13 @@ final class AppStore: ObservableObject {
     func refresh() async {
         do {
             conversations = try await core.listConversations()
+            if conversations.isEmpty {
+                designedErrorState = TamtriErrorClassifier.emptyVaultState()
+                selectedConversationId = nil
+                selectedConversation = nil
+            } else if designedErrorState?.kind == .emptyVault {
+                designedErrorState = nil
+            }
             if selectedConversation == nil, let first = conversations.first {
                 selectedConversationId = first.id
                 if let cached = conversationCache[first.id] {
@@ -151,11 +164,12 @@ final class AppStore: ObservableObject {
             }
             await refreshWorkdirFiles()
         } catch {
-            errorMessage = error.localizedDescription
+            presentError(error)
         }
     }
 
     func selectConversation(_ summary: ConversationSummary) {
+        designedErrorState = nil
         if selectedConversation?.id == summary.id {
             selectedConversationId = summary.id
             return
@@ -196,7 +210,12 @@ final class AppStore: ObservableObject {
         } catch {
             guard pendingSelectionId == id, selectedConversationId == id else { return }
             isLoadingConversation = false
-            errorMessage = error.localizedDescription
+            selectedConversation = nil
+            if let state = classifiedErrorState(error, conversationId: id) {
+                designedErrorState = state
+            } else {
+                errorMessage = TamtriErrorClassifier.coreMessage(from: error)
+            }
         }
     }
 
@@ -220,6 +239,7 @@ final class AppStore: ObservableObject {
             selectedConversationId = record.id
         }
         Task { await refreshWorkdirFiles() }
+        Task { await refreshMissingBookmarkState() }
     }
 
     private func reloadSelectedConversation() async {
@@ -282,7 +302,15 @@ final class AppStore: ObservableObject {
                 try await core.sendMessage(conversationId: conversation.id, text: text)
             } catch {
                 isRunActive = false
-                errorMessage = error.localizedDescription
+                if let state = classifiedErrorState(
+                    error,
+                    conversationId: conversation.id,
+                    harnessId: conversation.harnessId
+                ) {
+                    designedErrorState = state
+                } else {
+                    errorMessage = TamtriErrorClassifier.coreMessage(from: error)
+                }
             }
         }
     }
@@ -431,6 +459,19 @@ final class AppStore: ObservableObject {
                 imageData: nil,
                 error: error.localizedDescription
             )
+        }
+    }
+
+    func openWorkdirFile(_ file: WorkdirFileRecord) {
+        guard let conversation = selectedConversation else { return }
+        Task {
+            do {
+                let workdir = try await core.conversationWorkdirPath(conversationId: conversation.id)
+                let path = (workdir as NSString).appendingPathComponent(file.relativePath)
+                NSWorkspace.shared.open(URL(fileURLWithPath: path))
+            } catch {
+                presentError(error)
+            }
         }
     }
 
@@ -757,12 +798,83 @@ final class AppStore: ObservableObject {
     }
 
     private func presentError(_ error: Error) {
-        let message = error.localizedDescription
-        errorMessage = message
-        if message.localizedCaseInsensitiveContains("unknown harness")
-            || message.localizedCaseInsensitiveContains("unknown acp agent") {
-            showHarnessHealth = true
+        let message = TamtriErrorClassifier.coreMessage(from: error)
+        if let state = classifiedErrorState(error, conversationId: selectedConversationId) {
+            designedErrorState = state
+            if state.kind == .unavailableHarness {
+                showHarnessHealth = true
+            }
+            return
         }
+        errorMessage = message
+    }
+
+    func performDesignedErrorRecovery(_ recovery: DesignedErrorRecovery) {
+        switch recovery {
+        case .newConversation:
+            designedErrorState = nil
+            showNewConversation = true
+        case .revealInFinder(let conversationId):
+            revealConversationFolder(conversationId: conversationId)
+        case .cancelRun:
+            cancelRun()
+            designedErrorState = nil
+        case .repickFolder:
+            showConversationRoots = true
+        case .openHarnessHealth:
+            showHarnessHealth = true
+        case .forkConversation:
+            showForkConversation = true
+        case .wait:
+            designedErrorState = nil
+        }
+    }
+
+    func dismissMissingBookmarkState() {
+        missingBookmarkState = nil
+    }
+
+    func revealConversationFolder(conversationId: String) {
+        guard !conversationId.isEmpty else { return }
+        Task {
+            do {
+                let path = try await core.conversationFolderPath(conversationId: conversationId)
+                NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)])
+            } catch {
+                presentError(error)
+            }
+        }
+    }
+
+    func refreshMissingBookmarkState() async {
+        guard let conversation = selectedConversation else {
+            missingBookmarkState = nil
+            return
+        }
+        do {
+            let roots = try await listRoots(conversationId: conversation.id)
+            if let missing = roots.first(where: { $0.bookmarkMissing && $0.kind == "filesystem" }) {
+                missingBookmarkState = TamtriErrorClassifier.missingBookmark(rootName: missing.name)
+            } else {
+                missingBookmarkState = nil
+            }
+        } catch {
+            missingBookmarkState = nil
+        }
+    }
+
+    private func classifiedErrorState(
+        _ error: Error,
+        conversationId: String?,
+        harnessId: String? = nil,
+        rootName: String? = nil
+    ) -> DesignedErrorState? {
+        TamtriErrorClassifier.classify(
+            message: TamtriErrorClassifier.coreMessage(from: error),
+            conversationId: conversationId,
+            harnessId: harnessId,
+            rootName: rootName
+        )
     }
 
     func listAgentModels(agentId: String) async -> [ModelInfoRecord] {

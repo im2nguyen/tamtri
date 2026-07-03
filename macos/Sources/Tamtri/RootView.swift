@@ -92,15 +92,37 @@ struct SidebarView: View {
     @EnvironmentObject private var store: AppStore
 
     var body: some View {
-        List(store.conversations, selection: $store.selectedConversationId) { conversation in
-            VStack(alignment: .leading, spacing: 2) {
-                Text(conversation.title)
-                    .font(.headline)
-                Text(conversation.updatedAt)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+        Group {
+            if store.conversations.isEmpty {
+                VStack(spacing: 12) {
+                    Spacer()
+                    Image(systemName: "tray")
+                        .font(.title)
+                        .foregroundStyle(.secondary)
+                    Text("No conversations")
+                        .font(.headline)
+                    Text("Create one to get started.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Button("New Conversation") {
+                        store.showNewConversation = true
+                    }
+                    .buttonStyle(.borderedProminent)
+                    Spacer()
+                }
+                .padding()
+            } else {
+                List(store.conversations, selection: $store.selectedConversationId) { conversation in
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(conversation.title)
+                            .font(.headline)
+                        Text(conversation.updatedAt)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    .tag(conversation.id)
+                }
             }
-            .tag(conversation.id)
         }
         .navigationTitle("tamtri")
         .onChange(of: store.selectedConversationId) { _, newId in
@@ -143,6 +165,19 @@ struct TranscriptView: View {
             ZStack {
                 if let conversation {
                     VStack(alignment: .leading, spacing: 0) {
+                        if let bookmarkState = store.missingBookmarkState {
+                            DesignedErrorBannerView(
+                                state: bookmarkState,
+                                onPrimary: {
+                                    store.performDesignedErrorRecovery(.repickFolder)
+                                },
+                                onDismiss: {
+                                    store.dismissMissingBookmarkState()
+                                }
+                            )
+                            .padding(.horizontal)
+                            .padding(.top, 12)
+                        }
                         ConversationHeader(conversation: conversation)
                             .padding(.horizontal)
                             .padding(.top, 12)
@@ -162,6 +197,17 @@ struct TranscriptView: View {
                         .id(conversation.id)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                     }
+                } else if let errorState = store.designedErrorState {
+                    DesignedErrorStateView(
+                        state: errorState,
+                        onPrimary: {
+                            store.performDesignedErrorRecovery(errorState.primaryAction.recovery)
+                        },
+                        onSecondary: errorState.secondaryAction.map { action in
+                            { store.performDesignedErrorRecovery(action.recovery) }
+                        }
+                    )
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else if switching {
                     VStack(spacing: 12) {
                         ProgressView()
@@ -767,6 +813,20 @@ struct ArtifactCard: View {
         block.integrityFailed == true || loadError != nil
     }
 
+    private var fileActions: FileRowActionsPresentation {
+        let previewLoaded = verifiedInline != nil || verifiedText != nil || verifiedImage != nil
+        return FileRowActionsPresentation.artifact(
+            canPreviewInline: artifactSupportsInlinePreview && !integrityFailed,
+            previewLoaded: previewLoaded
+        )
+    }
+
+    private var artifactSupportsInlinePreview: Bool {
+        block.inline != nil
+            || hasVerifiedAttachmentMetadata
+            && FilePreviewSupport.canPreviewInline(mimeType: block.mimeType)
+    }
+
     var body: some View {
         CompactCard(title: block.path ?? "Artifact", systemImage: "doc.richtext") {
             VStack(alignment: .leading, spacing: 8) {
@@ -779,25 +839,23 @@ struct ArtifactCard: View {
                         Text(String(sha256.prefix(8)))
                     }
                     Spacer()
-                    Button {
-                        revealAttachment()
-                    } label: {
-                        Label("Reveal in Finder", systemImage: "folder")
-                    }
-                    .labelStyle(.iconOnly)
-                    .help("Reveal artifact in Finder")
-                    .disabled(!hasVerifiedAttachmentMetadata)
-                    Button {
-                        openAttachment()
-                    } label: {
-                        Label("Open Artifact", systemImage: "arrow.up.right.square")
-                    }
-                    .labelStyle(.iconOnly)
-                    .help("Open artifact in default app")
-                    .disabled(!hasVerifiedAttachmentMetadata)
+                    Text(FilesPanelCopy.frozenAttachmentBadge)
+                        .font(.caption2.weight(.semibold))
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Color.secondary.opacity(0.12), in: Capsule())
                 }
                 .font(.caption)
                 .foregroundStyle(.secondary)
+                if hasVerifiedAttachmentMetadata || block.inline != nil {
+                    FileActionButtons(
+                        actions: fileActions,
+                        onPreview: {},
+                        onOpen: openAttachment,
+                        onReveal: revealAttachment
+                    )
+                    .disabled(integrityFailed)
+                }
                 if let verifiedInline {
                     preview(for: verifiedInline)
                 } else if let verifiedImage {
@@ -1566,11 +1624,16 @@ struct FilesSidebarView: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 0) {
                         if !store.transcriptArtifacts.isEmpty {
-                            Text("Artifacts")
-                                .font(.caption.weight(.semibold))
-                                .foregroundStyle(.secondary)
-                                .padding(.horizontal)
-                                .padding(.bottom, 4)
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(FilesPanelCopy.artifactsSectionTitle)
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(.secondary)
+                                Text(FilesPanelCopy.artifactsSectionSubtitle)
+                                    .font(.caption2)
+                                    .foregroundStyle(.tertiary)
+                            }
+                            .padding(.horizontal)
+                            .padding(.bottom, 4)
                             List(store.transcriptArtifacts, selection: selectedArtifactBinding) { artifact in
                                 TranscriptArtifactRow(artifact: artifact)
                                     .tag(artifact.id)
@@ -1579,12 +1642,17 @@ struct FilesSidebarView: View {
                             .frame(minHeight: 80, maxHeight: 160)
                         }
                         if !store.workdirFiles.isEmpty {
-                            Text("Working files")
-                                .font(.caption.weight(.semibold))
-                                .foregroundStyle(.secondary)
-                                .padding(.horizontal)
-                                .padding(.top, store.transcriptArtifacts.isEmpty ? 0 : 8)
-                                .padding(.bottom, 4)
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(FilesPanelCopy.workdirSectionTitle)
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(.secondary)
+                                Text(FilesPanelCopy.workdirSectionSubtitle)
+                                    .font(.caption2)
+                                    .foregroundStyle(.tertiary)
+                            }
+                            .padding(.horizontal)
+                            .padding(.top, store.transcriptArtifacts.isEmpty ? 0 : 8)
+                            .padding(.bottom, 4)
                             List(store.workdirFiles, selection: selectedFileBinding) { file in
                                 FilesSidebarRow(file: file)
                                     .tag(file.relativePath)
@@ -1654,6 +1722,9 @@ struct TranscriptArtifactRow: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
+                Text(FilesPanelCopy.frozenAttachmentBadge)
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
             }
         }
         .accessibilityLabel("\((artifact.path as NSString).lastPathComponent), frozen attachment")
@@ -1670,15 +1741,28 @@ struct AttachmentFilePreviewView: View {
                 Text((preview.path as NSString).lastPathComponent)
                     .font(.subheadline.weight(.semibold))
                     .lineLimit(1)
+                Text(FilesPanelCopy.frozenAttachmentBadge)
+                    .font(.caption2.weight(.semibold))
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(Color.secondary.opacity(0.12), in: Capsule())
                 Spacer()
                 if let artifact = store.selectedTranscriptArtifact {
-                    Button {
-                        store.revealTranscriptArtifact(artifact)
-                    } label: {
-                        Label("Reveal in Finder", systemImage: "folder")
-                    }
-                    .labelStyle(.iconOnly)
-                    .help("Reveal frozen attachment in Finder")
+                    FileActionButtons(
+                        actions: .artifact(canPreviewInline: preview.error == nil && (preview.text != nil || preview.imageData != nil)),
+                        onPreview: {},
+                        onOpen: {
+                            store.openAttachment(
+                                conversationId: store.selectedConversation?.id ?? "",
+                                path: artifact.path,
+                                size: artifact.size,
+                                sha256: artifact.sha256
+                            )
+                        },
+                        onReveal: {
+                            store.revealTranscriptArtifact(artifact)
+                        }
+                    )
                 }
             }
             .padding(.horizontal)
@@ -1759,10 +1843,11 @@ struct FilesSidebarRow: View {
 
     private var fileSubtitle: String {
         let size = ByteCountFormatter.string(fromByteCount: Int64(file.size), countStyle: .file)
+        let liveLabel = FilesPanelCopy.liveWorkingFileBadge
         if let mimeType = file.mimeType {
-            return "\(mimeLabel(mimeType)) · \(size)"
+            return "\(liveLabel) · \(mimeLabel(mimeType)) · \(size)"
         }
-        return size
+        return "\(liveLabel) · \(size)"
     }
 
     private func mimeLabel(_ mimeType: String) -> String {
@@ -1793,16 +1878,28 @@ struct WorkdirFilePreviewView: View {
                 Text(preview.relativePath)
                     .font(.subheadline.weight(.semibold))
                     .lineLimit(1)
+                Text(FilesPanelCopy.liveWorkingFileBadge)
+                    .font(.caption2.weight(.semibold))
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(Color.orange.opacity(0.15), in: Capsule())
                 Spacer()
-                Button {
-                    if let file = store.selectedWorkdirFile {
-                        store.revealWorkdirFile(file)
-                    }
-                } label: {
-                    Label("Reveal in Finder", systemImage: "folder")
+                if let file = store.selectedWorkdirFile {
+                    FileActionButtons(
+                        actions: .workdir(
+                            canPreviewInline: preview.error == nil && (preview.text != nil || preview.imageData != nil)
+                        ),
+                        onPreview: {
+                            Task { await store.loadWorkdirPreview(for: file) }
+                        },
+                        onOpen: {
+                            store.openWorkdirFile(file)
+                        },
+                        onReveal: {
+                            store.revealWorkdirFile(file)
+                        }
+                    )
                 }
-                .labelStyle(.iconOnly)
-                .help("Reveal in Finder")
             }
             .padding(.horizontal)
             .padding(.vertical, 8)

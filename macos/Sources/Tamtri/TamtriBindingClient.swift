@@ -72,6 +72,10 @@ actor TamtriBindingClient: CoreClient {
         try core.conversationWorkdirPath(conversationId: conversationId)
     }
 
+    func conversationFolderPath(conversationId: String) async throws -> String {
+        try core.conversationFolderPath(conversationId: conversationId)
+    }
+
     func readWorkdirFile(conversationId: String, relativePath: String) async throws -> WorkdirFilePreview {
         let content = try core.readWorkdirFile(conversationId: conversationId, relativePath: relativePath)
         let mimeType = content.mimeType

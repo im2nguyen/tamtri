@@ -165,6 +165,7 @@ protocol CoreClient: Sendable {
     func copyFileToWorkdir(conversationId: String, sourcePath: String) async throws -> String
     func listWorkdirFiles(conversationId: String) async throws -> [WorkdirFileRecord]
     func conversationWorkdirPath(conversationId: String) async throws -> String
+    func conversationFolderPath(conversationId: String) async throws -> String
     func readWorkdirFile(conversationId: String, relativePath: String) async throws -> WorkdirFilePreview
     func verifyArtifactInline(size: UInt64, sha256: String, inlineContent: String) async throws
     func logArtifactNavigationBlocked(conversationId: String, url: String) async throws
@@ -287,6 +288,10 @@ actor MockCoreClient: CoreClient {
 
     func conversationWorkdirPath(conversationId: String) async throws -> String {
         "/tmp/workdir"
+    }
+
+    func conversationFolderPath(conversationId: String) async throws -> String {
+        "/tmp/conversations/\(conversationId)"
     }
 
     func readWorkdirFile(conversationId: String, relativePath: String) async throws -> WorkdirFilePreview {
