@@ -398,15 +398,23 @@ struct ContentBlockView: View {
             }
         case "tool_call":
             CompactCard(title: block.name ?? "Tool call", systemImage: "wrench.and.screwdriver") {
-                Text(block.inputSummary)
-                    .font(.body.monospaced())
-                    .textSelection(.enabled)
+                if !block.inputSummary.isEmpty {
+                    Text(block.inputSummary)
+                        .font(.body.monospaced())
+                        .textSelection(.enabled)
+                }
             }
         case "tool_result":
             CompactCard(title: "Tool result", systemImage: "checkmark.circle") {
-                Text(block.outputSummary)
-                    .font(.body.monospaced())
-                    .textSelection(.enabled)
+                if block.toolDiffs.isEmpty {
+                    Text(block.outputSummary)
+                        .font(.body.monospaced())
+                        .textSelection(.enabled)
+                } else {
+                    ForEach(Array(block.toolDiffs.enumerated()), id: \.offset) { _, diff in
+                        FileDiffView(diff: diff)
+                    }
+                }
             }
         case "elicitation_request":
             ElicitationHistoryCard(block: block)
@@ -1174,7 +1182,9 @@ struct ToolCard: View {
                 Text(summary.subtitle)
                     .foregroundStyle(.secondary)
             }
-            if !summary.detail.isEmpty {
+            if let diff = summary.diff {
+                FileDiffView(diff: diff)
+            } else if !summary.detail.isEmpty {
                 Text(summary.detail)
                     .font(.body.monospaced())
                     .textSelection(.enabled)
@@ -1255,7 +1265,7 @@ struct PermissionCard: View {
     }
 }
 
-private struct PermissionDiffView: View {
+private struct FileDiffView: View {
     let diff: DiffPayload
 
     var body: some View {
@@ -1286,6 +1296,14 @@ private struct PermissionDiffView: View {
                     .textSelection(.enabled)
             }
         }
+    }
+}
+
+private struct PermissionDiffView: View {
+    let diff: DiffPayload
+
+    var body: some View {
+        FileDiffView(diff: diff)
     }
 }
 
@@ -1535,28 +1553,6 @@ private struct PermissionDetailPayload: Decodable {
     }
 }
 
-private struct DiffPayload: Decodable {
-    let path: String?
-    let change: String?
-    let oldText: String?
-    let newText: String?
-
-    enum CodingKeys: String, CodingKey {
-        case path
-        case change
-        case oldText = "old_text"
-        case newText = "new_text"
-    }
-
-    var summary: String {
-        var lines = [path, change].compactMap { $0 }
-        if let newText, !newText.isEmpty {
-            lines.append(newText)
-        }
-        return lines.joined(separator: "\n")
-    }
-}
-
 private struct PermissionOptionPayload: Decodable, Identifiable {
     let id: String
     let label: String
@@ -1582,6 +1578,7 @@ private struct ToolSummary {
     let title: String
     let subtitle: String
     let detail: String
+    let diff: DiffPayload?
 
     init(event: CoreEvent) {
         let json = JSONValue.from(json: event.payloadJSON)
@@ -1590,7 +1587,14 @@ private struct ToolSummary {
         let status = json?.string(at: "status")
         self.title = name ?? event.kind.replacingOccurrences(of: "_", with: " ").capitalized
         self.subtitle = [status, path].compactMap { $0 }.joined(separator: " • ")
-        self.detail = json?.description ?? event.payloadJSON
+        self.diff = ToolDiffParsing.diff(from: json)
+        if self.diff != nil {
+            self.detail = ""
+        } else if let json {
+            self.detail = json.description
+        } else {
+            self.detail = event.payloadJSON
+        }
     }
 }
 
@@ -1786,8 +1790,7 @@ struct AttachmentFilePreviewView: View {
         case "text/csv", "text/tab-separated-values":
             CSVPreview(text: text, separator: preview.mimeType == "text/tab-separated-values" ? "\t" : ",")
         case "text/markdown":
-            Text(text)
-                .textSelection(.enabled)
+            MarkdownPreview(content: text)
         default:
             Text(text)
                 .font(.body.monospaced())

@@ -19,6 +19,11 @@ final class RendererPolicyTests: XCTestCase {
         XCTAssertFalse(ArtifactNavigationPolicy.allows(URL(string: "https://example.com")))
     }
 
+    func testArtifactPolicyBlocksFileNavigation() {
+        XCTAssertFalse(WebNavigationPolicy.allows(URL(string: "file:///etc/passwd"), policy: .artifactNoNetwork))
+        XCTAssertFalse(ArtifactNavigationPolicy.allows(URL(string: "file:///tmp/report.html")))
+    }
+
     func testAppPolicyBlocksUndeclaredOrigin() {
         let policy = WebContentPolicy.app(
             allowedOrigins: [WebOrigin(mcpOrigin: "https://cdn.example.com")],

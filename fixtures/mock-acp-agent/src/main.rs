@@ -86,6 +86,7 @@ fn main() {
                     emit_updates(&mut stdout);
                     if let Some(cwd_path) = cwd.as_deref() {
                         let _ = call_gateway_echo(&mcp_servers, std::path::Path::new(cwd_path));
+                        let _ = call_gateway_probe_roots(&mcp_servers, std::path::Path::new(cwd_path));
                     }
                     let _ = call_gateway_elicit_url(&mcp_servers);
                     let req_id = json!("perm-1");
@@ -191,6 +192,36 @@ fn call_gateway_echo(mcp_servers: &[Value], cwd: &std::path::Path) -> Result<(),
         .unwrap_or_default();
     if message == "gateway-echo-test" {
         std::fs::write(cwd.join(".gateway-echo-ok"), message)
+            .map_err(|err| err.to_string())?;
+    }
+    Ok(())
+}
+
+fn call_gateway_probe_roots(mcp_servers: &[Value], cwd: &std::path::Path) -> Result<(), String> {
+    if mcp_servers.is_empty() {
+        return Ok(());
+    }
+    let tools = list_gateway_tools(mcp_servers)?;
+    let tool_name = tools
+        .iter()
+        .find(|tool| {
+            tool.get("name")
+                .and_then(Value::as_str)
+                .is_some_and(|name| name.ends_with("__probe_roots"))
+        })
+        .and_then(|tool| tool.get("name").and_then(Value::as_str))
+        .map(str::to_string);
+    let Some(tool_name) = tool_name else {
+        return Ok(());
+    };
+    let result = call_gateway_tool(mcp_servers, &tool_name, json!({}))?;
+    let count = result
+        .pointer("/structuredContent/roots/roots")
+        .and_then(Value::as_array)
+        .map(|roots| roots.len())
+        .unwrap_or(0);
+    if count > 0 {
+        std::fs::write(cwd.join(".gateway-probe-roots-ok"), count.to_string())
             .map_err(|err| err.to_string())?;
     }
     Ok(())
