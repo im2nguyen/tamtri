@@ -12,9 +12,11 @@ tamtri stores conversations as a legible vault, not an opaque app database. The 
   workdir/
 ```
 
-`config.json` is vault-level app configuration. Milestone 4 uses it for the default harness id, hand-editable agent roster, and MCP gateway registry. It stores downstream server definitions, scopes, timeout overrides, and credential references only. It never stores resolved secret values. Writes are atomic via `config.json.tmp` in the same vault root. At run time, core reads this registry, starts a run-scoped Tamtri gateway endpoint, and exposes that single endpoint to the ACP harness instead of exposing downstream server definitions directly.
+`config.json` is vault-level app configuration. Milestone 4 uses it for the default harness id, hand-editable agent roster, and MCP gateway registry. It stores downstream server definitions, scopes, timeout overrides, and credential references only. It never stores resolved secret values. Inline secrets in `stdio.env` or HTTP `headers` are rejected at save time; use `credentials[]` with `credential_ref` bindings instead. Writes are atomic via `config.json.tmp` in the same vault root. At run time, core reads this registry to decide which downstream MCP servers the gateway proxies.
 
 `meta.json` is the small mutable header. It contains `schema_version`, conversation identity, timestamps, harness/model ids, working directory mode, MCP server refs, roots, and fork lineage. Writes are atomic: tamtri writes `meta.json.tmp` in the same folder, then renames it over `meta.json`.
+
+**MCP server refs: two roles.** `config.json` owns downstream routing (full server definitions). `meta.json` `mcp_servers` records the conversation's upstream tamtri gateway ref only: one entry with `id` `tamtri-gateway`, the loopback HTTP endpoint, and transport `http`. ACP `session/new` receives that ref; the harness never sees downstream definitions directly. Per-conversation downstream filtering via `meta.json` is not implemented in M4; the vault registry is the sole source of enabled downstream servers.
 
 `messages.jsonl` is the transcript and the complete render source. It is append-only: one compact JSON `Message` per line. Streaming deltas are buffered in memory and committed only when the message is complete, so in-flight tokens never hit the log. `load` reads the full transcript into memory in V1; long sessions can therefore produce multi-megabyte in-memory transcripts. A streaming reader is a future implementation option, not a format change.
 

@@ -1,6 +1,7 @@
 //! Integration tests for the public `McpClient` surface.
 
 use std::collections::VecDeque;
+use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -12,6 +13,63 @@ use tamtri_core::mcp::{McpClient, McpClientConfig, McpClientEvent};
 use tamtri_core::rpc::transport::Transport;
 use tamtri_core::{CoreError, Result};
 use tokio::sync::mpsc;
+use tokio::sync::Mutex;
+
+struct TrackingTransport {
+    incoming: VecDeque<IncomingMessage>,
+    responses: Arc<Mutex<Vec<JsonRpcResponse>>>,
+    requests_sent: usize,
+    responses_delivered: usize,
+}
+
+impl TrackingTransport {
+    fn new(incoming: Vec<IncomingMessage>, responses: Arc<Mutex<Vec<JsonRpcResponse>>>) -> Self {
+        Self {
+            incoming: incoming.into(),
+            responses,
+            requests_sent: 0,
+            responses_delivered: 0,
+        }
+    }
+}
+
+#[async_trait]
+impl Transport for TrackingTransport {
+    async fn send_request(&mut self, _req: &JsonRpcRequest) -> Result<()> {
+        self.requests_sent += 1;
+        Ok(())
+    }
+
+    async fn send_notification(&mut self, _note: &JsonRpcNotification) -> Result<()> {
+        Ok(())
+    }
+
+    async fn send_response(&mut self, resp: &JsonRpcResponse) -> Result<()> {
+        self.responses.lock().await.push(resp.clone());
+        Ok(())
+    }
+
+    async fn recv(&mut self) -> Result<IncomingMessage> {
+        if matches!(self.incoming.front(), Some(IncomingMessage::Response(_)))
+            && self.responses_delivered >= self.requests_sent
+        {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            return Err(CoreError::TransportClosed);
+        }
+        if let Some(message) = self.incoming.pop_front() {
+            if matches!(message, IncomingMessage::Response(_)) {
+                self.responses_delivered += 1;
+            }
+            return Ok(message);
+        }
+        tokio::time::sleep(Duration::from_secs(60)).await;
+        Err(CoreError::TransportClosed)
+    }
+
+    async fn close(&mut self) -> Result<()> {
+        Ok(())
+    }
+}
 
 struct MockTransport {
     incoming: VecDeque<IncomingMessage>,
@@ -144,6 +202,48 @@ async fn mcp_client_inbound_progress_while_pending() {
         Some(McpClientEvent::Progress { params }) if params["message"] == "halfway"
     ));
     assert!(result.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn ping_while_downstream_call_pending() {
+    let responses = Arc::new(Mutex::new(Vec::new()));
+    let client = McpClient::connect_test(
+        Box::new(TrackingTransport::new(
+            vec![
+                IncomingMessage::Request(JsonRpcRequest::new(
+                    RequestId::String("srv-ping".to_string()),
+                    "ping",
+                    None,
+                )),
+                IncomingMessage::Response(JsonRpcResponse::success(
+                    RequestId::Number(1),
+                    json!({"tools": []}),
+                )),
+            ],
+            Arc::clone(&responses),
+        )),
+        McpClientConfig::default(),
+        None,
+    );
+
+    // tools/list returns before the inbound driver must answer the queued ping, so wait
+    // briefly for the auto-response the driver sends.
+    client.list_tools().await.unwrap();
+    tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            if responses.lock().await.len() >= 1 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("ping response should be sent while downstream call was pending");
+
+    let sent = responses.lock().await;
+    assert_eq!(sent.len(), 1);
+    assert_eq!(sent[0].id, RequestId::String("srv-ping".to_string()));
+    assert_eq!(sent[0].result, Some(json!({})));
 }
 
 #[tokio::test]

@@ -228,7 +228,7 @@ pub fn upstream_gateway_capabilities_for(
     support: TamtriFeatureSupport,
 ) -> ServerCapabilities {
     use super::protocol::{
-        PromptsCapability, ResourcesCapability, RootsCapability, ToolsCapability,
+        LoggingCapability, PromptsCapability, ResourcesCapability, RootsCapability, ToolsCapability,
     };
 
     ServerCapabilities {
@@ -253,6 +253,7 @@ pub fn upstream_gateway_capabilities_for(
         } else {
             None
         },
+        logging: Some(LoggingCapability::default()),
         extensions: None,
     }
 }
@@ -308,6 +309,12 @@ mod tests {
         assert!(caps.sampling.is_none());
         assert!(caps.elicitation.is_none());
         assert!(caps.tools.is_some());
+    }
+
+    #[test]
+    fn upstream_gateway_advertises_logging() {
+        let caps = upstream_gateway_capabilities();
+        assert!(caps.logging.is_some());
     }
 
     #[test]

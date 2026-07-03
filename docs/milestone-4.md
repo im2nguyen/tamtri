@@ -1,6 +1,6 @@
 # Milestone 4: Gateway + Full MCP Client
 
-**Status: Complete.** Gateway proxy, multiplexed MCP client, registry, fork-into, settings panel. Release packaging of `tamtri-gateway-stdio` deferred to M9. Round 8 literal 100% verified.
+**Status: Complete.** Gateway proxy, multiplexed MCP client, registry, fork-into, settings panel. Release packaging of `tamtri-gateway-stdio` deferred to M9. Round 9 literal 100% verified.
 
 Fourth build session. tamtri takes its place in the middle: the agent sees tamtri as its MCP server, and tamtri connects to the real downstream MCP servers as a client. This is the largest core milestone because it turns the M2 downstream client and the M3 shared JSON-RPC loop into the gateway that the product thesis depends on.
 
@@ -224,7 +224,7 @@ Flow:
 4. Leave agent-native MCP servers alone. If the harness loads its own project servers, those are shown separately in settings when detectable, but tamtri does not pretend to proxy them.
 5. On run end or cancel, close the upstream endpoint and any idle downstream clients.
 
-The gateway should use the conversation's `mcp_servers` refs plus vault-level config to decide which downstream servers are enabled. Forks copy the refs; changing harness/model still requires a fork.
+**Downstream routing is vault-only (M4).** The gateway reads enabled servers from `<vault>/config.json` (`gateway.servers[]`). Conversation `meta.json` `mcp_servers` stores the run-scoped **upstream** tamtri gateway ref only (the loopback HTTP endpoint passed to ACP `session/new`). It does not filter downstream registry entries. Per-conversation downstream selection via `meta.json` refs is deferred; forks copy whatever upstream ref was recorded at creation time. Changing harness/model still requires a fork.
 
 Tests: `session/new` contains one tamtri gateway entry, no secret values appear in ACP params, gateway shuts down on cancel, and a mock ACP agent can call a mock downstream MCP tool through the full path.
 
@@ -269,24 +269,26 @@ Enumerated tests:
 
 1. `mcp_client_concurrent_requests_correlate` - two requests to one server, responses out of order.
 2. `mcp_client_inbound_progress_while_pending` - progress arrives before the result and reaches the gateway event sink.
-3. `mcp_client_timeout_removes_pending` - late response after timeout is ignored and the connection is poisoned.
-4. `streamable_http_json_response` - simple request/response over HTTP.
-5. `streamable_http_sse_response` - SSE stream yields progress then result.
-6. `streamable_http_preserves_session_header` - session id/header is reused after initialize.
-7. `registry_round_trip` - config writes and reads without losing scopes, transports, or timeout overrides.
-8. `registry_rejects_duplicate_server_ids`.
-9. `credential_refs_only_in_config` - config containing an inline secret-like value is rejected.
-10. `credential_injection_redacts_events` - audit receipt contains reference and target only.
-11. `gateway_tools_list_aggregates_servers` - enabled downstream tools appear with stable exposed names.
-12. `gateway_tool_name_collision_is_stable` - two same-named tools route to the correct server.
-13. `gateway_tools_call_routes_to_downstream` - agent call reaches the right downstream server and returns result unchanged.
-14. `gateway_resources_and_prompts_paginate` - gateway follows downstream `nextCursor` and exposes aggregated results.
-15. `gateway_cancellation_receipt` - upstream cancellation is recorded and surfaced; downstream abort forwarding waits for the push-capable gateway transport.
-16. `acp_session_new_includes_gateway` - ACP launch params contain tamtri gateway and no raw credentials.
-17. `mock_acp_agent_calls_gateway_tool` - full hermetic agent -> gateway -> downstream tool path.
-18. `events_jsonl_gateway_receipts` - routing, progress, credential injection, and downstream error receipts are written without secrets.
-19. `fork_into_harness_updates_model_and_harness` - fork semantics match the switching model.
-20. `settings_gateway_tools_snapshot` - Swift-facing state separates gateway tools from agent-native tools.
+3. `ping_while_downstream_call_pending` - downstream server `ping` is answered while an outbound call is still pending.
+4. `mcp_client_timeout_removes_pending` - late response after timeout is ignored and the connection is poisoned.
+4. `mcp_client_timeout_removes_pending` - late response after timeout is ignored and the connection is poisoned.
+5. `streamable_http_json_response` - simple request/response over HTTP.
+6. `streamable_http_sse_response` - SSE stream yields progress then result.
+7. `streamable_http_preserves_session_header` - session id/header is reused after initialize.
+8. `registry_round_trip` - config writes and reads without losing scopes, transports, or timeout overrides.
+9. `registry_rejects_duplicate_server_ids`.
+10. `credential_refs_only_in_config` - config containing an inline secret-like value is rejected (credentials[], stdio env, HTTP headers).
+11. `credential_injection_redacts_events` - audit receipt contains reference and target only.
+12. `gateway_tools_list_aggregates_servers` - enabled downstream tools appear with stable exposed names.
+13. `gateway_tool_name_collision_is_stable` - two same-named tools route to the correct server.
+14. `gateway_tools_call_routes_to_downstream` - agent call reaches the right downstream server and returns result unchanged.
+15. `gateway_resources_and_prompts_paginate` - gateway follows downstream `nextCursor` and exposes aggregated results.
+16. `gateway_cancellation_receipt` - upstream cancellation is recorded and surfaced; downstream abort forwarding waits for the push-capable gateway transport.
+17. `acp_session_new_includes_gateway` - ACP launch params contain tamtri gateway and no raw credentials.
+18. `mock_acp_agent_calls_gateway_tool` - full hermetic agent -> gateway -> downstream tool path.
+19. `events_jsonl_gateway_receipts` - routing, progress, credential injection, and downstream error receipts are written without secrets.
+20. `fork_into_harness_updates_model_and_harness` - fork semantics match the switching model.
+21. `settings_gateway_tools_snapshot` - Swift-facing state separates gateway tools from agent-native tools.
 
 Keep any real remote-server test `#[ignore]` by default.
 
