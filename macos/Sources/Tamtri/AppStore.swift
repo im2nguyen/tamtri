@@ -87,7 +87,7 @@ final class AppStore: ObservableObject {
             return
         }
 
-        Task {
+        Task { @MainActor in
             await loadConversation(id: summary.id, summary: summary)
         }
     }
@@ -96,12 +96,6 @@ final class AppStore: ObservableObject {
         pendingSelectionId = id
         isLoadingConversation = true
         let started = ContinuousClock.now
-
-        defer {
-            if pendingSelectionId == id {
-                isLoadingConversation = false
-            }
-        }
 
         do {
             let record = try await core.loadConversation(id: id)
@@ -112,9 +106,11 @@ final class AppStore: ObservableObject {
 
             conversationCache[id] = record
             guard pendingSelectionId == id, selectedConversationId == id else { return }
+            isLoadingConversation = false
             applySelection(record)
         } catch {
             guard pendingSelectionId == id, selectedConversationId == id else { return }
+            isLoadingConversation = false
             errorMessage = error.localizedDescription
         }
     }
@@ -123,7 +119,9 @@ final class AppStore: ObservableObject {
         selectedWorkdirFile = nil
         workdirPreview = nil
         selectedConversation = record
-        selectedConversationId = record.id
+        if selectedConversationId != record.id {
+            selectedConversationId = record.id
+        }
         Task { await refreshWorkdirFiles() }
     }
 

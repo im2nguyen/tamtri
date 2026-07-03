@@ -2,6 +2,7 @@ import Foundation
 import SwiftUI
 import WebKit
 
+@MainActor
 struct WebTranscriptView: NSViewRepresentable {
     let transcriptJSON: String
 
@@ -10,29 +11,58 @@ struct WebTranscriptView: NSViewRepresentable {
         configuration.websiteDataStore = .nonPersistent()
         configuration.preferences.javaScriptCanOpenWindowsAutomatically = false
         let webView = WKWebView(frame: .zero, configuration: configuration)
-        webView.setValue(false, forKey: "drawsBackground")
-        webView.loadHTMLString(Self.shellHTML, baseURL: nil)
+        webView.navigationDelegate = context.coordinator
         context.coordinator.webView = webView
+        webView.loadHTMLString(Self.shellHTML, baseURL: nil)
         return webView
     }
 
     func updateNSView(_ webView: WKWebView, context: Context) {
-        guard context.coordinator.lastTranscriptJSON != transcriptJSON else { return }
-        context.coordinator.lastTranscriptJSON = transcriptJSON
-        let payload = Self.javascriptStringLiteral(transcriptJSON)
-        webView.evaluateJavaScript("window.tamtriSetTranscript(\(payload))", completionHandler: nil)
+        context.coordinator.scheduleTranscriptUpdate(transcriptJSON, on: webView)
     }
 
     func makeCoordinator() -> Coordinator {
         Coordinator()
     }
 
-    final class Coordinator {
+    @MainActor
+    final class Coordinator: NSObject, WKNavigationDelegate {
         weak var webView: WKWebView?
-        var lastTranscriptJSON = ""
+        private var lastTranscriptJSON = ""
+        private var pendingTranscriptJSON: String?
+        private var isShellReady = false
+
+        func scheduleTranscriptUpdate(_ transcriptJSON: String, on webView: WKWebView) {
+            guard lastTranscriptJSON != transcriptJSON else { return }
+            pendingTranscriptJSON = transcriptJSON
+            pushPendingTranscript(on: webView)
+        }
+
+        func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+            isShellReady = true
+            pushPendingTranscript(on: webView)
+        }
+
+        private func pushPendingTranscript(on webView: WKWebView) {
+            guard isShellReady,
+                  let pendingTranscriptJSON,
+                  lastTranscriptJSON != pendingTranscriptJSON
+            else {
+                return
+            }
+
+            let payload = WebTranscriptView.javascriptStringLiteral(pendingTranscriptJSON)
+            let script = "window.tamtriSetTranscript(\(payload))"
+            lastTranscriptJSON = pendingTranscriptJSON
+
+            // Avoid evaluateJavaScript during AppKit's display-cycle flush.
+            DispatchQueue.main.async { [weak webView] in
+                webView?.evaluateJavaScript(script, completionHandler: nil)
+            }
+        }
     }
 
-    private static func javascriptStringLiteral(_ value: String) -> String {
+    fileprivate static func javascriptStringLiteral(_ value: String) -> String {
         let data = try? JSONSerialization.data(withJSONObject: value, options: [])
         if let data, let encoded = String(data: data, encoding: .utf8) {
             return encoded

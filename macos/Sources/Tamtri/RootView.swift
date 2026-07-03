@@ -59,6 +59,7 @@ struct SidebarView: View {
         .navigationTitle("tamtri")
         .onChange(of: store.selectedConversationId) { _, newId in
             guard let newId,
+                  store.selectedConversation?.id != newId,
                   let summary = store.conversations.first(where: { $0.id == newId })
             else { return }
             store.selectConversation(summary)
@@ -83,17 +84,21 @@ struct TranscriptView: View {
     @EnvironmentObject private var store: AppStore
 
     var body: some View {
+        let conversation = store.displayedConversation
+        let switching = store.isSwitchingConversation
+
         VStack(spacing: 0) {
             ZStack {
-                if let conversation = store.displayedConversation {
+                if let conversation {
                     VStack(alignment: .leading, spacing: 0) {
                         ConversationHeader(conversation: conversation)
                             .padding(.horizontal)
                             .padding(.top, 12)
                         WebTranscriptView(transcriptJSON: conversation.transcriptJSON)
+                            .id(conversation.id)
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
                     }
-                } else if store.isSwitchingConversation {
+                } else if switching {
                     VStack(spacing: 12) {
                         ProgressView()
                             .controlSize(.large)
@@ -103,7 +108,7 @@ struct TranscriptView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
 
-                if store.isSwitchingConversation, store.displayedConversation != nil {
+                if switching, conversation != nil {
                     VStack {
                         HStack {
                             Spacer()
@@ -136,7 +141,7 @@ struct TranscriptView: View {
         }
         .toolbar {
             ToolbarItem(placement: .principal) {
-                if store.isSwitchingConversation {
+                if switching {
                     HStack(spacing: 8) {
                         ProgressView()
                             .controlSize(.small)
