@@ -1404,6 +1404,7 @@ struct SettingsView: View {
     @State private var showAddServer = false
     @State private var serverToEdit: GatewayServerRecord?
     @State private var serverToRemove: GatewayServerRecord?
+    @State private var pendingRemoveServerId: String?
 
     private var vaultConfigPath: String {
         FileManager.default.homeDirectoryForCurrentUser
@@ -1450,7 +1451,10 @@ struct SettingsView: View {
                         GatewayServerRow(
                             server: server,
                             onEdit: { serverToEdit = server },
-                            onRemove: { serverToRemove = server }
+                            onRemove: {
+                                pendingRemoveServerId = server.id
+                                serverToRemove = server
+                            }
                         )
                     }
                 }
@@ -1498,13 +1502,15 @@ struct SettingsView: View {
             titleVisibility: .visible
         ) {
             Button("Remove", role: .destructive) {
-                if let serverToRemove {
-                    store.removeGatewayServer(id: serverToRemove.id)
+                if let pendingRemoveServerId {
+                    store.removeGatewayServer(id: pendingRemoveServerId)
                 }
-                self.serverToRemove = nil
+                serverToRemove = nil
+                self.pendingRemoveServerId = nil
             }
             Button("Cancel", role: .cancel) {
                 serverToRemove = nil
+                pendingRemoveServerId = nil
             }
         } message: {
             Text("This removes the server from config.json. Credential bindings for this server are removed too.")

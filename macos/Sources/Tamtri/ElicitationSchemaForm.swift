@@ -76,6 +76,7 @@ struct ElicitationSchemaField: Identifiable, Equatable {
     let title: String
     let description: String?
     let type: String
+    let itemType: String?
     let required: Bool
     let enumValues: [String]
     let minLength: Int?
@@ -98,6 +99,13 @@ enum ElicitationSchemaParser {
                 return nil
             }
             let type = string(descriptor["type"]) ?? "string"
+            let itemType: String?
+            if type == "array" {
+                let items = valueObject(descriptor["items"])
+                itemType = string(items["type"]) ?? "string"
+            } else {
+                itemType = nil
+            }
             let enumValues: [String]
             if case .array(let values) = descriptor["enum"] ?? .null {
                 enumValues = values.compactMap { if case .string(let text) = $0 { text } else { nil } }
@@ -109,6 +117,7 @@ enum ElicitationSchemaParser {
                 title: string(descriptor["title"]) ?? name,
                 description: string(descriptor["description"]),
                 type: type,
+                itemType: itemType,
                 required: required.contains(name),
                 enumValues: enumValues,
                 minLength: int(descriptor["minLength"]),
@@ -160,6 +169,12 @@ enum ElicitationSchemaFormBuilder {
                 if raw.isEmpty, field.required {
                     return nil
                 }
+            case "array":
+                let raw = values[field.id, default: ""]
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                if raw.isEmpty, field.required {
+                    return nil
+                }
             default:
                 let raw = values[field.id, default: ""].trimmingCharacters(in: .whitespacesAndNewlines)
                 if raw.isEmpty, field.required {
@@ -179,6 +194,32 @@ enum ElicitationSchemaFormBuilder {
                 if let raw = values[field.id], let number = Int(raw) { payload[field.id] = number }
             case "number":
                 if let raw = values[field.id], let number = Double(raw) { payload[field.id] = number }
+            case "array":
+                guard let raw = values[field.id] else { continue }
+                let parts = raw
+                    .split(whereSeparator: { $0 == "," || $0 == "\n" })
+                    .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                    .filter { !$0.isEmpty }
+                if parts.isEmpty { continue }
+                switch field.itemType ?? "string" {
+                case "integer":
+                    let parsed = parts.compactMap(Int.init)
+                    if !parsed.isEmpty { payload[field.id] = parsed }
+                case "number":
+                    let parsed = parts.compactMap(Double.init)
+                    if !parsed.isEmpty { payload[field.id] = parsed }
+                case "boolean":
+                    let parsed = parts.compactMap { text -> Bool? in
+                        switch text.lowercased() {
+                        case "true", "1", "yes": return true
+                        case "false", "0", "no": return false
+                        default: return nil
+                        }
+                    }
+                    if !parsed.isEmpty { payload[field.id] = parsed }
+                default:
+                    payload[field.id] = parts
+                }
             default:
                 if let raw = values[field.id], !raw.isEmpty { payload[field.id] = raw }
             }
@@ -219,8 +260,8 @@ struct ElicitationSchemaForm: View {
     private func fieldView(_ field: ElicitationSchemaField) -> some View {
         switch field.type {
         case "boolean":
-            Toggle("", isOn: binding(for: field.id, default: false))
-                .labelsHidden()
+            Toggle(field.title, isOn: binding(for: field.id, default: false))
+                .accessibilityLabel(Text(field.title))
         case "string" where !field.enumValues.isEmpty:
             Picker("", selection: binding(for: field.id, default: field.enumValues.first ?? "")) {
                 ForEach(field.enumValues, id: \.self) { option in
@@ -228,12 +269,23 @@ struct ElicitationSchemaForm: View {
                 }
             }
             .labelsHidden()
+            .accessibilityLabel(Text(field.title))
         case "integer", "number":
             TextField(field.title, text: binding(for: field.id, default: ""))
                 .textFieldStyle(.roundedBorder)
+                .accessibilityLabel(Text(field.title))
+        case "array":
+            TextField(
+                field.title,
+                text: binding(for: field.id, default: "")
+            )
+            .textFieldStyle(.roundedBorder)
+            .accessibilityLabel(Text(field.title))
+            .help("Enter values separated by commas or new lines.")
         default:
             TextField(field.title, text: binding(for: field.id, default: ""))
                 .textFieldStyle(.roundedBorder)
+                .accessibilityLabel(Text(field.title))
         }
     }
 

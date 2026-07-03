@@ -57,6 +57,8 @@ struct GatewayServerRecord: Identifiable, Equatable {
     let oauthTokenRef: String
     let oauthClientId: String
     let oauthAuthorizationEndpoint: String
+    let oauthTokenEndpoint: String
+    let oauthScopes: [String]
 }
 
 struct WorkdirFileRecord: Equatable, Identifiable, Hashable {
@@ -97,6 +99,7 @@ protocol CoreClient: Sendable {
     func listGatewayServers() async throws -> [GatewayServerRecord]
     func saveGatewayServers(_ servers: [GatewayServerRecord]) async throws
     func setGatewayCredential(credentialRef: String, value: String) async throws
+    func exportGatewayCredential(credentialRef: String) async throws -> String?
     func startOAuthFlow(serverId: String, redirectURI: String) async throws -> OAuthHandoff
     func completeOAuthCallback(callbackURL: String) async throws -> OAuthCompletion
 }
@@ -224,7 +227,9 @@ actor MockCoreClient: CoreClient {
                 oauthStatus: "not_configured",
                 oauthTokenRef: "",
                 oauthClientId: "",
-                oauthAuthorizationEndpoint: ""
+                oauthAuthorizationEndpoint: "",
+                oauthTokenEndpoint: "",
+                oauthScopes: []
             )
         ]
     }
@@ -232,6 +237,7 @@ actor MockCoreClient: CoreClient {
     func saveGatewayServers(_ servers: [GatewayServerRecord]) async throws {}
 
     func setGatewayCredential(credentialRef: String, value: String) async throws {}
+    func exportGatewayCredential(credentialRef: String) async throws -> String? { nil }
     func startOAuthFlow(serverId: String, redirectURI: String) async throws -> OAuthHandoff {
         OAuthHandoff(serverId: serverId, authorizationURL: "https://example.com", state: "mock", redirectURI: redirectURI)
     }

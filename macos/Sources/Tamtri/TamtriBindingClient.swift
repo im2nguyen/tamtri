@@ -127,6 +127,10 @@ actor TamtriBindingClient: CoreClient {
         try core.setGatewayCredential(credentialRef: credentialRef, value: value)
     }
 
+    func exportGatewayCredential(credentialRef: String) async throws -> String? {
+        try core.exportGatewayCredential(credentialRef: credentialRef)
+    }
+
     func startOAuthFlow(serverId: String, redirectURI: String) async throws -> OAuthHandoff {
         let dto = try core.startOauthFlow(serverId: serverId, redirectUri: redirectURI)
         return OAuthHandoff(
@@ -212,7 +216,9 @@ private func gatewayServerRecord(from dto: GatewayServerDto) -> GatewayServerRec
         oauthStatus: dto.oauthStatus,
         oauthTokenRef: dto.oauthTokenRef,
         oauthClientId: dto.oauthClientId,
-        oauthAuthorizationEndpoint: dto.oauthAuthorizationEndpoint
+        oauthAuthorizationEndpoint: dto.oauthAuthorizationEndpoint,
+        oauthTokenEndpoint: dto.oauthTokenEndpoint,
+        oauthScopes: dto.oauthScopes
     )
 }
 
@@ -232,7 +238,9 @@ private func gatewayServerDto(from record: GatewayServerRecord) -> GatewayServer
         oauthStatus: record.oauthStatus,
         oauthTokenRef: record.oauthTokenRef,
         oauthClientId: record.oauthClientId,
-        oauthAuthorizationEndpoint: record.oauthAuthorizationEndpoint
+        oauthAuthorizationEndpoint: record.oauthAuthorizationEndpoint,
+        oauthTokenEndpoint: record.oauthTokenEndpoint,
+        oauthScopes: record.oauthScopes
     )
 }
 

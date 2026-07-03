@@ -12,6 +12,11 @@ struct GatewayServerDraft: Equatable {
     var stdioArgsText: String
     var stdioEnvText: String
     var httpEndpoint: String
+    var oauthTokenRef: String
+    var oauthClientId: String
+    var oauthAuthorizationEndpoint: String
+    var oauthTokenEndpoint: String
+    var oauthScopesText: String
 
     static let empty = GatewayServerDraft(
         id: "",
@@ -22,7 +27,12 @@ struct GatewayServerDraft: Equatable {
         stdioCommand: "",
         stdioArgsText: "",
         stdioEnvText: "",
-        httpEndpoint: ""
+        httpEndpoint: "",
+        oauthTokenRef: "",
+        oauthClientId: "",
+        oauthAuthorizationEndpoint: "",
+        oauthTokenEndpoint: "",
+        oauthScopesText: ""
     )
 
     init(
@@ -34,7 +44,12 @@ struct GatewayServerDraft: Equatable {
         stdioCommand: String,
         stdioArgsText: String,
         stdioEnvText: String,
-        httpEndpoint: String
+        httpEndpoint: String,
+        oauthTokenRef: String,
+        oauthClientId: String,
+        oauthAuthorizationEndpoint: String,
+        oauthTokenEndpoint: String,
+        oauthScopesText: String
     ) {
         self.id = id
         self.displayName = displayName
@@ -45,6 +60,11 @@ struct GatewayServerDraft: Equatable {
         self.stdioArgsText = stdioArgsText
         self.stdioEnvText = stdioEnvText
         self.httpEndpoint = httpEndpoint
+        self.oauthTokenRef = oauthTokenRef
+        self.oauthClientId = oauthClientId
+        self.oauthAuthorizationEndpoint = oauthAuthorizationEndpoint
+        self.oauthTokenEndpoint = oauthTokenEndpoint
+        self.oauthScopesText = oauthScopesText
     }
 
     init(from server: GatewayServerRecord) {
@@ -57,10 +77,28 @@ struct GatewayServerDraft: Equatable {
         stdioArgsText = server.stdioArgs.joined(separator: "\n")
         stdioEnvText = server.stdioEnv.map { "\($0.name)=\($0.value)" }.joined(separator: "\n")
         httpEndpoint = server.httpEndpoint
+        oauthTokenRef = server.oauthTokenRef
+        oauthClientId = server.oauthClientId
+        oauthAuthorizationEndpoint = server.oauthAuthorizationEndpoint
+        oauthTokenEndpoint = server.oauthTokenEndpoint
+        oauthScopesText = server.oauthScopes.joined(separator: "\n")
     }
 
     func toRecord(preservingCredentialsFrom existing: GatewayServerRecord?) -> GatewayServerRecord {
-        GatewayServerRecord(
+        let oauthFieldsEmpty =
+            oauthTokenRef.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
+            oauthClientId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
+            oauthAuthorizationEndpoint.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
+            oauthTokenEndpoint.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
+            GatewayServerDraft.parseLines(oauthScopesText).isEmpty
+
+        let resolvedOauthTokenRef = oauthFieldsEmpty ? (existing?.oauthTokenRef ?? "") : oauthTokenRef
+        let resolvedOauthClientId = oauthFieldsEmpty ? (existing?.oauthClientId ?? "") : oauthClientId
+        let resolvedOauthAuthorizationEndpoint = oauthFieldsEmpty ? (existing?.oauthAuthorizationEndpoint ?? "") : oauthAuthorizationEndpoint
+        let resolvedOauthTokenEndpoint = oauthFieldsEmpty ? (existing?.oauthTokenEndpoint ?? "") : oauthTokenEndpoint
+        let resolvedOauthScopes = oauthFieldsEmpty ? (existing?.oauthScopes ?? []) : GatewayServerDraft.parseLines(oauthScopesText)
+
+        return GatewayServerRecord(
             id: id.trimmingCharacters(in: .whitespacesAndNewlines),
             displayName: displayName.trimmingCharacters(in: .whitespacesAndNewlines),
             enabled: enabled,
@@ -73,9 +111,11 @@ struct GatewayServerDraft: Equatable {
             credentialRefs: existing?.credentialRefs ?? [],
             missingCredentialRefs: existing?.missingCredentialRefs ?? [],
             oauthStatus: existing?.oauthStatus ?? "not_configured",
-            oauthTokenRef: existing?.oauthTokenRef ?? "",
-            oauthClientId: existing?.oauthClientId ?? "",
-            oauthAuthorizationEndpoint: existing?.oauthAuthorizationEndpoint ?? ""
+            oauthTokenRef: resolvedOauthTokenRef.trimmingCharacters(in: .whitespacesAndNewlines),
+            oauthClientId: resolvedOauthClientId.trimmingCharacters(in: .whitespacesAndNewlines),
+            oauthAuthorizationEndpoint: resolvedOauthAuthorizationEndpoint.trimmingCharacters(in: .whitespacesAndNewlines),
+            oauthTokenEndpoint: resolvedOauthTokenEndpoint.trimmingCharacters(in: .whitespacesAndNewlines),
+            oauthScopes: resolvedOauthScopes
         )
     }
 
@@ -207,6 +247,26 @@ struct GatewayServerEditorSheet: View {
                 } else {
                     TextField("Endpoint URL", text: $draft.httpEndpoint)
                         .textFieldStyle(.roundedBorder)
+
+                    Section("OAuth (optional)") {
+                        TextField("Token reference (e.g. keychain://my-server-oauth)", text: $draft.oauthTokenRef)
+                            .textFieldStyle(.roundedBorder)
+                        TextField("Client ID", text: $draft.oauthClientId)
+                            .textFieldStyle(.roundedBorder)
+                        TextField("Authorization endpoint URL", text: $draft.oauthAuthorizationEndpoint)
+                            .textFieldStyle(.roundedBorder)
+                        TextField("Token endpoint URL", text: $draft.oauthTokenEndpoint)
+                            .textFieldStyle(.roundedBorder)
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Scopes (one per line)")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            TextEditor(text: $draft.oauthScopesText)
+                                .font(.body.monospaced())
+                                .frame(height: 56)
+                                .overlay(RoundedRectangle(cornerRadius: 6).stroke(.quaternary))
+                        }
+                    }
                 }
             }
             .formStyle(.grouped)
@@ -274,6 +334,33 @@ struct GatewayServerEditorSheet: View {
         if record.transport == "streamable_http", record.httpEndpoint.isEmpty {
             validationMessage = "Endpoint URL is required."
             return
+        }
+        if record.transport == "streamable_http" {
+            let oauthFieldsPresent =
+                !record.oauthTokenRef.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
+                !record.oauthClientId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
+                !record.oauthAuthorizationEndpoint.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
+                !record.oauthTokenEndpoint.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
+                !record.oauthScopes.isEmpty
+
+            if oauthFieldsPresent {
+                if record.oauthTokenRef.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    validationMessage = "OAuth token reference is required when configuring OAuth."
+                    return
+                }
+                if record.oauthClientId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    validationMessage = "OAuth client ID is required when configuring OAuth."
+                    return
+                }
+                if record.oauthAuthorizationEndpoint.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    validationMessage = "OAuth authorization endpoint is required when configuring OAuth."
+                    return
+                }
+                if record.oauthTokenEndpoint.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    validationMessage = "OAuth token endpoint is required when configuring OAuth."
+                    return
+                }
+            }
         }
         if case .add = mode, existingServers.contains(where: { $0.id == record.id }) {
             validationMessage = "A server with this ID already exists."

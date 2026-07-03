@@ -50,8 +50,30 @@ final class AppStore: ObservableObject {
                         let preferNewest = event.kind == "turn_ended"
                         Task { await self.refreshWorkdirFiles(preferNewest: preferNewest, force: preferNewest) }
                     }
+                    if event.kind == "gateway_credential_updated" {
+                        Task { @MainActor in
+                            await self.persistUpdatedCredentialToKeychain(payloadJSON: event.payloadJSON)
+                        }
+                    }
                 }
             }
+        }
+    }
+
+    private func persistUpdatedCredentialToKeychain(payloadJSON: String) async {
+        guard let data = payloadJSON.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let credentialRef = object["credential_ref"] as? String,
+              !credentialRef.isEmpty
+        else {
+            return
+        }
+        do {
+            if let value = try await core.exportGatewayCredential(credentialRef: credentialRef) {
+                try KeychainCredentialStore.save(value: value, for: credentialRef)
+            }
+        } catch {
+            // Keychain persistence is best-effort; avoid failing the UI event loop.
         }
     }
 
@@ -351,20 +373,24 @@ final class AppStore: ObservableObject {
 
     func refreshGatewayServers() {
         Task {
-            do {
-                gatewayServers = try await core.listGatewayServers()
-                for server in gatewayServers where !server.oauthTokenRef.isEmpty {
-                    if let stored = OAuthTokenStore.load(for: server.oauthTokenRef) {
-                        try await core.setGatewayCredential(
-                            credentialRef: server.oauthTokenRef,
-                            value: stored
-                        )
-                    }
+            await reloadGatewayServers()
+        }
+    }
+
+    private func reloadGatewayServers() async {
+        do {
+            gatewayServers = try await core.listGatewayServers()
+            for server in gatewayServers where !server.oauthTokenRef.isEmpty {
+                if let stored = OAuthTokenStore.load(for: server.oauthTokenRef) {
+                    try await core.setGatewayCredential(
+                        credentialRef: server.oauthTokenRef,
+                        value: stored
+                    )
                 }
-                gatewayServers = try await core.listGatewayServers()
-            } catch {
-                errorMessage = error.localizedDescription
             }
+            gatewayServers = try await core.listGatewayServers()
+        } catch {
+            errorMessage = error.localizedDescription
         }
     }
 
@@ -372,7 +398,7 @@ final class AppStore: ObservableObject {
         Task {
             do {
                 try await core.saveGatewayServers(servers)
-                refreshGatewayServers()
+                await reloadGatewayServers()
             } catch {
                 errorMessage = error.localizedDescription
             }
@@ -380,7 +406,9 @@ final class AppStore: ObservableObject {
     }
 
     func removeGatewayServer(id: String) {
-        saveGatewayServers(gatewayServers.filter { $0.id != id })
+        let updated = gatewayServers.filter { $0.id != id }
+        gatewayServers = updated
+        saveGatewayServers(updated)
     }
 
     func setGatewayCredential(credentialRef: String, value: String) {
