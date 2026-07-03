@@ -231,7 +231,7 @@ async fn ping_while_downstream_call_pending() {
     client.list_tools().await.unwrap();
     tokio::time::timeout(Duration::from_secs(2), async {
         loop {
-            if responses.lock().await.len() >= 1 {
+            if !responses.lock().await.is_empty() {
                 break;
             }
             tokio::time::sleep(Duration::from_millis(10)).await;
