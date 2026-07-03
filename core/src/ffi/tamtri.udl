@@ -18,6 +18,43 @@ dictionary UiEvent {
   string payload_json;
 };
 
+dictionary GatewayServerDto {
+  string id;
+  string display_name;
+  boolean enabled;
+  string scope;
+  string transport;
+  string stdio_command;
+  sequence<string> stdio_args;
+  sequence<GatewayEnvVarDto> stdio_env;
+  string http_endpoint;
+  sequence<string> credential_refs;
+  sequence<string> missing_credential_refs;
+  string oauth_status;
+  string oauth_token_ref;
+  string oauth_client_id;
+  string oauth_authorization_endpoint;
+  string oauth_token_endpoint;
+  sequence<string> oauth_scopes;
+};
+
+dictionary GatewayEnvVarDto {
+  string name;
+  string value;
+};
+
+dictionary OAuthHandoffDto {
+  string server_id;
+  string authorization_url;
+  string state;
+  string redirect_uri;
+};
+
+dictionary OAuthCompletionDto {
+  string server_id;
+  string oauth_status;
+};
+
 [Error]
 enum TamtriError {
   "Core",
@@ -48,7 +85,21 @@ interface TamtriCore {
   [Throws=TamtriError]
   void respond_permission(string conversation_id, string request_id, string option_id);
   [Throws=TamtriError]
+  void respond_elicitation(string conversation_id, string request_id, string action, string? data_json);
+  [Throws=TamtriError]
   void cancel_run(string conversation_id);
+  [Throws=TamtriError]
+  sequence<GatewayServerDto> list_gateway_servers();
+  [Throws=TamtriError]
+  void save_gateway_servers(sequence<GatewayServerDto> servers);
+  [Throws=TamtriError]
+  void set_gateway_credential(string credential_ref, string value);
+  [Throws=TamtriError]
+  string? export_gateway_credential(string credential_ref);
+  [Throws=TamtriError]
+  OAuthHandoffDto start_oauth_flow(string server_id, string redirect_uri);
+  [Throws=TamtriError]
+  OAuthCompletionDto complete_oauth_callback(string callback_url);
 };
 
 namespace tamtri {};

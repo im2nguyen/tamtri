@@ -44,6 +44,21 @@ impl GatewayConfig {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub struct OAuthConfig {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub issuer: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub authorization_endpoint: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub token_endpoint: Option<String>,
+    pub client_id: String,
+    #[serde(default)]
+    pub scopes: Vec<String>,
+    pub token_ref: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct GatewayServerConfig {
     pub id: String,
     pub display_name: String,
@@ -54,6 +69,8 @@ pub struct GatewayServerConfig {
     pub timeout_secs: Option<u64>,
     #[serde(default)]
     pub credentials: Vec<CredentialBinding>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub oauth: Option<OAuthConfig>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -122,6 +139,15 @@ pub fn save_app_config(vault_path: &Path, config: &AppConfig) -> Result<()> {
     Ok(())
 }
 
+pub fn replace_gateway_servers(
+    vault_path: &Path,
+    servers: Vec<GatewayServerConfig>,
+) -> Result<()> {
+    let mut config = load_app_config(vault_path)?;
+    config.gateway.servers = servers;
+    save_app_config(vault_path, &config)
+}
+
 pub fn validate_app_config(config: &AppConfig) -> Result<()> {
     let mut ids = HashSet::new();
     for server in &config.gateway.servers {
@@ -140,6 +166,40 @@ pub fn validate_app_config(config: &AppConfig) -> Result<()> {
             if credential.credential_ref.trim().is_empty() {
                 return Err(CoreError::Protocol(format!(
                     "gateway server {} has an empty credential reference",
+                    server.id
+                )));
+            }
+        }
+        if let Some(oauth) = &server.oauth {
+            if oauth.client_id.trim().is_empty() {
+                return Err(CoreError::Protocol(format!(
+                    "gateway server {} has an empty oauth client_id",
+                    server.id
+                )));
+            }
+            if let Some(authorization_endpoint) = oauth.authorization_endpoint.as_deref()
+                && authorization_endpoint.trim().is_empty()
+            {
+                return Err(CoreError::Protocol(format!(
+                    "gateway server {} has an empty oauth authorization_endpoint",
+                    server.id
+                )));
+            }
+            if oauth
+                .token_endpoint
+                .as_deref()
+                .unwrap_or_default()
+                .trim()
+                .is_empty()
+            {
+                return Err(CoreError::Protocol(format!(
+                    "gateway server {} has an empty oauth token_endpoint",
+                    server.id
+                )));
+            }
+            if oauth.token_ref.trim().is_empty() {
+                return Err(CoreError::Protocol(format!(
+                    "gateway server {} has an empty oauth token_ref",
                     server.id
                 )));
             }
@@ -172,7 +232,29 @@ mod tests {
                     name: "MOCK_TOKEN".to_string(),
                 },
             }],
+            oauth: None,
         }
+    }
+
+    #[test]
+    fn replace_gateway_servers_preserves_other_fields() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = AppConfig {
+            default_harness_id: Some("hermes-acp".to_string()),
+            agent_roster: Vec::new(),
+            gateway: GatewayConfig {
+                default_call_timeout_secs: 120,
+                servers: vec![server("old", true)],
+            },
+        };
+        save_app_config(dir.path(), &config).unwrap();
+        replace_gateway_servers(dir.path(), vec![server("new", false)]).unwrap();
+        let loaded = load_app_config(dir.path()).unwrap();
+        assert_eq!(loaded.default_harness_id, Some("hermes-acp".to_string()));
+        assert_eq!(loaded.gateway.default_call_timeout_secs, 120);
+        assert_eq!(loaded.gateway.servers.len(), 1);
+        assert_eq!(loaded.gateway.servers[0].id, "new");
+        assert!(!loaded.gateway.servers[0].enabled);
     }
 
     #[test]

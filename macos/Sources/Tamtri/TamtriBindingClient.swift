@@ -106,27 +106,49 @@ actor TamtriBindingClient: CoreClient {
         try core.respondPermission(conversationId: conversationId, requestId: requestId, optionId: optionId)
     }
 
+    func respondElicitation(conversationId: String, requestId: String, action: String, dataJSON: String?) async throws {
+        try core.respondElicitation(conversationId: conversationId, requestId: requestId, action: action, dataJson: dataJSON)
+    }
+
     func cancelRun(conversationId: String) async throws {
         try core.cancelRun(conversationId: conversationId)
     }
 
     func listGatewayServers() async throws -> [GatewayServerRecord] {
-        try core.listGatewayServers().map {
-            GatewayServerRecord(
-                id: $0.id,
-                displayName: $0.displayName,
-                enabled: $0.enabled,
-                scope: $0.scope,
-                transport: $0.transport,
-                credentialRefs: $0.credentialRefs,
-                missingCredentialRefs: $0.missingCredentialRefs
-            )
-        }
+        try core.listGatewayServers().map(gatewayServerRecord(from:))
+    }
+
+    func saveGatewayServers(_ servers: [GatewayServerRecord]) async throws {
+        try core.saveGatewayServers(servers: servers.map(gatewayServerDto(from:)))
     }
 
     func setGatewayCredential(credentialRef: String, value: String) async throws {
         try KeychainCredentialStore.save(value: value, for: credentialRef)
         try core.setGatewayCredential(credentialRef: credentialRef, value: value)
+    }
+
+    func exportGatewayCredential(credentialRef: String) async throws -> String? {
+        try core.exportGatewayCredential(credentialRef: credentialRef)
+    }
+
+    func startOAuthFlow(serverId: String, redirectURI: String) async throws -> OAuthHandoff {
+        let dto = try core.startOauthFlow(serverId: serverId, redirectUri: redirectURI)
+        return OAuthHandoff(
+            serverId: dto.serverId,
+            authorizationURL: dto.authorizationUrl,
+            state: dto.state,
+            redirectURI: dto.redirectUri
+        )
+    }
+
+    func completeOAuthCallback(callbackURL: String) async throws -> OAuthCompletion {
+        let dto = try core.completeOauthCallback(callbackUrl: callbackURL)
+        if let server = try await listGatewayServers().first(where: { $0.id == dto.serverId }),
+           !server.oauthTokenRef.isEmpty,
+           let value = try core.exportGatewayCredential(credentialRef: server.oauthTokenRef) {
+            try KeychainCredentialStore.save(value: value, for: server.oauthTokenRef)
+        }
+        return OAuthCompletion(serverId: dto.serverId, oauthStatus: dto.oauthStatus)
     }
 
     nonisolated private func registerDevelopmentAgentsIfPresent() throws {
@@ -146,24 +168,6 @@ actor TamtriBindingClient: CoreClient {
                 command: command,
                 args: ["acp"]
             )
-        }
-    }
-}
-
-private enum KeychainCredentialStore {
-    static func save(value: String, for credentialRef: String) throws {
-        let data = Data(value.utf8)
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: "tamtri.gateway",
-            kSecAttrAccount as String: credentialRef
-        ]
-        SecItemDelete(query as CFDictionary)
-        var item = query
-        item[kSecValueData as String] = data
-        let status = SecItemAdd(item as CFDictionary, nil)
-        guard status == errSecSuccess else {
-            throw NSError(domain: NSOSStatusErrorDomain, code: Int(status))
         }
     }
 }
@@ -193,6 +197,50 @@ private func record(from dto: ConversationDto) -> ConversationRecord {
         harnessId: dto.activeHarnessId,
         modelId: dto.modelId,
         transcriptJSON: dto.transcriptJson
+    )
+}
+
+private func gatewayServerRecord(from dto: GatewayServerDto) -> GatewayServerRecord {
+    GatewayServerRecord(
+        id: dto.id,
+        displayName: dto.displayName,
+        enabled: dto.enabled,
+        scope: dto.scope,
+        transport: dto.transport,
+        stdioCommand: dto.stdioCommand,
+        stdioArgs: dto.stdioArgs,
+        stdioEnv: dto.stdioEnv.map { GatewayEnvVar(name: $0.name, value: $0.value) },
+        httpEndpoint: dto.httpEndpoint,
+        credentialRefs: dto.credentialRefs,
+        missingCredentialRefs: dto.missingCredentialRefs,
+        oauthStatus: dto.oauthStatus,
+        oauthTokenRef: dto.oauthTokenRef,
+        oauthClientId: dto.oauthClientId,
+        oauthAuthorizationEndpoint: dto.oauthAuthorizationEndpoint,
+        oauthTokenEndpoint: dto.oauthTokenEndpoint,
+        oauthScopes: dto.oauthScopes
+    )
+}
+
+private func gatewayServerDto(from record: GatewayServerRecord) -> GatewayServerDto {
+    GatewayServerDto(
+        id: record.id,
+        displayName: record.displayName,
+        enabled: record.enabled,
+        scope: record.scope,
+        transport: record.transport,
+        stdioCommand: record.stdioCommand,
+        stdioArgs: record.stdioArgs,
+        stdioEnv: record.stdioEnv.map { GatewayEnvVarDto(name: $0.name, value: $0.value) },
+        httpEndpoint: record.httpEndpoint,
+        credentialRefs: record.credentialRefs,
+        missingCredentialRefs: record.missingCredentialRefs,
+        oauthStatus: record.oauthStatus,
+        oauthTokenRef: record.oauthTokenRef,
+        oauthClientId: record.oauthClientId,
+        oauthAuthorizationEndpoint: record.oauthAuthorizationEndpoint,
+        oauthTokenEndpoint: record.oauthTokenEndpoint,
+        oauthScopes: record.oauthScopes
     )
 }
 

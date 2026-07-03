@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use std::time::Duration;
 
 use serde::de::DeserializeOwned;
@@ -6,14 +7,16 @@ use serde_json::json;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
+use async_trait::async_trait;
+
 use crate::Result;
 use crate::mcp::jsonrpc::{JsonRpcError, METHOD_NOT_FOUND};
 use crate::mcp::protocol::{
-    CallToolParams, CallToolResult, ClientCapabilities, GetPromptParams, GetPromptResult,
-    Implementation, InitializeParams, InitializeResult, ListPromptsParams, ListPromptsResult,
-    ListResourcesParams, ListResourcesResult, ListToolsParams, ListToolsResult,
-    MCP_PROTOCOL_VERSION, Prompt, ReadResourceParams, ReadResourceResult, Resource,
-    ServerCapabilities, Tool,
+    CallToolParams, CallToolResult, ClientCapabilities, ElicitationCapability,
+    GetPromptParams, GetPromptResult, Implementation, InitializeParams, InitializeResult,
+    ListPromptsParams, ListPromptsResult, ListResourcesParams, ListResourcesResult,
+    ListToolsParams, ListToolsResult, MCP_PROTOCOL_VERSION, Prompt, ReadResourceParams,
+    ReadResourceResult, Resource, ServerCapabilities, Tool,
 };
 use crate::rpc::dispatch::{InboundMessage, RpcConnection, RpcHandle};
 use crate::rpc::transport::Transport;
@@ -25,6 +28,11 @@ pub enum McpClientEvent {
     Progress { params: Value },
     Log { params: Value },
     Cancelled { params: Value },
+}
+
+#[async_trait]
+pub trait ElicitationHandler: Send + Sync {
+    async fn handle_create(&self, params: Value) -> std::result::Result<Value, JsonRpcError>;
 }
 
 pub struct McpClientConfig {
@@ -57,7 +65,7 @@ impl McpClient {
         config: McpClientConfig,
     ) -> Result<Self> {
         let transport = StdioTransport::spawn(command, args, env).await?;
-        let mut client = Self::with_transport(Box::new(transport), config, None);
+        let mut client = Self::with_transport(Box::new(transport), config, None, None);
         client.initialize().await?;
         client.send_initialized_notification().await?;
         Ok(client)
@@ -69,9 +77,10 @@ impl McpClient {
         env: &[(String, String)],
         config: McpClientConfig,
         events: mpsc::UnboundedSender<McpClientEvent>,
+        elicitation: Option<Arc<dyn ElicitationHandler>>,
     ) -> Result<Self> {
         let transport = StdioTransport::spawn(command, args, env).await?;
-        let mut client = Self::with_transport(Box::new(transport), config, Some(events));
+        let mut client = Self::with_transport(Box::new(transport), config, Some(events), elicitation);
         client.initialize().await?;
         client.send_initialized_notification().await?;
         Ok(client)
@@ -83,7 +92,7 @@ impl McpClient {
         config: McpClientConfig,
     ) -> Result<Self> {
         let transport = HttpTransport::new(endpoint, headers)?;
-        let mut client = Self::with_transport(Box::new(transport), config, None);
+        let mut client = Self::with_transport(Box::new(transport), config, None, None);
         client.initialize().await?;
         client.send_initialized_notification().await?;
         Ok(client)
@@ -94,9 +103,10 @@ impl McpClient {
         headers: &[(String, String)],
         config: McpClientConfig,
         events: mpsc::UnboundedSender<McpClientEvent>,
+        elicitation: Option<Arc<dyn ElicitationHandler>>,
     ) -> Result<Self> {
         let transport = HttpTransport::new(endpoint, headers)?;
-        let mut client = Self::with_transport(Box::new(transport), config, Some(events));
+        let mut client = Self::with_transport(Box::new(transport), config, Some(events), elicitation);
         client.initialize().await?;
         client.send_initialized_notification().await?;
         Ok(client)
@@ -106,9 +116,15 @@ impl McpClient {
         transport: Box<dyn Transport>,
         config: McpClientConfig,
         events: Option<mpsc::UnboundedSender<McpClientEvent>>,
+        elicitation: Option<Arc<dyn ElicitationHandler>>,
     ) -> Self {
         let (handle, inbound) = RpcConnection::start(transport);
-        let inbound_driver = tokio::spawn(run_inbound_driver(handle.clone(), inbound, events));
+        let inbound_driver = tokio::spawn(run_inbound_driver(
+            handle.clone(),
+            inbound,
+            events,
+            elicitation,
+        ));
         Self {
             handle,
             inbound_driver,
@@ -121,7 +137,12 @@ impl McpClient {
     pub async fn initialize(&mut self) -> Result<InitializeResult> {
         let params = InitializeParams {
             protocol_version: MCP_PROTOCOL_VERSION.to_string(),
-            capabilities: ClientCapabilities::default(),
+            capabilities: ClientCapabilities {
+                elicitation: Some(ElicitationCapability {
+                    form: Some(serde_json::json!({})),
+                    url: Some(serde_json::json!({})),
+                }),
+            },
             client_info: Implementation {
                 name: "tamtri-core".to_string(),
                 version: env!("CARGO_PKG_VERSION").to_string(),
@@ -302,11 +323,26 @@ async fn run_inbound_driver(
     handle: RpcHandle,
     mut inbound: crate::rpc::dispatch::InboundRequests,
     events: Option<mpsc::UnboundedSender<McpClientEvent>>,
+    elicitation: Option<Arc<dyn ElicitationHandler>>,
 ) {
     while let Some(message) = inbound.recv().await {
         match message {
             InboundMessage::Request(req) if req.method == "ping" => {
                 let _ = handle.respond(req.id, Ok(json!({}))).await;
+            }
+            InboundMessage::Request(req) if req.method == "elicitation/create" => {
+                let result = if let Some(handler) = &elicitation {
+                    handler
+                        .handle_create(req.params.unwrap_or_else(|| json!({})))
+                        .await
+                } else {
+                    Err(JsonRpcError {
+                        code: METHOD_NOT_FOUND,
+                        message: "elicitation is not supported".to_string(),
+                        data: None,
+                    })
+                };
+                let _ = handle.respond(req.id, result).await;
             }
             InboundMessage::Request(req) => {
                 tracing::warn!("unsupported MCP server request {}", req.method);
@@ -477,7 +513,7 @@ mod tests {
     ) -> (McpClient, Arc<TokioMutex<Vec<Sent>>>) {
         let (transport, sent) = MockTransport::new(incoming);
         (
-            McpClient::with_transport(Box::new(transport), config, None),
+            McpClient::with_transport(Box::new(transport), config, None, None),
             sent,
         )
     }
@@ -530,7 +566,7 @@ mod tests {
     async fn sends_initialized_notification() {
         let (transport, sent) = MockTransport::new(vec![init_response()]);
         let mut client =
-            McpClient::with_transport(Box::new(transport), McpClientConfig::default(), None);
+            McpClient::with_transport(Box::new(transport), McpClientConfig::default(), None, None);
         client.initialize().await.unwrap();
         client.send_initialized_notification().await.unwrap();
         let sent = wait_for_sent_len(&sent, 2).await;
@@ -709,6 +745,7 @@ mod tests {
             Box::new(transport),
             McpClientConfig::default(),
             Some(events_tx),
+            None,
         );
         assert!(client.list_tools().await.unwrap().is_empty());
 
@@ -851,6 +888,7 @@ mod tests {
                 init_timeout: Duration::from_millis(5),
                 call_timeout: Duration::from_millis(5),
             },
+            None,
             None,
         );
         assert!(matches!(

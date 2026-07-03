@@ -45,6 +45,14 @@ impl FilesystemVault {
         &self.root
     }
 
+    pub fn append_vault_event(&self, event: &Event) -> Result<()> {
+        append_vault_event(&self.root, event)
+    }
+
+    pub fn read_vault_events(&self) -> Result<Vec<Event>> {
+        read_vault_events(&self.root)
+    }
+
     pub fn conversation_workdir(&self, id: Id) -> Result<Option<PathBuf>> {
         let dir = self.resolve_folder(id)?;
         Ok(Some(dir.join("workdir")))
@@ -236,6 +244,26 @@ impl FilesystemVault {
         let (messages, _) = Self::read_messages(dir)?;
         Ok(Conversation::from_parts(meta, messages))
     }
+}
+
+pub fn append_vault_event(root: &Path, event: &Event) -> Result<()> {
+    let line = event_to_line(event)?;
+    let path = root.join("events.jsonl");
+    let mut file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)?;
+    writeln!(file, "{line}")?;
+    Ok(())
+}
+
+pub fn read_vault_events(root: &Path) -> Result<Vec<Event>> {
+    let path = root.join("events.jsonl");
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+    let raw = fs::read_to_string(&path)?;
+    raw.lines().map(event_from_line).collect()
 }
 
 impl ConversationVault for FilesystemVault {

@@ -51,6 +51,16 @@ struct TranscriptContentBlock: Decodable, Equatable {
     let sha256: String?
     let inline: String?
 
+    let requestId: String?
+    let serverId: String?
+    let originToolCallId: String?
+    let mode: String?
+    let message: String?
+    let schema: JSONValue?
+    let url: String?
+    let action: String?
+    let data: JSONValue?
+
     enum CodingKeys: String, CodingKey {
         case type
         case text
@@ -63,6 +73,15 @@ struct TranscriptContentBlock: Decodable, Equatable {
         case size
         case sha256
         case inline
+        case requestId = "request_id"
+        case serverId = "server_id"
+        case originToolCallId = "origin_tool_call_id"
+        case mode
+        case message
+        case schema
+        case url
+        case action
+        case data
     }
 
     var inputSummary: String {

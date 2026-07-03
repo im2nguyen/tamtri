@@ -8,17 +8,29 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tokio::runtime::{Builder, Runtime};
+use url::Url;
+use uuid::Uuid;
 
 use crate::artifact::{detect_mime, verify_inline_artifact, ArtifactSnapshot, ArtifactSnapshotter, verify_attachment};
-use crate::config::load_app_config;
+use crate::config::{
+    load_app_config, replace_gateway_servers, GatewayScope, GatewayServerConfig, GatewayTransport,
+    OAuthConfig,
+};
 use crate::conversation::reduce::TurnReducer;
 use crate::conversation::{
-    ContentBlock, Conversation, Id, McpServerRef, Message, Role, WorkingDir,
+    ContentBlock, Conversation, ElicitationAction, Id, McpServerRef, Message, Role, WorkingDir,
 };
 use crate::harness::acp::{AcpAdapter, AgentLaunchSpec};
 use crate::harness::{
     ContextSeed, ConversationContext, HarnessAdapter, HarnessEvent, RunControl, TurnInput,
 };
+use crate::mcp::elicitation::{audit_safe_elicitation_url, sanitize_transcript_data};
+use crate::mcp::oauth::{
+    PkceChallenge, build_authorization_url, exchange_authorization_code, generate_pkce,
+    oauth_connection_status, oauth_status_label, parse_stored_oauth, serialize_stored_oauth,
+    stored_oauth_from_token_response, validate_callback_url,
+};
+use crate::mcp::url_handoff::validate_handoff_url;
 use crate::mcp::endpoint::{GatewayEndpoint, start_loopback_gateway};
 use crate::mcp::gateway::{GatewayEvent, McpGateway, MemoryCredentials};
 use crate::vault::events::{Event, EventKind};
@@ -76,14 +88,44 @@ pub struct WorkdirFileContentDto {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, uniffi::Record)]
+pub struct GatewayEnvVarDto {
+    pub name: String,
+    pub value: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, uniffi::Record)]
 pub struct GatewayServerDto {
     pub id: String,
     pub display_name: String,
     pub enabled: bool,
     pub scope: String,
     pub transport: String,
+    pub stdio_command: String,
+    pub stdio_args: Vec<String>,
+    pub stdio_env: Vec<GatewayEnvVarDto>,
+    pub http_endpoint: String,
     pub credential_refs: Vec<String>,
     pub missing_credential_refs: Vec<String>,
+    pub oauth_status: String,
+    pub oauth_token_ref: String,
+    pub oauth_client_id: String,
+    pub oauth_authorization_endpoint: String,
+    pub oauth_token_endpoint: String,
+    pub oauth_scopes: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, uniffi::Record)]
+pub struct OAuthHandoffDto {
+    pub server_id: String,
+    pub authorization_url: String,
+    pub state: String,
+    pub redirect_uri: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, uniffi::Record)]
+pub struct OAuthCompletionDto {
+    pub server_id: String,
+    pub oauth_status: String,
 }
 
 type FfiResult<T> = std::result::Result<T, TamtriError>;
@@ -101,15 +143,31 @@ impl From<CoreError> for TamtriError {
     }
 }
 
+#[derive(Clone)]
+struct PendingOAuthFlow {
+    server_id: String,
+    pkce: PkceChallenge,
+    redirect_uri: String,
+    token_ref: String,
+}
+
+#[derive(Clone)]
+struct ActiveRun {
+    control: RunControl,
+    gateway: Arc<McpGateway>,
+    gateway_blocks: Arc<Mutex<Vec<ContentBlock>>>,
+}
+
 #[derive(uniffi::Object)]
 pub struct TamtriCore {
     vault: Arc<FilesystemVault>,
     runtime: Runtime,
     adapters: Arc<Mutex<HashMap<String, Arc<dyn HarnessAdapter>>>>,
-    active_runs: Arc<Mutex<HashMap<Id, RunControl>>>,
+    active_runs: Arc<Mutex<HashMap<Id, ActiveRun>>>,
     credentials: Arc<MemoryCredentials>,
     observer: Arc<dyn ConversationObserver>,
     conversation_cache: Arc<Mutex<HashMap<Id, CachedConversationDto>>>,
+    pending_oauth: Arc<Mutex<HashMap<String, PendingOAuthFlow>>>,
 }
 
 const CONVERSATION_CACHE_LIMIT: usize = 32;
@@ -133,6 +191,7 @@ impl TamtriCore {
             credentials: Arc::new(MemoryCredentials::default()),
             observer,
             conversation_cache: Arc::new(Mutex::new(HashMap::new())),
+            pending_oauth: Arc::new(Mutex::new(HashMap::new())),
         })
     }
 
@@ -240,6 +299,17 @@ impl TamtriCore {
             .map_err(ffi_err)
     }
 
+    pub fn respond_elicitation(
+        &self,
+        conversation_id: String,
+        request_id: String,
+        action: String,
+        data_json: Option<String>,
+    ) -> FfiResult<()> {
+        self.respond_elicitation_inner(&conversation_id, &request_id, &action, data_json.as_deref())
+            .map_err(ffi_err)
+    }
+
     pub fn cancel_run(&self, conversation_id: String) -> FfiResult<()> {
         self.cancel_run_inner(&conversation_id).map_err(ffi_err)
     }
@@ -250,6 +320,33 @@ impl TamtriCore {
 
     pub fn set_gateway_credential(&self, credential_ref: String, value: String) -> FfiResult<()> {
         self.credentials.set(credential_ref, value).map_err(ffi_err)
+    }
+
+    pub fn save_gateway_servers(&self, servers: Vec<GatewayServerDto>) -> FfiResult<()> {
+        self.save_gateway_servers_inner(&servers).map_err(ffi_err)
+    }
+
+    pub fn start_oauth_flow(
+        &self,
+        server_id: String,
+        redirect_uri: String,
+    ) -> FfiResult<OAuthHandoffDto> {
+        self.start_oauth_flow_inner(&server_id, &redirect_uri)
+            .map_err(ffi_err)
+    }
+
+    pub fn complete_oauth_callback(
+        &self,
+        callback_url: String,
+    ) -> FfiResult<OAuthCompletionDto> {
+        self.complete_oauth_callback_inner(&callback_url)
+            .map_err(ffi_err)
+    }
+
+    pub fn export_gateway_credential(&self, credential_ref: String) -> FfiResult<Option<String>> {
+        self.credentials
+            .get_stored(&credential_ref)
+            .map_err(ffi_err)
     }
 
     pub fn copy_file_to_workdir(
@@ -455,12 +552,19 @@ impl TamtriCore {
         let active_runs = Arc::clone(&self.active_runs);
         let observer = Arc::clone(&self.observer);
         let conversation_cache = Arc::clone(&self.conversation_cache);
+        let gateway_blocks = Arc::new(Mutex::new(Vec::<ContentBlock>::new()));
+        let gateway_for_run = Arc::clone(&gateway);
         self.runtime.spawn(async move {
             let gateway_vault = Arc::clone(&vault);
             let gateway_observer = Arc::clone(&observer);
+            let gateway_blocks_for_events = Arc::clone(&gateway_blocks);
             let mut gateway_event_rx = gateway_event_rx;
             let gateway_event_task = tokio::spawn(async move {
                 while let Some(event) = gateway_event_rx.recv().await {
+                    record_gateway_content_block(
+                        &gateway_blocks_for_events,
+                        &event,
+                    );
                     let _ = append_event_for_gateway_event(&gateway_vault, id, &event);
                     observer_emit_gateway(&gateway_observer, id, &event);
                 }
@@ -469,7 +573,14 @@ impl TamtriCore {
             match run {
                 Ok(mut run) => {
                     if let Ok(mut runs) = active_runs.lock() {
-                        runs.insert(id, run.control.clone());
+                        runs.insert(
+                            id,
+                            ActiveRun {
+                                control: run.control.clone(),
+                                gateway: Arc::clone(&gateway_for_run),
+                                gateway_blocks: Arc::clone(&gateway_blocks),
+                            },
+                        );
                     }
                     let mut reducer = TurnReducer::new(harness_id.clone());
                     while let Some(event) = run.events.recv().await {
@@ -530,7 +641,11 @@ impl TamtriCore {
                                     );
                                 }
                             }
-                            if !message.content.is_empty() {
+                            if !message.content.is_empty() || !gateway_blocks.lock().unwrap().is_empty()
+                            {
+                                message
+                                    .content
+                                    .extend(gateway_blocks.lock().unwrap().drain(..));
                                 let _ = vault.append_message(id, &message);
                                 if let Ok(mut cache) = conversation_cache.lock() {
                                     cache.remove(&id);
@@ -562,6 +677,7 @@ impl TamtriCore {
                 }
             }
             gateway_endpoint.shutdown().await;
+            gateway_for_run.cancel_pending_elicitations().await;
             gateway_event_task.abort();
         });
         Ok(())
@@ -579,22 +695,59 @@ impl TamtriCore {
             .lock()
             .map_err(|_| CoreError::Protocol("run registry lock poisoned".to_string()))?
             .get(&id)
-            .cloned()
+            .map(|run| run.control.clone())
             .ok_or(CoreError::NotFound(id))?;
         self.runtime
             .block_on(control.respond_permission(request_id, option_id))
     }
 
-    pub fn cancel_run_inner(&self, conversation_id: &str) -> Result<()> {
+    pub fn respond_elicitation_inner(
+        &self,
+        conversation_id: &str,
+        request_id: &str,
+        action: &str,
+        data_json: Option<&str>,
+    ) -> Result<()> {
         let id = parse_id(conversation_id)?;
-        let control = self
+        let action = parse_elicitation_action(action)?;
+        let data = match data_json {
+            Some(raw) if !raw.trim().is_empty() => Some(serde_json::from_str(raw)?),
+            _ => None,
+        };
+        let run = self
             .active_runs
             .lock()
             .map_err(|_| CoreError::Protocol("run registry lock poisoned".to_string()))?
             .get(&id)
             .cloned()
             .ok_or(CoreError::NotFound(id))?;
-        self.runtime.block_on(control.cancel())
+        self.runtime
+            .block_on(run.gateway.respond_elicitation(request_id, action.clone(), data.clone()))?;
+        let response_data = data.map(|value| sanitize_transcript_data(&value));
+        run.gateway_blocks
+            .lock()
+            .map_err(|_| CoreError::Protocol("gateway block lock poisoned".to_string()))?
+            .push(ContentBlock::ElicitationResponse {
+                request_id: request_id.to_string(),
+                action,
+                data: response_data,
+            });
+        Ok(())
+    }
+
+    pub fn cancel_run_inner(&self, conversation_id: &str) -> Result<()> {
+        let id = parse_id(conversation_id)?;
+        let run = self
+            .active_runs
+            .lock()
+            .map_err(|_| CoreError::Protocol("run registry lock poisoned".to_string()))?
+            .get(&id)
+            .cloned()
+            .ok_or(CoreError::NotFound(id))?;
+        self.runtime.block_on(async {
+            run.gateway.cancel_pending_elicitations().await;
+            run.control.cancel().await
+        })
     }
 
     pub fn list_gateway_servers_inner(&self) -> Result<Vec<GatewayServerDto>> {
@@ -603,39 +756,147 @@ impl TamtriCore {
             .gateway
             .servers
             .into_iter()
-            .map(|server| {
-                let credential_refs = server
-                    .credentials
-                    .iter()
-                    .map(|credential| credential.credential_ref.clone())
-                    .collect::<Vec<_>>();
-                let missing_credential_refs = credential_refs
-                    .iter()
-                    .filter_map(
-                        |credential_ref| match self.credentials.contains(credential_ref) {
-                            Ok(true) => None,
-                            Ok(false) | Err(_) => Some(credential_ref.clone()),
-                        },
-                    )
-                    .collect::<Vec<_>>();
-                Ok(GatewayServerDto {
-                    id: server.id,
-                    display_name: server.display_name,
-                    enabled: server.enabled,
-                    scope: serde_json::to_string(&server.scope)?
-                        .trim_matches('"')
-                        .to_string(),
-                    transport: match server.transport {
-                        crate::config::GatewayTransport::Stdio { .. } => "stdio".to_string(),
-                        crate::config::GatewayTransport::StreamableHttp { .. } => {
-                            "streamable_http".to_string()
-                        }
-                    },
-                    credential_refs,
-                    missing_credential_refs,
-                })
-            })
+            .map(|server| gateway_server_to_dto(&server, &self.credentials))
             .collect()
+    }
+
+    pub fn save_gateway_servers_inner(&self, servers: &[GatewayServerDto]) -> Result<()> {
+        let config = load_app_config(self.vault.root())?;
+        let existing_by_id = config
+            .gateway
+            .servers
+            .into_iter()
+            .map(|server| (server.id.clone(), server))
+            .collect::<HashMap<_, _>>();
+        let gateway_servers = servers
+            .iter()
+            .map(|server| gateway_server_from_dto(server, existing_by_id.get(&server.id)))
+            .collect::<Result<Vec<_>>>()?;
+        replace_gateway_servers(self.vault.root(), gateway_servers)
+    }
+
+    pub fn start_oauth_flow_inner(
+        &self,
+        server_id: &str,
+        redirect_uri: &str,
+    ) -> Result<OAuthHandoffDto> {
+        let config = load_app_config(self.vault.root())?;
+        let server = config
+            .gateway
+            .servers
+            .iter()
+            .find(|server| server.id == server_id)
+            .ok_or_else(|| CoreError::Protocol(format!("unknown gateway server: {server_id}")))?;
+        let oauth = server.oauth.as_ref().ok_or_else(|| {
+            CoreError::Protocol(format!("gateway server {server_id} has no oauth config"))
+        })?;
+        let pkce = generate_pkce();
+        let state = Uuid::now_v7().to_string();
+        let authorization_url =
+            build_authorization_url(oauth, redirect_uri, &pkce, &state)?;
+        self.pending_oauth
+            .lock()
+            .map_err(|_| CoreError::Protocol("oauth flow lock poisoned".to_string()))?
+            .insert(
+                state.clone(),
+                PendingOAuthFlow {
+                    server_id: server_id.to_string(),
+                    pkce,
+                    redirect_uri: redirect_uri.to_string(),
+                    token_ref: oauth.token_ref.clone(),
+                },
+            );
+        self.vault.append_vault_event(&Event::new(
+            EventKind::OAuthHandoffStarted,
+            json!({
+                "server_id": server_id,
+                "credential_ref": oauth.token_ref.clone(),
+            }),
+        ))?;
+        Ok(OAuthHandoffDto {
+            server_id: server_id.to_string(),
+            authorization_url,
+            state,
+            redirect_uri: redirect_uri.to_string(),
+        })
+    }
+
+    pub fn complete_oauth_callback_inner(
+        &self,
+        callback_url: &str,
+    ) -> Result<OAuthCompletionDto> {
+        let state = Url::parse(callback_url)
+            .map_err(|err| CoreError::Protocol(format!("invalid callback URL: {err}")))?
+            .query_pairs()
+            .find(|(key, _)| key == "state")
+            .map(|(_, value)| value.into_owned())
+            .ok_or_else(|| CoreError::Protocol("oauth callback missing state".to_string()))?;
+        let pending = self
+            .pending_oauth
+            .lock()
+            .map_err(|_| CoreError::Protocol("oauth flow lock poisoned".to_string()))?
+            .remove(&state)
+            .ok_or_else(|| CoreError::Protocol("unknown oauth flow state".to_string()))?;
+        let config = load_app_config(self.vault.root())?;
+        let server = config
+            .gateway
+            .servers
+            .iter()
+            .find(|server| server.id == pending.server_id)
+            .ok_or_else(|| {
+                CoreError::Protocol(format!("unknown gateway server: {}", pending.server_id))
+            })?;
+        let oauth = server.oauth.as_ref().ok_or_else(|| {
+            CoreError::Protocol(format!(
+                "gateway server {} has no oauth config",
+                pending.server_id
+            ))
+        })?;
+        let (code, _) = validate_callback_url(callback_url, &state)?;
+        let client = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .map_err(|err| CoreError::Protocol(format!("oauth http client failed: {err}")))?;
+        let tokens = std::thread::scope(|scope| -> Result<crate::mcp::oauth::TokenEndpointResponse> {
+            let handle = scope.spawn(|| {
+                let rt = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .map_err(|err| CoreError::Protocol(format!("oauth runtime failed: {err}")))?;
+                rt.block_on(exchange_authorization_code(
+                    &client,
+                    oauth,
+                    &code,
+                    &pending.redirect_uri,
+                    &pending.pkce,
+                ))
+            });
+            handle
+                .join()
+                .map_err(|_| CoreError::Protocol("oauth exchange thread panicked".to_string()))?
+        })?;
+        let bundle = stored_oauth_from_token_response(&tokens);
+        let serialized = serialize_stored_oauth(&bundle)?;
+        self.credentials
+            .set(pending.token_ref.clone(), serialized)?;
+        let status = oauth_status_label(oauth_connection_status(
+            Some(oauth),
+            true,
+            bundle.expires_at,
+            false,
+        ));
+        self.vault.append_vault_event(&Event::new(
+            EventKind::OAuthHandoffCompleted,
+            json!({
+                "server_id": pending.server_id,
+                "credential_ref": pending.token_ref,
+                "status": status,
+            }),
+        ))?;
+        Ok(OAuthCompletionDto {
+            server_id: pending.server_id,
+            oauth_status: status.to_string(),
+        })
     }
 
     pub fn copy_file_to_workdir_inner(
@@ -856,6 +1117,85 @@ fn append_event_for_gateway_event(
             EventKind::GatewayDownstreamError,
             json!({ "server_id": server_id, "message": message }),
         ),
+        GatewayEvent::ElicitationRequested {
+            server_id,
+            request_id,
+            mode,
+            message,
+            schema,
+            url,
+            origin_tool_call_id,
+        } => (
+            EventKind::ElicitationRequested,
+            json!({
+                "server_id": server_id,
+                "request_id": request_id,
+                "mode": mode,
+                "message": message,
+                "schema": schema,
+                "url": url.as_ref().map(|value| audit_safe_elicitation_url(value)),
+                "url_origin": url.as_ref().and_then(|value| {
+                    validate_handoff_url(value).ok().map(|validated| validated.origin)
+                }),
+                "origin_tool_call_id": origin_tool_call_id,
+            }),
+        ),
+        GatewayEvent::ElicitationResolved {
+            server_id,
+            request_id,
+            action,
+        } => (
+            EventKind::ElicitationResolved,
+            json!({
+                "server_id": server_id,
+                "request_id": request_id,
+                "action": action,
+            }),
+        ),
+        GatewayEvent::OAuthHandoffStarted {
+            server_id,
+            credential_ref,
+        } => (
+            EventKind::OAuthHandoffStarted,
+            json!({
+                "server_id": server_id,
+                "credential_ref": credential_ref,
+            }),
+        ),
+        GatewayEvent::OAuthHandoffCompleted {
+            server_id,
+            credential_ref,
+            status,
+        } => (
+            EventKind::OAuthHandoffCompleted,
+            json!({
+                "server_id": server_id,
+                "credential_ref": credential_ref,
+                "status": status,
+            }),
+        ),
+        GatewayEvent::OAuthRefreshFailed {
+            server_id,
+            credential_ref,
+        } => (
+            EventKind::OAuthRefreshFailed,
+            json!({
+                "server_id": server_id,
+                "credential_ref": credential_ref,
+            }),
+        ),
+        GatewayEvent::CredentialUpdated {
+            server_id,
+            credential_ref,
+            reason,
+        } => (
+            EventKind::GatewayCredentialInjected,
+            json!({
+                "server_id": server_id,
+                "credential_ref": credential_ref,
+                "target_kind": reason
+            }),
+        ),
     };
     vault.append_event(id, &Event::new(kind, payload))
 }
@@ -924,10 +1264,272 @@ fn gateway_event_kind(event: &GatewayEvent) -> &'static str {
         GatewayEvent::ServerConnected { .. } => "gateway_server_connected",
         GatewayEvent::ToolRouted { .. } => "gateway_tool_routed",
         GatewayEvent::CredentialInjected { .. } => "gateway_credential_injected",
+        GatewayEvent::CredentialUpdated { .. } => "gateway_credential_updated",
         GatewayEvent::Progress { .. } => "gateway_progress",
         GatewayEvent::Log { .. } => "gateway_log",
         GatewayEvent::Cancellation { .. } => "gateway_cancellation",
         GatewayEvent::DownstreamError { .. } => "gateway_downstream_error",
+        GatewayEvent::ElicitationRequested { .. } => "elicitation_requested",
+        GatewayEvent::ElicitationResolved { .. } => "elicitation_resolved",
+        GatewayEvent::OAuthHandoffStarted { .. } => "oauth_handoff_started",
+        GatewayEvent::OAuthHandoffCompleted { .. } => "oauth_handoff_completed",
+        GatewayEvent::OAuthRefreshFailed { .. } => "oauth_refresh_failed",
+    }
+}
+
+fn record_gateway_content_block(blocks: &Mutex<Vec<ContentBlock>>, event: &GatewayEvent) {
+    let GatewayEvent::ElicitationRequested {
+        request_id,
+        server_id,
+        origin_tool_call_id,
+        mode,
+        message,
+        schema,
+        url,
+        ..
+    } = event
+    else {
+        return;
+    };
+    let Ok(mut blocks) = blocks.lock() else {
+        return;
+    };
+    blocks.push(ContentBlock::ElicitationRequest {
+        request_id: request_id.clone(),
+        server_id: Some(server_id.clone()),
+        origin_tool_call_id: origin_tool_call_id.clone(),
+        mode: mode.clone(),
+        message: message.clone(),
+        schema: schema.clone(),
+        url: url.as_ref().map(|value| audit_safe_elicitation_url(value)),
+    });
+}
+
+fn parse_elicitation_action(action: &str) -> Result<ElicitationAction> {
+    match action {
+        "accept" => Ok(ElicitationAction::Accept),
+        "decline" => Ok(ElicitationAction::Decline),
+        "cancel" => Ok(ElicitationAction::Cancel),
+        _ => Err(CoreError::Protocol(format!(
+            "unknown elicitation action: {action}"
+        ))),
+    }
+}
+
+fn gateway_server_to_dto(
+    server: &GatewayServerConfig,
+    credentials: &MemoryCredentials,
+) -> Result<GatewayServerDto> {
+    let credential_refs = server
+        .credentials
+        .iter()
+        .map(|credential| credential.credential_ref.clone())
+        .collect::<Vec<_>>();
+    let missing_credential_refs = credential_refs
+        .iter()
+        .filter_map(|credential_ref| match credentials.contains(credential_ref) {
+            Ok(true) => None,
+            Ok(false) | Err(_) => Some(credential_ref.clone()),
+        })
+        .collect::<Vec<_>>();
+    let (transport, stdio_command, stdio_args, stdio_env, http_endpoint) =
+        match &server.transport {
+            GatewayTransport::Stdio {
+                command,
+                args,
+                env,
+            } => (
+                "stdio".to_string(),
+                command.clone(),
+                args.clone(),
+                env.iter()
+                    .map(|(name, value)| GatewayEnvVarDto {
+                        name: name.clone(),
+                        value: value.clone(),
+                    })
+                    .collect(),
+                String::new(),
+            ),
+            GatewayTransport::StreamableHttp { endpoint, .. } => (
+                "streamable_http".to_string(),
+                String::new(),
+                Vec::new(),
+                Vec::new(),
+                endpoint.clone(),
+            ),
+        };
+    let oauth_status = server
+        .oauth
+        .as_ref()
+        .map(|oauth| {
+            let stored = credentials
+                .get_stored(&oauth.token_ref)
+                .ok()
+                .flatten()
+                .and_then(|raw| parse_stored_oauth(&raw).ok());
+            let (has_access, expires_at, reauth_required) = stored
+                .as_ref()
+                .map(|bundle| {
+                    (
+                        !bundle.access_token.is_empty(),
+                        bundle.expires_at,
+                        bundle.reauth_required,
+                    )
+                })
+                .unwrap_or((false, None, false));
+            oauth_status_label(oauth_connection_status(
+                Some(oauth),
+                has_access,
+                expires_at,
+                reauth_required,
+            ))
+            .to_string()
+        })
+        .unwrap_or_else(|| "not_configured".to_string());
+    let (oauth_token_ref, oauth_client_id, oauth_authorization_endpoint, oauth_token_endpoint, oauth_scopes) = server
+        .oauth
+        .as_ref()
+        .map(|oauth| {
+            (
+                oauth.token_ref.clone(),
+                oauth.client_id.clone(),
+                oauth
+                    .authorization_endpoint
+                    .clone()
+                    .unwrap_or_default(),
+                oauth.token_endpoint.clone().unwrap_or_default(),
+                oauth.scopes.clone(),
+            )
+        })
+        .unwrap_or_default();
+    Ok(GatewayServerDto {
+        id: server.id.clone(),
+        display_name: server.display_name.clone(),
+        enabled: server.enabled,
+        scope: serde_json::to_string(&server.scope)?
+            .trim_matches('"')
+            .to_string(),
+        transport,
+        stdio_command,
+        stdio_args,
+        stdio_env,
+        http_endpoint,
+        credential_refs,
+        missing_credential_refs,
+        oauth_status,
+        oauth_token_ref,
+        oauth_client_id,
+        oauth_authorization_endpoint,
+        oauth_token_endpoint,
+        oauth_scopes,
+    })
+}
+
+fn gateway_server_from_dto(
+    server: &GatewayServerDto,
+    existing: Option<&GatewayServerConfig>,
+) -> Result<GatewayServerConfig> {
+    if server.id.trim().is_empty() {
+        return Err(CoreError::Protocol(
+            "gateway server id cannot be empty".to_string(),
+        ));
+    }
+    if server.display_name.trim().is_empty() {
+        return Err(CoreError::Protocol(
+            "gateway server display name cannot be empty".to_string(),
+        ));
+    }
+    let scope = parse_gateway_scope(&server.scope)?;
+    let transport = match server.transport.as_str() {
+        "stdio" => {
+            if server.stdio_command.trim().is_empty() {
+                return Err(CoreError::Protocol(
+                    "stdio transport requires a command path".to_string(),
+                ));
+            }
+            GatewayTransport::Stdio {
+                command: server.stdio_command.clone(),
+                args: server.stdio_args.clone(),
+                env: server
+                    .stdio_env
+                    .iter()
+                    .map(|entry| (entry.name.clone(), entry.value.clone()))
+                    .collect(),
+            }
+        }
+        "streamable_http" => {
+            if server.http_endpoint.trim().is_empty() {
+                return Err(CoreError::Protocol(
+                    "streamable_http transport requires an endpoint URL".to_string(),
+                ));
+            }
+            GatewayTransport::StreamableHttp {
+                endpoint: server.http_endpoint.clone(),
+                headers: Vec::new(),
+            }
+        }
+        other => {
+            return Err(CoreError::Protocol(format!(
+                "unknown gateway transport: {other}"
+            )));
+        }
+    };
+
+    let incoming_oauth_empty = server.oauth_token_ref.trim().is_empty()
+        && server.oauth_client_id.trim().is_empty()
+        && server.oauth_authorization_endpoint.trim().is_empty()
+        && server.oauth_token_endpoint.trim().is_empty()
+        && server.oauth_scopes.iter().all(|scope| scope.trim().is_empty());
+
+    let oauth = if incoming_oauth_empty {
+        existing.and_then(|existing| existing.oauth.clone())
+    } else if server.oauth_token_ref.trim().is_empty()
+        || server.oauth_client_id.trim().is_empty()
+        || server.oauth_authorization_endpoint.trim().is_empty()
+        || server.oauth_token_endpoint.trim().is_empty()
+    {
+        return Err(CoreError::Protocol(
+            "oauth config requires token_ref, client_id, authorization_endpoint, and token_endpoint"
+                .to_string(),
+        ));
+    } else {
+        Some(OAuthConfig {
+            issuer: None,
+            authorization_endpoint: Some(server.oauth_authorization_endpoint.trim().to_string()),
+            token_endpoint: Some(server.oauth_token_endpoint.trim().to_string()),
+            client_id: server.oauth_client_id.trim().to_string(),
+            scopes: server
+                .oauth_scopes
+                .iter()
+                .map(|scope| scope.trim().to_string())
+                .filter(|scope| !scope.is_empty())
+                .collect(),
+            token_ref: server.oauth_token_ref.trim().to_string(),
+        })
+    };
+
+    Ok(GatewayServerConfig {
+        id: server.id.clone(),
+        display_name: server.display_name.clone(),
+        enabled: server.enabled,
+        scope,
+        transport,
+        timeout_secs: existing.and_then(|existing| existing.timeout_secs),
+        credentials: existing
+            .map(|existing| existing.credentials.clone())
+            .unwrap_or_default(),
+        oauth,
+    })
+}
+
+fn parse_gateway_scope(scope: &str) -> Result<GatewayScope> {
+    match scope {
+        "system" => Ok(GatewayScope::System),
+        "user" => Ok(GatewayScope::User),
+        "project" => Ok(GatewayScope::Project),
+        other => Err(CoreError::Protocol(format!(
+            "unknown gateway scope: {other}"
+        ))),
     }
 }
 

@@ -27,7 +27,19 @@ pub struct InitializeResult {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
-pub struct ClientCapabilities {}
+pub struct ClientCapabilities {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub elicitation: Option<ElicitationCapability>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ElicitationCapability {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub form: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub url: Option<serde_json::Value>,
+}
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -211,4 +223,26 @@ pub struct LoggingMessageParams {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub logger: Option<String>,
     pub data: serde_json::Value,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ElicitationCreateParams {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mode: Option<String>,
+    pub message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub requested_schema: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub elicitation_id: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ElicitationCreateResult {
+    pub action: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content: Option<serde_json::Value>,
 }

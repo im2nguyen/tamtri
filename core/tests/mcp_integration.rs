@@ -9,8 +9,8 @@ async fn integration_echo_tool() {
         .unwrap();
 
     let tools = client.list_tools().await.unwrap();
-    assert_eq!(tools.len(), 1);
-    assert_eq!(tools[0].name, "echo");
+    assert_eq!(tools.len(), 3);
+    assert!(tools.iter().any(|tool| tool.name == "echo"));
 
     let result = client
         .call_tool("echo", json!({"message": "hello"}), None)

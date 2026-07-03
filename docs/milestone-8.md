@@ -227,6 +227,10 @@ Add the Mac-app feeling:
 - app settings for vault path, harness roster, gateway servers, credentials status, hotkey.
 - cold-start performance budget with measurement.
 
+Copy pass:
+
+- **OAuth status labels.** Gateway settings currently shows raw status strings like `OAuth: missing` (Rust `oauth_status_label` in `core/src/mcp/oauth.rs` emits `missing`, `not_configured`, `connected`, `expired`, `reauth_required`; Swift displays them with underscores replaced in `RootView.swift`). Evaluate and unify these for non-technical users (`missing` vs not connected vs not configured).
+
 Keep the first screen as the actual app, not a marketing page.
 
 Tests: shortcuts route correctly, command palette actions work, menu bar opens app, hotkey configurable/disableable, settings persist, and cold-start measurement recorded.

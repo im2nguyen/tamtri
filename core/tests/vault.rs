@@ -69,6 +69,8 @@ fn all_blocks_message() -> Message {
             .unwrap(),
             ContentBlock::ElicitationRequest {
                 request_id: "ask-1".into(),
+                server_id: Some("mock".into()),
+                origin_tool_call_id: Some("tool-1".into()),
                 mode: ElicitationMode::Form,
                 message: "confirm".into(),
                 schema: Some(json!({"type": "object"})),

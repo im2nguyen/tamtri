@@ -1,4 +1,5 @@
 import AppKit
+import AppKit
 import Foundation
 
 @MainActor
@@ -49,8 +50,30 @@ final class AppStore: ObservableObject {
                         let preferNewest = event.kind == "turn_ended"
                         Task { await self.refreshWorkdirFiles(preferNewest: preferNewest, force: preferNewest) }
                     }
+                    if event.kind == "gateway_credential_updated" {
+                        Task { @MainActor in
+                            await self.persistUpdatedCredentialToKeychain(payloadJSON: event.payloadJSON)
+                        }
+                    }
                 }
             }
+        }
+    }
+
+    private func persistUpdatedCredentialToKeychain(payloadJSON: String) async {
+        guard let data = payloadJSON.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let credentialRef = object["credential_ref"] as? String,
+              !credentialRef.isEmpty
+        else {
+            return
+        }
+        do {
+            if let value = try await core.exportGatewayCredential(credentialRef: credentialRef) {
+                try KeychainCredentialStore.save(value: value, for: credentialRef)
+            }
+        } catch {
+            // Keychain persistence is best-effort; avoid failing the UI event loop.
         }
     }
 
@@ -332,14 +355,60 @@ final class AppStore: ObservableObject {
         }
     }
 
-    func refreshGatewayServers() {
+    func respondElicitation(requestId: String, action: String, dataJSON: String?) {
+        guard let conversation = selectedConversation else { return }
         Task {
             do {
-                gatewayServers = try await core.listGatewayServers()
+                try await core.respondElicitation(
+                    conversationId: conversation.id,
+                    requestId: requestId,
+                    action: action,
+                    dataJSON: dataJSON
+                )
             } catch {
                 errorMessage = error.localizedDescription
             }
         }
+    }
+
+    func refreshGatewayServers() {
+        Task {
+            await reloadGatewayServers()
+        }
+    }
+
+    private func reloadGatewayServers() async {
+        do {
+            gatewayServers = try await core.listGatewayServers()
+            for server in gatewayServers where !server.oauthTokenRef.isEmpty {
+                if let stored = OAuthTokenStore.load(for: server.oauthTokenRef) {
+                    try await core.setGatewayCredential(
+                        credentialRef: server.oauthTokenRef,
+                        value: stored
+                    )
+                }
+            }
+            gatewayServers = try await core.listGatewayServers()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    func saveGatewayServers(_ servers: [GatewayServerRecord]) {
+        Task {
+            do {
+                try await core.saveGatewayServers(servers)
+                await reloadGatewayServers()
+            } catch {
+                errorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    func removeGatewayServer(id: String) {
+        let updated = gatewayServers.filter { $0.id != id }
+        gatewayServers = updated
+        saveGatewayServers(updated)
     }
 
     func setGatewayCredential(credentialRef: String, value: String) {
@@ -348,6 +417,42 @@ final class AppStore: ObservableObject {
                 try await core.setGatewayCredential(credentialRef: credentialRef, value: value)
                 refreshGatewayServers()
             } catch {
+                errorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    private var oauthListener: OAuthLoopbackListener?
+
+    func connectOAuth(for server: GatewayServerRecord) {
+        Task {
+            do {
+                let redirectURI = "http://127.0.0.1:3847/callback"
+                let listener = OAuthLoopbackListener(port: 3847)
+                oauthListener = listener
+                try listener.start { [weak self] callbackURL in
+                    Task { @MainActor in
+                        guard let self else { return }
+                        do {
+                            _ = try await self.core.completeOAuthCallback(callbackURL: callbackURL)
+                            self.oauthListener = nil
+                            self.refreshGatewayServers()
+                        } catch {
+                            self.errorMessage = error.localizedDescription
+                        }
+                    }
+                }
+                let handoff = try await core.startOAuthFlow(
+                    serverId: server.id,
+                    redirectURI: redirectURI
+                )
+                guard let url = URL(string: handoff.authorizationURL) else {
+                    throw NSError(domain: "tamtri.oauth", code: 2)
+                }
+                NSWorkspace.shared.open(url)
+            } catch {
+                oauthListener?.stop()
+                oauthListener = nil
                 errorMessage = error.localizedDescription
             }
         }

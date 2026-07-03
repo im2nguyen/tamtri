@@ -79,6 +79,7 @@ fn stdio_server(id: &str, command: &str) -> GatewayServerConfig {
         },
         timeout_secs: None,
         credentials: Vec::new(),
+        oauth: None,
     }
 }
 

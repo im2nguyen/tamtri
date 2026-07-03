@@ -5,20 +5,38 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use serde_json::Value;
-use tokio::sync::{Mutex, broadcast, mpsc};
+use tokio::sync::{Mutex, broadcast, mpsc, oneshot};
+use uuid::Uuid;
 
 use crate::config::{
-    CredentialTarget, GatewayConfig, GatewayServerConfig, GatewayTransport, validate_app_config,
+    CredentialTarget, GatewayConfig, GatewayServerConfig, GatewayTransport, OAuthConfig,
+    validate_app_config,
 };
-use crate::mcp::client::{McpClient, McpClientConfig, McpClientEvent};
+use crate::conversation::{ElicitationAction, ElicitationMode};
+use crate::mcp::client::{ElicitationHandler, McpClient, McpClientConfig, McpClientEvent};
+use crate::mcp::elicitation::{
+    elicitation_mode, elicitation_request_id, origin_tool_call_id_from_meta, parse_create_params,
+    result_for_action, schema_looks_secret, validate_elicitation_url,
+};
 use crate::mcp::protocol::{
     CallToolResult, GetPromptResult, Prompt, ReadResourceResult, Resource, Tool,
 };
+use crate::mcp::oauth::{
+    OAuthResolveOutcome, resolve_oauth_access_token, serialize_stored_oauth,
+};
+use crate::rpc::jsonrpc::JsonRpcError;
 use crate::{CoreError, Result};
 
 #[async_trait]
 pub trait CredentialResolver: Send + Sync {
     async fn resolve(&self, credential_ref: &str) -> Result<Option<String>>;
+    async fn store(&self, credential_ref: &str, value: &str) -> Result<()> {
+        let _ = credential_ref;
+        let _ = value;
+        Err(CoreError::Protocol(
+            "credential store not supported".to_string(),
+        ))
+    }
 }
 
 pub struct NoCredentials;
@@ -51,6 +69,15 @@ impl MemoryCredentials {
             .map_err(|_| CoreError::Protocol("credential resolver lock poisoned".to_string()))?
             .contains_key(credential_ref))
     }
+
+    pub fn get_stored(&self, credential_ref: &str) -> Result<Option<String>> {
+        Ok(self
+            .values
+            .lock()
+            .map_err(|_| CoreError::Protocol("credential resolver lock poisoned".to_string()))?
+            .get(credential_ref)
+            .cloned())
+    }
 }
 
 #[async_trait]
@@ -62,6 +89,10 @@ impl CredentialResolver for MemoryCredentials {
             .map_err(|_| CoreError::Protocol("credential resolver lock poisoned".to_string()))?
             .get(credential_ref)
             .cloned())
+    }
+
+    async fn store(&self, credential_ref: &str, value: &str) -> Result<()> {
+        self.set(credential_ref.to_string(), value.to_string())
     }
 }
 
@@ -97,6 +128,38 @@ pub enum GatewayEvent {
         server_id: String,
         message: String,
     },
+    ElicitationRequested {
+        origin_tool_call_id: Option<String>,
+        server_id: String,
+        request_id: String,
+        mode: ElicitationMode,
+        message: String,
+        schema: Option<Value>,
+        url: Option<String>,
+    },
+    ElicitationResolved {
+        server_id: String,
+        request_id: String,
+        action: ElicitationAction,
+    },
+    OAuthHandoffStarted {
+        server_id: String,
+        credential_ref: String,
+    },
+    OAuthHandoffCompleted {
+        server_id: String,
+        credential_ref: String,
+        status: String,
+    },
+    OAuthRefreshFailed {
+        server_id: String,
+        credential_ref: String,
+    },
+    CredentialUpdated {
+        server_id: String,
+        credential_ref: String,
+        reason: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -112,10 +175,31 @@ pub struct McpGateway {
     credentials: Arc<dyn CredentialResolver>,
     events: Option<mpsc::UnboundedSender<GatewayEvent>>,
     event_broadcast: broadcast::Sender<GatewayEvent>,
+    elicitation: Arc<GatewayElicitationService>,
     clients: Mutex<HashMap<String, Arc<McpClient>>>,
+    server_call_locks: Mutex<HashMap<String, Arc<Mutex<()>>>>,
     routes: Mutex<HashMap<String, ToolRoute>>,
     resource_routes: Mutex<HashMap<String, ResourceRoute>>,
     prompt_routes: Mutex<HashMap<String, PromptRoute>>,
+}
+
+#[derive(Debug, Clone)]
+struct ActiveToolCall {
+    origin_tool_call_id: Option<String>,
+}
+
+#[derive(Debug)]
+struct PendingElicitation {
+    server_id: String,
+    response_tx: oneshot::Sender<ElicitationAction>,
+    content_tx: oneshot::Sender<Option<Value>>,
+}
+
+struct GatewayElicitationService {
+    events: Option<mpsc::UnboundedSender<GatewayEvent>>,
+    event_broadcast: broadcast::Sender<GatewayEvent>,
+    active_tool_calls: Mutex<HashMap<String, ActiveToolCall>>,
+    pending_elicitations: Mutex<HashMap<String, PendingElicitation>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -163,16 +247,39 @@ impl McpGateway {
             ..Default::default()
         })?;
         let (event_broadcast, _) = broadcast::channel(256);
+        let elicitation = Arc::new(GatewayElicitationService {
+            events: events.clone(),
+            event_broadcast: event_broadcast.clone(),
+            active_tool_calls: Mutex::new(HashMap::new()),
+            pending_elicitations: Mutex::new(HashMap::new()),
+        });
         Ok(Self {
             config,
             credentials,
             events,
             event_broadcast,
+            elicitation,
             clients: Mutex::new(HashMap::new()),
+            server_call_locks: Mutex::new(HashMap::new()),
             routes: Mutex::new(HashMap::new()),
             resource_routes: Mutex::new(HashMap::new()),
             prompt_routes: Mutex::new(HashMap::new()),
         })
+    }
+
+    pub async fn respond_elicitation(
+        &self,
+        request_id: &str,
+        action: ElicitationAction,
+        data: Option<Value>,
+    ) -> Result<()> {
+        self.elicitation
+            .respond(request_id, action, data)
+            .await
+    }
+
+    pub async fn cancel_pending_elicitations(&self) {
+        self.elicitation.cancel_all().await;
     }
 
     pub fn agent_cancelled(&self, params: Value) {
@@ -257,7 +364,13 @@ impl McpGateway {
             exposed_name: exposed_name.to_string(),
             original_name: route.original_name.clone(),
         });
-        client
+        let lock = self.server_call_lock(&route.server_id).await;
+        let _guard = lock.lock().await;
+        let origin_tool_call_id = origin_tool_call_id_from_meta(meta.as_ref());
+        self.elicitation
+            .set_active_tool_call(&route.server_id, origin_tool_call_id)
+            .await;
+        let result = client
             .call_tool(&route.original_name, arguments, meta)
             .await
             .inspect_err(|err| {
@@ -265,7 +378,19 @@ impl McpGateway {
                     server_id: route.server_id.clone(),
                     message: err.to_string(),
                 });
-            })
+            });
+        self.elicitation.clear_active_tool_call(&route.server_id).await;
+        result
+    }
+
+    async fn server_call_lock(&self, server_id: &str) -> Arc<Mutex<()>> {
+        let mut locks = self.server_call_locks.lock().await;
+        if let Some(existing) = locks.get(server_id).cloned() {
+            return existing;
+        }
+        let lock = Arc::new(Mutex::new(()));
+        locks.insert(server_id.to_string(), Arc::clone(&lock));
+        lock
     }
 
     pub async fn list_resources(&self) -> Result<Vec<GatewayResource>> {
@@ -404,6 +529,10 @@ impl McpGateway {
             call_timeout: timeout,
         };
         let client_events = self.client_event_sender(&server.id);
+        let elicitation_handler = Arc::new(GatewayElicitationHandler {
+            server_id: server.id.clone(),
+            service: Arc::clone(&self.elicitation),
+        });
         match &server.transport {
             GatewayTransport::Stdio { command, args, env } => {
                 let mut resolved_env = env.clone();
@@ -426,11 +555,16 @@ impl McpGateway {
                     &resolved_env,
                     client_config,
                     client_events,
+                    Some(elicitation_handler),
                 )
                 .await
             }
             GatewayTransport::StreamableHttp { endpoint, headers } => {
                 let mut resolved_headers = headers.clone();
+                if let Some(oauth) = &server.oauth {
+                    self.inject_oauth_header(&server.id, oauth, &mut resolved_headers)
+                        .await?;
+                }
                 for credential in &server.credentials {
                     if let CredentialTarget::Header { name, prefix } = &credential.target
                         && let Some(value) =
@@ -453,6 +587,7 @@ impl McpGateway {
                     &resolved_headers,
                     client_config,
                     client_events,
+                    Some(elicitation_handler),
                 )
                 .await
             }
@@ -494,6 +629,75 @@ impl McpGateway {
             let _ = tx.send(event);
         }
     }
+
+    async fn inject_oauth_header(
+        &self,
+        server_id: &str,
+        oauth: &OAuthConfig,
+        resolved_headers: &mut Vec<(String, String)>,
+    ) -> Result<()> {
+        let Some(stored_raw) = self.credentials.resolve(&oauth.token_ref).await? else {
+            self.emit(GatewayEvent::DownstreamError {
+                server_id: server_id.to_string(),
+                message: format!(
+                    "oauth token missing for {server_id}; connect in settings"
+                ),
+            });
+            return Ok(());
+        };
+        let client = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .map_err(|err| CoreError::Protocol(format!("oauth http client failed: {err}")))?;
+        let credentials = Arc::clone(&self.credentials);
+        let token_ref = oauth.token_ref.clone();
+        let oauth_config = oauth.clone();
+        let (outcome, updated_bundle) = resolve_oauth_access_token(
+            &client,
+            &oauth_config,
+            &stored_raw,
+        )
+        .await?;
+        if let Some(bundle) = updated_bundle {
+            credentials
+                .store(&token_ref, &serialize_stored_oauth(&bundle)?)
+                .await?;
+            self.emit(GatewayEvent::CredentialUpdated {
+                server_id: server_id.to_string(),
+                credential_ref: token_ref.clone(),
+                reason: "oauth_refresh".to_string(),
+            });
+        }
+        match outcome {
+            OAuthResolveOutcome::AccessToken(token) => {
+                resolved_headers.push(("Authorization".to_string(), format!("Bearer {token}")));
+                self.emit(GatewayEvent::CredentialInjected {
+                    server_id: server_id.to_string(),
+                    credential_ref: oauth.token_ref.clone(),
+                    target_kind: "oauth_bearer".to_string(),
+                });
+            }
+            OAuthResolveOutcome::ReauthRequired => {
+                self.emit(GatewayEvent::OAuthRefreshFailed {
+                    server_id: server_id.to_string(),
+                    credential_ref: oauth.token_ref.clone(),
+                });
+                self.emit(GatewayEvent::DownstreamError {
+                    server_id: server_id.to_string(),
+                    message: format!("oauth re-authentication required for {server_id}"),
+                });
+            }
+            OAuthResolveOutcome::Missing => {
+                self.emit(GatewayEvent::DownstreamError {
+                    server_id: server_id.to_string(),
+                    message: format!(
+                        "oauth token missing for {server_id}; connect in settings"
+                    ),
+                });
+            }
+        }
+        Ok(())
+    }
 }
 
 fn exposed_tool_name(server_id: &str, tool_name: &str) -> String {
@@ -519,6 +723,157 @@ fn slug(value: &str) -> String {
     out.trim_matches('_').to_string()
 }
 
+struct GatewayElicitationHandler {
+    server_id: String,
+    service: Arc<GatewayElicitationService>,
+}
+
+#[async_trait]
+impl ElicitationHandler for GatewayElicitationHandler {
+    async fn handle_create(&self, params: Value) -> std::result::Result<Value, JsonRpcError> {
+        self.service
+            .handle_create(&self.server_id, params)
+            .await
+    }
+}
+
+impl GatewayElicitationService {
+    fn emit(&self, event: GatewayEvent) {
+        let _ = self.event_broadcast.send(event.clone());
+        if let Some(tx) = &self.events {
+            let _ = tx.send(event);
+        }
+    }
+
+    async fn set_active_tool_call(&self, server_id: &str, origin_tool_call_id: Option<String>) {
+        self.active_tool_calls.lock().await.insert(
+            server_id.to_string(),
+            ActiveToolCall {
+                origin_tool_call_id,
+            },
+        );
+    }
+
+    async fn clear_active_tool_call(&self, server_id: &str) {
+        self.active_tool_calls.lock().await.remove(server_id);
+    }
+
+    async fn respond(
+        &self,
+        request_id: &str,
+        action: ElicitationAction,
+        data: Option<Value>,
+    ) -> Result<()> {
+        let pending = {
+            let mut map = self.pending_elicitations.lock().await;
+            map.remove(request_id)
+        };
+        let Some(pending) = pending else {
+            return Err(CoreError::Protocol(format!(
+                "unknown elicitation request: {request_id}"
+            )));
+        };
+        if matches!(action, ElicitationAction::Accept)
+            && let Some(data) = data
+        {
+            let _ = pending.content_tx.send(Some(data));
+        } else {
+            let _ = pending.content_tx.send(None);
+        }
+        pending
+            .response_tx
+            .send(action.clone())
+            .map_err(|_| CoreError::Protocol("elicitation waiter dropped".to_string()))?;
+        self.emit(GatewayEvent::ElicitationResolved {
+            server_id: pending.server_id,
+            request_id: request_id.to_string(),
+            action,
+        });
+        Ok(())
+    }
+
+    async fn cancel_all(&self) {
+        let pending: Vec<_> = self.pending_elicitations.lock().await.drain().collect();
+        for (request_id, entry) in pending {
+            let _ = entry.content_tx.send(None);
+            let _ = entry.response_tx.send(ElicitationAction::Cancel);
+            self.emit(GatewayEvent::ElicitationResolved {
+                server_id: entry.server_id,
+                request_id,
+                action: ElicitationAction::Cancel,
+            });
+        }
+    }
+
+    async fn handle_create(
+        &self,
+        server_id: &str,
+        params: Value,
+    ) -> std::result::Result<Value, JsonRpcError> {
+        let parsed = parse_create_params(params).map_err(|err| JsonRpcError {
+            code: -32602,
+            message: err.to_string(),
+            data: None,
+        })?;
+        let mode = elicitation_mode(&parsed);
+        if matches!(mode, ElicitationMode::Form)
+            && let Some(schema) = parsed.requested_schema.as_ref()
+            && schema_looks_secret(schema)
+        {
+            return Ok(result_for_action(ElicitationAction::Decline, None));
+        }
+        if matches!(mode, ElicitationMode::Url) {
+            let Some(url) = parsed.url.as_deref() else {
+                return Err(JsonRpcError {
+                    code: -32602,
+                    message: "url elicitation requires url".to_string(),
+                    data: None,
+                });
+            };
+            validate_elicitation_url(url).map_err(|err| JsonRpcError {
+                code: -32602,
+                message: err.to_string(),
+                data: None,
+            })?;
+        }
+        let request_id = elicitation_request_id(&parsed, &Uuid::now_v7().to_string());
+        let origin_tool_call_id = self
+            .active_tool_calls
+            .lock()
+            .await
+            .get(server_id)
+            .and_then(|call| call.origin_tool_call_id.clone());
+        let (response_tx, response_rx) = oneshot::channel();
+        let (content_tx, content_rx) = oneshot::channel();
+        self.pending_elicitations.lock().await.insert(
+            request_id.clone(),
+            PendingElicitation {
+                server_id: server_id.to_string(),
+                response_tx,
+                content_tx,
+            },
+        );
+        self.emit(GatewayEvent::ElicitationRequested {
+            origin_tool_call_id,
+            server_id: server_id.to_string(),
+            request_id: request_id.clone(),
+            mode: mode.clone(),
+            message: parsed.message.clone(),
+            schema: parsed.requested_schema.clone(),
+            url: parsed.url.clone(),
+        });
+        let action = response_rx
+            .await
+            .unwrap_or(ElicitationAction::Cancel);
+        let content = if matches!(action, ElicitationAction::Accept) {
+            content_rx.await.ok().flatten()
+        } else {
+            None
+        };
+        Ok(result_for_action(action, content))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -529,5 +884,21 @@ mod tests {
             exposed_tool_name("my server", "Echo Tool"),
             "my_server__echo_tool"
         );
+    }
+
+    #[tokio::test]
+    async fn malformed_elicitation_params_return_invalid_params_error() {
+        let (event_broadcast, _) = broadcast::channel(8);
+        let service = Arc::new(GatewayElicitationService {
+            events: None,
+            event_broadcast,
+            active_tool_calls: Mutex::new(HashMap::new()),
+            pending_elicitations: Mutex::new(HashMap::new()),
+        });
+        let err = service
+            .handle_create("mock", serde_json::json!({"mode": 5}))
+            .await
+            .expect_err("expected invalid params");
+        assert_eq!(err.code, -32602);
     }
 }
