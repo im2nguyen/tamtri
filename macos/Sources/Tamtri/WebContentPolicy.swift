@@ -170,3 +170,66 @@ func attributedMarkdownPreview(_ content: String) -> AttributedString? {
     options.interpretedSyntax = .inlineOnlyPreservingWhitespace
     return try? AttributedString(markdown: safe, options: options)
 }
+
+let artifactCSVPreviewMaxRows = 20
+let artifactCSVPreviewMaxColumns = 8
+
+func csvPreviewRows(
+    text: String,
+    separator: Character,
+    maxRows: Int = artifactCSVPreviewMaxRows,
+    maxColumns: Int = artifactCSVPreviewMaxColumns
+) -> [[String]] {
+    text
+        .split(whereSeparator: \.isNewline)
+        .prefix(maxRows)
+        .map { line in
+            line.split(separator: separator, omittingEmptySubsequences: false)
+                .prefix(maxColumns)
+                .map(String.init)
+        }
+}
+
+func artifactCardAccessibilityLabel(path: String?, mimeType: String?, integrityFailed: Bool) -> String {
+    let title = (path as NSString?)?.lastPathComponent ?? "Artifact"
+    let type = artifactMimeLabel(mimeType)
+    if integrityFailed {
+        return "\(title), integrity check failed"
+    }
+    return "\(title), \(type)"
+}
+
+func artifactCardAccessibilityValue(
+    integrityFailed: Bool,
+    size: UInt64?,
+    previewLoaded: Bool,
+    imageLoaded: Bool,
+    nonPreviewable: Bool,
+    loading: Bool
+) -> String {
+    if integrityFailed {
+        return "integrity check failed"
+    }
+    let sizeText = size.map {
+        ByteCountFormatter.string(fromByteCount: Int64($0), countStyle: .file)
+    } ?? "unknown size"
+    if previewLoaded {
+        return "preview loaded, \(sizeText)"
+    }
+    if imageLoaded {
+        return "image preview loaded, \(sizeText)"
+    }
+    if nonPreviewable {
+        return "file attachment, \(sizeText)"
+    }
+    if loading {
+        return "loading preview, \(sizeText)"
+    }
+    return sizeText
+}
+
+/// Active webview previews (HTML/SVG) must not render when integrity verification fails.
+func artifactShouldUseWebViewPreview(mimeType: String?, integrityFailed: Bool, hasVerifiedContent: Bool) -> Bool {
+    guard hasVerifiedContent, !integrityFailed else { return false }
+    return mimeType == "text/html" || mimeType == "image/svg+xml"
+}

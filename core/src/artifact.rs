@@ -570,6 +570,44 @@ mod tests {
     }
 
     #[test]
+    fn snapshots_small_plain_text_inline() {
+        let temp = tempfile::tempdir().unwrap();
+        let workdir = temp.path().join("workdir");
+        let convo = temp.path().join("conversation");
+        fs::create_dir_all(&workdir).unwrap();
+        fs::create_dir_all(convo.join("attachments")).unwrap();
+        fs::write(workdir.join("notes.txt"), "hello snapshot").unwrap();
+        let snapshot = ArtifactSnapshotter::new(&workdir, &convo)
+            .snapshot_file_changed(&Diff {
+                path: "notes.txt".to_string(),
+                change: FileChange::Modified,
+                old_text: None,
+                new_text: None,
+            })
+            .unwrap()
+            .unwrap();
+        assert_eq!(snapshot.mime_type, "text/plain");
+        assert!(matches!(
+            snapshot.block,
+            ContentBlock::Artifact {
+                inline: Some(ref text),
+                ..
+            } if text == "hello snapshot"
+        ));
+    }
+
+    #[test]
+    fn verify_attachment_rejects_size_mismatch() {
+        let temp = tempfile::tempdir().unwrap();
+        let convo = temp.path().join("conversation");
+        fs::create_dir_all(convo.join("attachments")).unwrap();
+        fs::write(convo.join("attachments/a.txt"), b"hello").unwrap();
+        let sha256 = hex_sha256(b"hello");
+        let err = verify_attachment(&convo, "attachments/a.txt", 99, &sha256).unwrap_err();
+        assert!(matches!(err, CoreError::MalformedVault(_)));
+    }
+
+    #[test]
     fn verify_attachment_rejects_hash_mismatch() {
         let temp = tempfile::tempdir().unwrap();
         let convo = temp.path().join("conversation");

@@ -52,16 +52,20 @@ fn crash_mid_turn_loses_only_uncommitted() {
 }
 
 #[test]
-fn facade_run_commits_exactly_one_assistant_message() {
+fn turn_commits_exactly_one_message() {
     let temp = tempfile::tempdir().expect("tempdir");
     let observer = Arc::new(RecordingObserver::default());
     let core = TamtriCore::new(temp.path().to_string_lossy().into_owned(), Arc::clone(&observer) as Arc<dyn ConversationObserver>)
         .expect("core");
-    core.register_acp_agent(
+    core.register_acp_agent_with_env(
         "mock-acp".to_string(),
         "Mock ACP".to_string(),
         env!("CARGO_BIN_EXE_mock-acp-agent").to_string(),
         Vec::new(),
+        vec![tamtri_core::app::GatewayEnvVarDto {
+            name: "MOCK_ACP_SKIP_FILE_CHANGED".to_string(),
+            value: "1".to_string(),
+        }],
     )
     .expect("agent");
     let conversation = core
@@ -87,83 +91,103 @@ fn facade_run_commits_exactly_one_assistant_message() {
     let loaded = core.load_conversation(conversation.id).expect("load");
     let messages: Vec<serde_json::Value> =
         serde_json::from_str(&loaded.transcript_json).expect("transcript");
-    assert_eq!(messages.len(), 2);
-    let assistant = &messages[1];
-    let artifact = assistant["content"]
-        .as_array()
-        .unwrap()
+    assert_eq!(messages.len(), 2, "vault gains user + one assistant message");
+    let assistant_messages: Vec<_> = messages
         .iter()
-        .find(|block| block["type"] == "artifact")
-        .expect("artifact block");
-    assert_eq!(artifact["mime_type"], "text/html");
-    assert!(artifact["inline"].as_str().unwrap().contains("<h1>ok</h1>"));
-    let attachment_path = artifact["path"].as_str().unwrap();
-    assert!(attachment_path.starts_with("attachments/"));
-    assert!(artifact["sha256"].as_str().is_some_and(|hash| hash.len() == 64));
-    assert!(artifact["size"].as_u64().is_some_and(|size| size > 0));
-    assert!(
-        find_file(temp.path(), attachment_path).is_some(),
-        "attachment file should exist in vault"
-    );
-    assert!(Path::new(temp.path()).join("conversations").exists());
-
-    let workdir_report = find_file(temp.path(), "workdir/report.html").unwrap();
-    fs::write(workdir_report, "<h1>changed</h1>").unwrap();
-    let reloaded = core.load_conversation(loaded.id).expect("reload");
-    let messages: Vec<serde_json::Value> =
-        serde_json::from_str(&reloaded.transcript_json).expect("transcript");
-    let assistant = &messages[1];
-    let artifact = assistant["content"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|block| block["type"] == "artifact")
-        .expect("artifact block");
-    assert!(artifact["inline"].as_str().unwrap().contains("<h1>ok</h1>"));
-
-    let events_path = find_file(temp.path(), "events.jsonl").expect("events");
-    let events_text = fs::read_to_string(events_path).expect("read events");
-    let events: Vec<serde_json::Value> = events_text
-        .lines()
-        .filter(|line| !line.trim().is_empty())
-        .map(|line| serde_json::from_str(line).expect("event line"))
+        .filter(|message| message["role"] == "assistant")
         .collect();
-    let snapshotted: Vec<_> = events
-        .iter()
-        .filter(|event| event["kind"] == "artifact_snapshotted")
-        .collect();
-    assert!(!snapshotted.is_empty());
-    assert_eq!(snapshotted.len(), 1);
     assert_eq!(
-        snapshotted[0]["payload"]["tool_call_id"].as_str(),
-        Some("tool-1")
+        assistant_messages.len(),
+        1,
+        "vault gains exactly one assistant message per completed turn"
     );
-    assert!(
-        snapshotted[0]["payload"]["original_path"]
-            .as_str()
-            .is_some_and(|path| path.ends_with("workdir/report.html")),
-    );
-    assert_eq!(
-        snapshotted[0]["payload"]["attachment_path"].as_str(),
-        Some(attachment_path)
-    );
-    let kinds: Vec<_> = events
+    let assistant = assistant_messages[0];
+    let content = assistant["content"].as_array().expect("content");
+    let block_types: Vec<_> = content
         .iter()
-        .map(|event| event["kind"].as_str().unwrap_or_default())
+        .filter_map(|block| block["type"].as_str())
         .collect();
-    for expected in [
-        "turn_started",
-        "harness_spawned",
-        "permission_requested",
-        "permission_resolved",
-        "harness_exited",
-        "turn_ended",
-    ] {
+    for expected in ["thinking", "text", "tool_call", "tool_result"] {
         assert!(
-            kinds.contains(&expected),
-            "missing events.jsonl receipt: {expected}"
+            block_types.contains(&expected),
+            "missing committed block type: {expected}; got {block_types:?}"
         );
     }
+    assert!(
+        !block_types.iter().any(|kind| *kind == "artifact"),
+        "M3 turn commit should not assert artifact snapshotting"
+    );
+    assert!(Path::new(temp.path()).join("conversations").exists());
+}
+
+#[test]
+fn relaunch_transcript_from_messages_jsonl() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let vault_path = temp.path().to_string_lossy().into_owned();
+    let (conversation_id, expected_assistant_content) = {
+        let observer = Arc::new(RecordingObserver::default());
+        let core = TamtriCore::new(vault_path.clone(), Arc::clone(&observer) as Arc<dyn ConversationObserver>)
+            .expect("core");
+        core.register_acp_agent(
+            "mock-acp".to_string(),
+            "Mock ACP".to_string(),
+            env!("CARGO_BIN_EXE_mock-acp-agent").to_string(),
+            Vec::new(),
+        )
+        .expect("agent");
+        let conversation = core
+            .create_conversation(
+                "Relaunch".to_string(),
+                "mock-acp".to_string(),
+                "mock".to_string(),
+            )
+            .expect("conversation");
+
+        core.send_message(conversation.id.clone(), "hello".to_string())
+            .expect("send");
+        let request_id = wait_for_permission_requested(observer.as_ref());
+        core.respond_permission(
+            conversation.id.clone(),
+            request_id,
+            "allow_once".to_string(),
+        )
+        .expect("permission");
+        wait_for_turn_end(observer.as_ref());
+        std::thread::sleep(Duration::from_millis(200));
+
+        let loaded = core.load_conversation(conversation.id.clone()).expect("load");
+        let before: Vec<serde_json::Value> =
+            serde_json::from_str(&loaded.transcript_json).expect("transcript");
+        assert_eq!(before.len(), 2);
+        let assistant_content = before
+            .iter()
+            .find(|message| message["role"] == "assistant")
+            .and_then(|message| message.get("content"))
+            .cloned()
+            .expect("assistant content");
+        (conversation.id.clone(), assistant_content)
+    };
+
+    let observer = Arc::new(RecordingObserver::default());
+    let reloaded_core = TamtriCore::new(vault_path, Arc::clone(&observer) as Arc<dyn ConversationObserver>)
+        .expect("reloaded core");
+    let loaded = reloaded_core
+        .load_conversation(conversation_id)
+        .expect("load after relaunch");
+    let after: Vec<serde_json::Value> =
+        serde_json::from_str(&loaded.transcript_json).expect("transcript");
+
+    assert_eq!(after.len(), 2);
+    assert_eq!(after[0]["role"], "user");
+    assert_eq!(after[1]["role"], "assistant");
+    assert_eq!(
+        after[1]["content"], expected_assistant_content,
+        "assistant content blocks should redraw from messages.jsonl alone"
+    );
+    assert!(
+        observer.events.lock().expect("events").is_empty(),
+        "relaunch redraw must not require a live stream"
+    );
 }
 
 #[test]
@@ -377,7 +401,7 @@ fn events_vs_transcript_permission_resolution() {
 }
 
 #[test]
-fn events_jsonl_full_run_receipts() {
+fn events_jsonl_receipts() {
     let temp = tempfile::tempdir().expect("tempdir");
     let observer = Arc::new(RecordingObserver::default());
     let core = TamtriCore::new(temp.path().to_string_lossy().into_owned(), Arc::clone(&observer) as Arc<dyn ConversationObserver>)
@@ -423,6 +447,8 @@ fn events_jsonl_full_run_receipts() {
     for expected in [
         "turn_started",
         "harness_spawned",
+        "tool_call_started",
+        "tool_call_completed",
         "permission_requested",
         "permission_resolved",
         "harness_exited",
@@ -455,6 +481,7 @@ fn events_jsonl_gateway_receipts() {
     }];
     if let tamtri_core::config::GatewayTransport::Stdio { ref mut env, .. } = server.transport {
         env.push(("MOCK_MCP_EMIT_PROGRESS".to_string(), "1".to_string()));
+        env.push(("MOCK_MCP_EXIT_AFTER_FIRST_LIST".to_string(), "1".to_string()));
     }
     tamtri_core::config::replace_gateway_servers(temp.path(), vec![server]).expect("save config");
     core.set_gateway_credential("keychain://mock".to_string(), "super-secret".to_string())
@@ -519,6 +546,7 @@ fn events_jsonl_gateway_receipts() {
 
     for expected in [
         "gateway_server_connected",
+        "gateway_server_disconnected",
         "gateway_tool_routed",
         "gateway_credential_injected",
         "gateway_progress",
@@ -541,6 +569,12 @@ fn events_jsonl_gateway_receipts() {
         "keychain://mock"
     );
     assert_eq!(injected["payload"]["target_kind"], "env_var");
+
+    let disconnected = events
+        .iter()
+        .find(|event| event["kind"] == "gateway_server_disconnected")
+        .expect("disconnect receipt");
+    assert_eq!(disconnected["payload"]["server_id"], "mock");
 }
 
 #[test]
@@ -622,7 +656,7 @@ fn fork_into_harness_updates_model_and_harness() {
 }
 
 #[test]
-fn fork_first_run_seeds_fresh_transcript() {
+fn seed_renders_prior_transcript() {
     let temp = tempfile::tempdir().expect("tempdir");
     let observer = Arc::new(RecordingObserver::default());
     let core = TamtriCore::new(temp.path().to_string_lossy().into_owned(), observer.clone()).expect("core");
@@ -746,6 +780,57 @@ fn gateway_credential_reload_smoke_after_set_and_fresh_core() {
     );
     let servers = reloaded.refresh_gateway_capabilities().expect("refresh");
     assert!(servers[0].missing_credential_refs.is_empty());
+}
+
+#[test]
+fn copy_csv_to_workdir_without_harness_reference_does_not_create_artifact_block() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let observer = Arc::new(RecordingObserver::default());
+    let core = TamtriCore::new(temp.path().to_string_lossy().into_owned(), observer).expect("core");
+    let conversation = core
+        .create_conversation(
+            "Drop CSV".to_string(),
+            "mock-acp".to_string(),
+            "mock".to_string(),
+        )
+        .expect("conversation");
+
+    let source = temp.path().join("sales.csv");
+    fs::write(&source, "region,revenue\nNorth,10\n").expect("source");
+    let copied = core
+        .copy_file_to_workdir(conversation.id.clone(), source.to_string_lossy().into_owned())
+        .expect("copy");
+    assert_eq!(copied, "sales.csv");
+
+    let loaded = core.load_conversation(conversation.id.clone()).expect("load");
+    let messages: Vec<serde_json::Value> =
+        serde_json::from_str(&loaded.transcript_json).expect("transcript");
+    assert!(messages.is_empty(), "copy alone should not append transcript messages");
+    for message in &messages {
+        let content = message["content"].as_array().cloned().unwrap_or_default();
+        assert!(
+            !content.iter().any(|block| block["type"] == "artifact"),
+            "workdir copy without harness reference must not create artifact blocks"
+        );
+    }
+
+    let workdir = core
+        .conversation_workdir_path(conversation.id.clone())
+        .expect("workdir");
+    assert!(Path::new(&workdir).join("sales.csv").exists());
+
+    let convo_dir = find_file(temp.path(), "meta.json")
+        .expect("conversation folder")
+        .parent()
+        .expect("parent")
+        .to_path_buf();
+    assert!(
+        !convo_dir.join("attachments").exists()
+            || fs::read_dir(convo_dir.join("attachments"))
+                .map(|mut dir| dir.next().is_none())
+                .unwrap_or(true),
+        "copy without harness reference must not snapshot attachments"
+    );
 }
 
 #[test]

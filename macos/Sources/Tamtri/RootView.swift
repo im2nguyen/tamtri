@@ -601,6 +601,7 @@ struct TaskLiveCard: View {
     @EnvironmentObject private var store: AppStore
     let conversationId: String
     let state: LiveTaskState
+    @State private var lastAnnouncedAccessibilityStatus: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -628,11 +629,24 @@ struct TaskLiveCard: View {
         .accessibilityLabel("Task \(taskTitle)")
         .accessibilityValue(accessibilityStatus)
         .accessibilityAddTraits(.updatesFrequently)
+        .onAppear {
+            announceAccessibilityStatusIfNeeded()
+        }
+        .onChange(of: accessibilityStatus) { _, _ in
+            announceAccessibilityStatusIfNeeded()
+        }
     }
 
     private var taskTitle: String { state.title ?? state.taskId }
     private var statusIcon: String { TaskLiveCardViewModel.statusIcon(for: state.status) }
     private var accessibilityStatus: String { TaskLiveCardViewModel.accessibilityStatus(for: state) }
+
+    private func announceAccessibilityStatusIfNeeded() {
+        let announcement = TaskLiveCardViewModel.accessibilityAnnouncement(for: state)
+        guard lastAnnouncedAccessibilityStatus != announcement else { return }
+        lastAnnouncedAccessibilityStatus = announcement
+        AccessibilityNotification.Announcement(announcement).post()
+    }
 }
 
 struct TaskRefCard: View {
@@ -748,9 +762,8 @@ struct ArtifactCard: View {
                     preview(for: verifiedText)
                 } else if verifiedNonPreviewable {
                     TypedFileCard(path: block.path, mimeType: block.mimeType, size: block.size)
-                } else if let loadError {
-                    Text("Integrity check failed: \(loadError)")
-                        .foregroundStyle(.red)
+                } else if loadError != nil {
+                    integrityFailedCard
                 } else if block.inline != nil || hasVerifiedAttachmentMetadata {
                     ProgressView()
                 } else {
@@ -778,34 +791,22 @@ struct ArtifactCard: View {
     }
 
     private var artifactAccessibilityLabel: String {
-        let title = (block.path as NSString?)?.lastPathComponent ?? "Artifact"
-        let type = artifactMimeLabel(block.mimeType)
-        if loadError != nil {
-            return "\(title), integrity check failed"
-        }
-        return "\(title), \(type)"
+        artifactCardAccessibilityLabel(
+            path: block.path,
+            mimeType: block.mimeType,
+            integrityFailed: loadError != nil
+        )
     }
 
     private var artifactAccessibilityValue: String {
-        if loadError != nil {
-            return "integrity check failed"
-        }
-        let sizeText = block.size.map {
-            ByteCountFormatter.string(fromByteCount: Int64($0), countStyle: .file)
-        } ?? "unknown size"
-        if verifiedInline != nil || verifiedText != nil {
-            return "preview loaded, \(sizeText)"
-        }
-        if verifiedImage != nil {
-            return "image preview loaded, \(sizeText)"
-        }
-        if verifiedNonPreviewable {
-            return "file attachment, \(sizeText)"
-        }
-        if block.inline != nil || hasVerifiedAttachmentMetadata {
-            return "loading preview, \(sizeText)"
-        }
-        return sizeText
+        artifactCardAccessibilityValue(
+            integrityFailed: loadError != nil,
+            size: block.size,
+            previewLoaded: verifiedInline != nil || verifiedText != nil,
+            imageLoaded: verifiedImage != nil,
+            nonPreviewable: verifiedNonPreviewable,
+            loading: block.inline != nil || hasVerifiedAttachmentMetadata
+        )
     }
 
     @ViewBuilder
@@ -825,6 +826,16 @@ struct ArtifactCard: View {
                 .lineLimit(artifactPlainTextPreviewLineLimit)
                 .textSelection(.enabled)
         }
+    }
+
+    @ViewBuilder
+    private var integrityFailedCard: some View {
+        TypedFileCard(
+            path: block.path,
+            mimeType: block.mimeType,
+            size: block.size,
+            integrityStatus: "Integrity check failed"
+        )
     }
 
     private func logBlockedNavigation(_ url: URL) {
@@ -941,12 +952,13 @@ struct TypedFileCard: View {
     let path: String?
     let mimeType: String?
     let size: UInt64?
+    var integrityStatus: String?
 
     var body: some View {
         HStack(spacing: 12) {
             Image(systemName: artifactFileIcon(mimeType))
                 .font(.title2)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(integrityStatus == nil ? Color.secondary : Color.red)
                 .frame(width: 28)
             VStack(alignment: .leading, spacing: 4) {
                 Text((path as NSString?)?.lastPathComponent ?? "Attachment")
@@ -954,7 +966,7 @@ struct TypedFileCard: View {
                     .lineLimit(1)
                 Text(subtitle)
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(integrityStatus == nil ? Color.secondary : Color.red)
             }
             Spacer()
         }
@@ -966,16 +978,27 @@ struct TypedFileCard: View {
 
     private var subtitle: String {
         let type = artifactMimeLabel(mimeType)
+        var parts = [type]
         if let size {
             let formatted = ByteCountFormatter.string(fromByteCount: Int64(size), countStyle: .file)
-            return "\(type) · \(formatted)"
+            parts.append(formatted)
         }
-        return type
+        if let integrityStatus {
+            parts.append(integrityStatus)
+        }
+        return parts.joined(separator: " · ")
     }
 
     private var accessibilityLabel: String {
         let name = (path as NSString?)?.lastPathComponent ?? "Attachment"
         let type = artifactMimeLabel(mimeType)
+        if let integrityStatus {
+            if let size {
+                let formatted = ByteCountFormatter.string(fromByteCount: Int64(size), countStyle: .file)
+                return "\(name), \(type), \(formatted), \(integrityStatus)"
+            }
+            return "\(name), \(type), \(integrityStatus)"
+        }
         if let size {
             let formatted = ByteCountFormatter.string(fromByteCount: Int64(size), countStyle: .file)
             return "\(name), \(type), \(formatted). Open or reveal in Finder."
@@ -1167,14 +1190,7 @@ struct CSVPreview: View {
     let separator: Character
 
     private var rows: [[String]] {
-        text
-            .split(whereSeparator: \.isNewline)
-            .prefix(20)
-            .map { line in
-                line.split(separator: separator, omittingEmptySubsequences: false)
-                    .prefix(8)
-                    .map(String.init)
-            }
+        csvPreviewRows(text: text, separator: separator)
     }
 
     var body: some View {
@@ -1343,28 +1359,31 @@ struct ElicitationCard: View {
     }
 
     var body: some View {
-        if let request, request.mode == "url" {
-            URLConsentCard(
-                request: URLConsentRequest(
-                    requestId: request.requestId,
-                    serverId: request.serverId,
-                    originToolCallId: request.originToolCallId,
-                    message: request.message,
-                    url: request.url
+        switch ElicitationCardRouter.cardKind(mode: request?.mode, schema: request?.schema) {
+        case .urlHandoff:
+            if let request {
+                URLConsentCard(
+                    request: URLConsentRequest(
+                        requestId: request.requestId,
+                        serverId: request.serverId,
+                        originToolCallId: request.originToolCallId,
+                        message: request.message,
+                        url: request.url
+                    )
                 )
-            )
-        } else if ElicitationCardRouter.cardKind(mode: request?.mode, schema: request?.schema) == .secretBlocked {
+            }
+        case .secretBlocked:
             SecretElicitationBlockedCard(
                 onDecline: { respond(action: "decline") },
                 onCancel: { respond(action: "cancel") }
             )
-        } else if ElicitationCardRouter.cardKind(mode: request?.mode, schema: request?.schema) == .unsupportedSchema {
+        case .unsupportedSchema:
             UnsupportedElicitationSchemaCard(
                 message: request?.message ?? "The server sent a form tamtri cannot render.",
                 onDecline: { respond(action: "decline") },
                 onCancel: { respond(action: "cancel") }
             )
-        } else {
+        case .form:
             formCard
         }
     }
