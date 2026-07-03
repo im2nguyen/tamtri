@@ -173,6 +173,9 @@ impl TurnReducer {
     }
 
     fn push_referenced_path(&mut self, path: &str) {
+        if !crate::artifact::is_deliverable_snapshot_path(path) {
+            return;
+        }
         if !self.referenced_paths.iter().any(|existing| existing == path) {
             self.referenced_paths.push(path.to_string());
         }

@@ -1,4 +1,5 @@
 pub mod acp;
+pub mod health;
 
 use std::path::PathBuf;
 

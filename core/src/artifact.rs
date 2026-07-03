@@ -18,6 +18,14 @@ pub struct ArtifactSnapshot {
     pub sha256: String,
 }
 
+pub fn is_deliverable_snapshot_path(path: &str) -> bool {
+    let lower = path.to_ascii_lowercase();
+    lower.ends_with(".html")
+        || lower.ends_with(".htm")
+        || lower.ends_with(".md")
+        || lower.ends_with(".markdown")
+}
+
 pub struct ArtifactSnapshotter {
     workdir: PathBuf,
     conversation_dir: PathBuf,
@@ -53,6 +61,12 @@ impl ArtifactSnapshotter {
     }
 
     fn snapshot_relative_path(&self, path: &Path) -> Result<Option<ArtifactSnapshot>> {
+        if !is_deliverable_snapshot_path(
+            path.to_str()
+                .ok_or_else(|| CoreError::MalformedVault("artifact path is not UTF-8".to_string()))?,
+        ) {
+            return Ok(None);
+        }
         let original_path = self.resolve_workdir_path(path)?;
         if !original_path.exists() {
             return Ok(None);
@@ -332,12 +346,9 @@ mod tests {
             .unwrap();
         snapshots.sort_by(|a, b| a.mime_type.cmp(&b.mime_type));
 
-        assert_eq!(snapshots.len(), 4);
+        assert_eq!(snapshots.len(), 2);
         let mime_types: Vec<_> = snapshots.iter().map(|snapshot| snapshot.mime_type.as_str()).collect();
-        assert_eq!(
-            mime_types,
-            vec!["image/svg+xml", "text/csv", "text/html", "text/markdown"]
-        );
+        assert_eq!(mime_types, vec!["text/html", "text/markdown"]);
         for snapshot in &snapshots {
             assert!(snapshot.attachment_path.starts_with("attachments/"));
             assert!(snapshot.attachment_path.contains('-'));
@@ -576,23 +587,23 @@ mod tests {
         let convo = temp.path().join("conversation");
         fs::create_dir_all(&workdir).unwrap();
         fs::create_dir_all(convo.join("attachments")).unwrap();
-        fs::write(workdir.join("notes.txt"), "hello snapshot").unwrap();
+        fs::write(workdir.join("notes.md"), "# Title").unwrap();
         let snapshot = ArtifactSnapshotter::new(&workdir, &convo)
             .snapshot_file_changed(&Diff {
-                path: "notes.txt".to_string(),
+                path: "notes.md".to_string(),
                 change: FileChange::Modified,
                 old_text: None,
                 new_text: None,
             })
             .unwrap()
             .unwrap();
-        assert_eq!(snapshot.mime_type, "text/plain");
+        assert_eq!(snapshot.mime_type, "text/markdown");
         assert!(matches!(
             snapshot.block,
             ContentBlock::Artifact {
                 inline: Some(ref text),
                 ..
-            } if text == "hello snapshot"
+            } if text == "# Title"
         ));
     }
 

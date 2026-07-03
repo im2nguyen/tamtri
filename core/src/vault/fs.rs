@@ -244,6 +244,10 @@ impl FilesystemVault {
         let (messages, _) = Self::read_messages(dir)?;
         Ok(Conversation::from_parts(meta, messages))
     }
+
+    pub fn load_conversation_from_dir(dir: &Path) -> Result<Conversation> {
+        Self::load_from_dir(dir)
+    }
 }
 
 pub fn append_vault_event(root: &Path, event: &Event) -> Result<()> {
@@ -453,7 +457,7 @@ fn repair_torn_tail_named(lock_file: &mut File, target: &Path) -> Result<()> {
     repair_torn_tail(&mut file)
 }
 
-fn copy_attachments_dir(src: &Path, dst: &Path) -> Result<()> {
+pub(crate) fn copy_attachments_dir(src: &Path, dst: &Path) -> Result<()> {
     if !src.is_dir() {
         return Ok(());
     }

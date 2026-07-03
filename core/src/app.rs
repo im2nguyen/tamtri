@@ -16,6 +16,9 @@ use crate::config::{
     load_app_config, replace_gateway_servers, save_app_config, GatewayScope, GatewayServerConfig,
     GatewayTransport, OAuthConfig,
 };
+use crate::harness::health::{health_entries_from_roster, it_admin_checklist, HarnessHealthStatus};
+use crate::search::{search_conversations, SearchMatchField, SEARCH_SCOPE_MESSAGE};
+use crate::vault::bundle::{export_conversation_bundle, import_bundle_or_folder_as_new};
 use crate::conversation::reduce::TurnReducer;
 use crate::conversation::{
     attach_root, remove_root, validate_root, ContentBlock, Conversation, ElicitationAction, Id,
@@ -111,6 +114,35 @@ pub struct WorkdirFileContentDto {
 pub struct GatewayEnvVarDto {
     pub name: String,
     pub value: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, uniffi::Record)]
+pub struct HarnessHealthEntryDto {
+    pub id: String,
+    pub display_name: String,
+    pub command: String,
+    pub status: String,
+    pub install_doc_url: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, uniffi::Record)]
+pub struct SearchHitDto {
+    pub conversation_id: String,
+    pub title: String,
+    pub snippet: String,
+    pub match_field: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, uniffi::Record)]
+pub struct ImportWarningDto {
+    pub kind: String,
+    pub detail: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, uniffi::Record)]
+pub struct ImportResultDto {
+    pub conversation: ConversationDto,
+    pub warnings: Vec<ImportWarningDto>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, uniffi::Record)]
@@ -737,6 +769,37 @@ impl TamtriCore {
 
     pub fn app_bridge_bootstrap_script(&self) -> String {
         app_bridge_bootstrap_script("tamtriAppBridge")
+    }
+
+    pub fn export_conversation_bundle(
+        &self,
+        conversation_id: String,
+        dest_path: String,
+    ) -> FfiResult<()> {
+        let id = parse_id(&conversation_id)?;
+        export_conversation_bundle(&self.vault, id, PathBuf::from(dest_path).as_path())
+            .map_err(ffi_err)
+    }
+
+    pub fn import_bundle_or_folder_as_new(&self, source_path: String) -> FfiResult<ImportResultDto> {
+        self.import_bundle_or_folder_as_new_inner(source_path.into())
+            .map_err(ffi_err)
+    }
+
+    pub fn search_conversations(&self, query: String) -> FfiResult<Vec<SearchHitDto>> {
+        self.search_conversations_inner(&query).map_err(ffi_err)
+    }
+
+    pub fn search_scope_message(&self) -> String {
+        SEARCH_SCOPE_MESSAGE.to_string()
+    }
+
+    pub fn list_harness_health(&self) -> FfiResult<Vec<HarnessHealthEntryDto>> {
+        self.list_harness_health_inner().map_err(ffi_err)
+    }
+
+    pub fn harness_health_checklist(&self) -> FfiResult<String> {
+        self.harness_health_checklist_inner().map_err(ffi_err)
     }
 }
 
@@ -1690,6 +1753,66 @@ impl TamtriCore {
         let conversation_dir = self.vault.conversation_folder(id)?;
         let attachment = verify_attachment(&conversation_dir, path, size, sha256)?;
         Ok(attachment.to_string_lossy().to_string())
+    }
+
+    pub fn import_bundle_or_folder_as_new_inner(
+        &self,
+        source_path: PathBuf,
+    ) -> Result<ImportResultDto> {
+        let result = import_bundle_or_folder_as_new(&self.vault, &source_path)?;
+        self.invalidate_conversation_cache(result.conversation.id);
+        Ok(ImportResultDto {
+            conversation: conversation_to_dto(&result.conversation)?,
+            warnings: result
+                .warnings
+                .into_iter()
+                .map(|warning| ImportWarningDto {
+                    kind: warning.kind,
+                    detail: warning.detail,
+                })
+                .collect(),
+        })
+    }
+
+    pub fn search_conversations_inner(&self, query: &str) -> Result<Vec<SearchHitDto>> {
+        Ok(search_conversations(self.vault.as_ref(), query)?
+            .into_iter()
+            .map(|hit| SearchHitDto {
+                conversation_id: hit.conversation_id.to_string(),
+                title: hit.title,
+                snippet: hit.snippet,
+                match_field: match hit.match_field {
+                    SearchMatchField::Title => "title".to_string(),
+                    SearchMatchField::Text => "text".to_string(),
+                    SearchMatchField::Thinking => "thinking".to_string(),
+                },
+            })
+            .collect())
+    }
+
+    pub fn list_harness_health_inner(&self) -> Result<Vec<HarnessHealthEntryDto>> {
+        let config = load_app_config(self.vault.root())?;
+        Ok(health_entries_from_roster(&config.agent_roster)
+            .into_iter()
+            .map(|entry| HarnessHealthEntryDto {
+                id: entry.id,
+                display_name: entry.display_name,
+                command: entry.command,
+                status: match entry.status {
+                    HarnessHealthStatus::Missing => "missing".to_string(),
+                    HarnessHealthStatus::Ready => "ready".to_string(),
+                    HarnessHealthStatus::Unknown => "unknown".to_string(),
+                },
+                install_doc_url: entry.install_doc_url,
+            })
+            .collect())
+    }
+
+    pub fn harness_health_checklist_inner(&self) -> Result<String> {
+        let config = load_app_config(self.vault.root())?;
+        Ok(it_admin_checklist(&health_entries_from_roster(
+            &config.agent_roster,
+        )))
     }
 
     fn adapter(&self, harness_id: &str) -> Result<Arc<dyn HarnessAdapter>> {

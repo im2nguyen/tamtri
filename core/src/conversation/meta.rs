@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use crate::conversation::{Conversation, Id, McpServerRef, Message, Root, WorkingDir};
 use crate::{CoreError, Result};
 
-pub const SCHEMA_VERSION: u32 = 1;
+pub const SCHEMA_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ConversationMeta {

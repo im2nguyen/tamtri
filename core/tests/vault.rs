@@ -180,7 +180,7 @@ fn meta_is_versioned() {
         &fs::read_to_string(conversation_dir(dir.path(), c.id).join("meta.json")).unwrap(),
     )
     .unwrap();
-    assert_eq!(meta["schema_version"], json!(1));
+    assert_eq!(meta["schema_version"], json!(2));
 }
 
 #[test]
@@ -307,6 +307,7 @@ fn import_rejects_malformed_artifact() {
         size: 1,
         sha256: "abc".into(),
         inline: Some("x".into()),
+        integrity_failed: false,
     }];
     let raw = serde_json::to_string(&bad).unwrap();
     fs::write(src.join("messages.jsonl"), format!("{raw}\n")).unwrap();
@@ -698,6 +699,7 @@ fn artifact_inline_respects_threshold() {
         size: 1,
         sha256: "abc".into(),
         inline: Some("x".repeat(ARTIFACT_INLINE_MAX_BYTES + 1)),
+        integrity_failed: false,
     };
     assert!(
         message_to_line(&Message {
@@ -722,6 +724,7 @@ fn artifact_inline_respects_threshold() {
         size: 1,
         sha256: "abc".into(),
         inline: Some("x".repeat(ARTIFACT_INLINE_MAX_BYTES + 1)),
+        integrity_failed: false,
     }];
     let raw = serde_json::to_string(&bad).unwrap();
     fs::write(dir.join("messages.jsonl"), format!("{raw}\n")).unwrap();
@@ -744,6 +747,7 @@ fn assert_load_rejects_artifact_path(path: &str) {
         size: 1,
         sha256: "abc".into(),
         inline: Some("x".into()),
+        integrity_failed: false,
     }];
     let raw = serde_json::to_string(&bad).unwrap();
     fs::write(dir.join("messages.jsonl"), format!("{raw}\n")).unwrap();

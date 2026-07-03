@@ -1,3 +1,4 @@
+pub mod bundle;
 pub mod events;
 pub mod fs;
 pub mod naming;

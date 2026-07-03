@@ -68,6 +68,31 @@ dictionary GatewaySettingsDto {
   u64 default_call_timeout_secs;
 };
 
+dictionary ImportWarningDto {
+  string kind;
+  string detail;
+};
+
+dictionary ImportResultDto {
+  ConversationDto conversation;
+  sequence<ImportWarningDto> warnings;
+};
+
+dictionary SearchHitDto {
+  string conversation_id;
+  string title;
+  string snippet;
+  string match_field;
+};
+
+dictionary HarnessHealthEntryDto {
+  string id;
+  string display_name;
+  string command;
+  string status;
+  string install_doc_url;
+};
+
 dictionary AgentRosterEntryDto {
   string id;
   string display_name;
@@ -188,6 +213,17 @@ interface TamtriCore {
   [Throws=TamtriError]
   void log_app_navigation_blocked(string conversation_id, string server_id, string template_ref, string url);
   string app_bridge_bootstrap_script();
+  [Throws=TamtriError]
+  void export_conversation_bundle(string conversation_id, string dest_path);
+  [Throws=TamtriError]
+  ImportResultDto import_bundle_or_folder_as_new(string source_path);
+  [Throws=TamtriError]
+  sequence<SearchHitDto> search_conversations(string query);
+  string search_scope_message();
+  [Throws=TamtriError]
+  sequence<HarnessHealthEntryDto> list_harness_health();
+  [Throws=TamtriError]
+  string harness_health_checklist();
 };
 
 namespace tamtri {};

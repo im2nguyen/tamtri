@@ -7,6 +7,7 @@ pub mod error;
 pub mod harness;
 pub mod mcp;
 pub mod rpc;
+pub mod search;
 pub mod vault;
 
 pub use app::{ConversationDto, ConversationObserver, ConversationSummaryDto, TamtriCore, UiEvent};
