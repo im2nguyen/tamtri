@@ -4,20 +4,39 @@ import Foundation
 @MainActor
 final class AppStore: ObservableObject {
     @Published var conversations: [ConversationSummary] = []
+    @Published var selectedConversationId: String?
     @Published var selectedConversation: ConversationRecord?
     @Published var liveEvents: [CoreEvent] = []
     @Published var composerText = ""
     @Published var workdirFiles: [WorkdirFileRecord] = []
     @Published var selectedWorkdirFile: WorkdirFileRecord?
     @Published var workdirPreview: WorkdirFilePreview?
-    @Published var showFilesPanel = true
+    @Published var showFilesPanel = false
     @Published var showNewConversation = false
     @Published var showSettings = false
     @Published var showForkConversation = false
     @Published var gatewayServers: [GatewayServerRecord] = []
     @Published var errorMessage: String?
+    @Published var isLoadingConversation = false
 
     private let core: CoreClient
+    private var conversationCache: [String: ConversationRecord] = [:]
+    private var pendingSelectionId: String?
+
+    var isSwitchingConversation: Bool {
+        guard let targetId = selectedConversationId else { return false }
+        return isLoadingConversation || selectedConversation?.id != targetId
+    }
+
+    var displayedConversation: ConversationRecord? {
+        guard let targetId = selectedConversationId,
+              let conversation = selectedConversation,
+              conversation.id == targetId
+        else {
+            return nil
+        }
+        return conversation
+    }
 
     init(core: CoreClient) {
         self.core = core
@@ -26,8 +45,9 @@ final class AppStore: ObservableObject {
                 await MainActor.run {
                     self.liveEvents.append(event)
                     if event.kind == "turn_ended" || event.kind == "message_committed" {
+                        self.conversationCache.removeValue(forKey: event.conversationId)
                         let preferNewest = event.kind == "turn_ended"
-                        Task { await self.refreshWorkdirFiles(preferNewest: preferNewest) }
+                        Task { await self.refreshWorkdirFiles(preferNewest: preferNewest, force: preferNewest) }
                     }
                 }
             }
@@ -38,7 +58,12 @@ final class AppStore: ObservableObject {
         do {
             conversations = try await core.listConversations()
             if selectedConversation == nil, let first = conversations.first {
-                selectedConversation = try await core.loadConversation(id: first.id)
+                selectedConversationId = first.id
+                if let cached = conversationCache[first.id] {
+                    applySelection(cached)
+                } else {
+                    await loadConversation(id: first.id, summary: first)
+                }
             }
             await refreshWorkdirFiles()
         } catch {
@@ -46,23 +71,73 @@ final class AppStore: ObservableObject {
         }
     }
 
-    func select(_ summary: ConversationSummary) {
+    func selectConversation(_ summary: ConversationSummary) {
+        if selectedConversation?.id == summary.id {
+            selectedConversationId = summary.id
+            return
+        }
+        if pendingSelectionId == summary.id, isLoadingConversation {
+            return
+        }
+
+        selectedConversationId = summary.id
+
+        if let cached = conversationCache[summary.id] {
+            applySelection(cached)
+            return
+        }
+
         Task {
-            do {
-                selectedWorkdirFile = nil
-                workdirPreview = nil
-                selectedConversation = try await core.loadConversation(id: summary.id)
-                await refreshWorkdirFiles()
-            } catch {
-                errorMessage = error.localizedDescription
+            await loadConversation(id: summary.id, summary: summary)
+        }
+    }
+
+    private func loadConversation(id: String, summary: ConversationSummary?) async {
+        pendingSelectionId = id
+        isLoadingConversation = true
+        let started = ContinuousClock.now
+
+        defer {
+            if pendingSelectionId == id {
+                isLoadingConversation = false
             }
         }
+
+        do {
+            let record = try await core.loadConversation(id: id)
+            let elapsed = started.duration(to: .now)
+            #if DEBUG
+            print("[tamtri] load conversation \(id) in \(elapsed)")
+            #endif
+
+            conversationCache[id] = record
+            guard pendingSelectionId == id, selectedConversationId == id else { return }
+            applySelection(record)
+        } catch {
+            guard pendingSelectionId == id, selectedConversationId == id else { return }
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private func applySelection(_ record: ConversationRecord) {
+        selectedWorkdirFile = nil
+        workdirPreview = nil
+        selectedConversation = record
+        selectedConversationId = record.id
+        Task { await refreshWorkdirFiles() }
+    }
+
+    private func cacheConversation(_ record: ConversationRecord) {
+        conversationCache[record.id] = record
     }
 
     func createConversation(title: String, harnessId: String, modelId: String) {
         Task {
             do {
-                selectedConversation = try await core.createConversation(title: title, harnessId: harnessId, modelId: modelId)
+                let record = try await core.createConversation(title: title, harnessId: harnessId, modelId: modelId)
+                cacheConversation(record)
+                selectedConversationId = record.id
+                selectedConversation = record
                 await refresh()
             } catch {
                 errorMessage = error.localizedDescription
@@ -74,7 +149,10 @@ final class AppStore: ObservableObject {
         guard let conversation = selectedConversation else { return }
         Task {
             do {
-                selectedConversation = try await core.forkConversation(id: conversation.id, harnessId: harnessId, modelId: modelId)
+                let record = try await core.forkConversation(id: conversation.id, harnessId: harnessId, modelId: modelId)
+                cacheConversation(record)
+                selectedConversationId = record.id
+                selectedConversation = record
                 await refresh()
             } catch {
                 errorMessage = error.localizedDescription
@@ -112,7 +190,7 @@ final class AppStore: ObservableObject {
                     } else {
                         composerText += "\n\(attachmentText)"
                     }
-                    await refreshWorkdirFiles()
+                    await refreshWorkdirFiles(force: true)
                 }
             } catch {
                 errorMessage = error.localizedDescription
@@ -120,11 +198,14 @@ final class AppStore: ObservableObject {
         }
     }
 
-    func refreshWorkdirFiles(preferNewest: Bool = false) async {
+    func refreshWorkdirFiles(preferNewest: Bool = false, force: Bool = false) async {
         guard let conversation = selectedConversation else {
             workdirFiles = []
             selectedWorkdirFile = nil
             workdirPreview = nil
+            return
+        }
+        guard showFilesPanel || force else {
             return
         }
         do {

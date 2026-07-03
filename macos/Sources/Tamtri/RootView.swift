@@ -46,21 +46,23 @@ struct SidebarView: View {
     @EnvironmentObject private var store: AppStore
 
     var body: some View {
-        List(store.conversations, selection: selectedBinding) { conversation in
-            Button {
-                store.select(conversation)
-            } label: {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(conversation.title)
-                        .font(.headline)
-                    Text(conversation.updatedAt)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
+        List(store.conversations, selection: $store.selectedConversationId) { conversation in
+            VStack(alignment: .leading, spacing: 2) {
+                Text(conversation.title)
+                    .font(.headline)
+                Text(conversation.updatedAt)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
-            .buttonStyle(.plain)
+            .tag(conversation.id)
         }
         .navigationTitle("tamtri")
+        .onChange(of: store.selectedConversationId) { _, newId in
+            guard let newId,
+                  let summary = store.conversations.first(where: { $0.id == newId })
+            else { return }
+            store.selectConversation(summary)
+        }
         .toolbar {
             Button {
                 store.showSettings = true
@@ -75,13 +77,6 @@ struct SidebarView: View {
             }
         }
     }
-
-    private var selectedBinding: Binding<String?> {
-        Binding(
-            get: { store.selectedConversation?.id },
-            set: { _ in }
-        )
-    }
 }
 
 struct TranscriptView: View {
@@ -89,25 +84,68 @@ struct TranscriptView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 12) {
-                    if let conversation = store.selectedConversation {
+            ZStack {
+                if let conversation = store.displayedConversation {
+                    VStack(alignment: .leading, spacing: 0) {
                         ConversationHeader(conversation: conversation)
-                        ForEach(Array(conversation.messagesJSON.enumerated()), id: \.offset) { _, messageJSON in
-                            MessageRow(conversationId: conversation.id, messageJSON: messageJSON)
-                        }
+                            .padding(.horizontal)
+                            .padding(.top, 12)
+                        WebTranscriptView(transcriptJSON: conversation.transcriptJSON)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
                     }
-                    ForEach(Array(liveEvents.enumerated()), id: \.offset) { _, event in
-                        EventRow(event: event)
+                } else if store.isSwitchingConversation {
+                    VStack(spacing: 12) {
+                        ProgressView()
+                            .controlSize(.large)
+                        Text("Loading conversation…")
+                            .foregroundStyle(.secondary)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
+
+                if store.isSwitchingConversation, store.displayedConversation != nil {
+                    VStack {
+                        HStack {
+                            Spacer()
+                            ProgressView()
+                                .padding(10)
+                                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 8))
+                                .padding()
+                        }
+                        Spacer()
                     }
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding()
             }
+
+            if !liveEvents.isEmpty {
+                Divider()
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 12) {
+                        ForEach(liveEvents) { item in
+                            EventRow(event: item.event)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding()
+                }
+                .frame(maxHeight: 220)
+            }
+
             Divider()
             ComposerView()
         }
         .toolbar {
+            ToolbarItem(placement: .principal) {
+                if store.isSwitchingConversation {
+                    HStack(spacing: 8) {
+                        ProgressView()
+                            .controlSize(.small)
+                        Text("Loading…")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
             ToolbarItem(placement: .automatic) {
                 Button {
                     store.showFilesPanel.toggle()
@@ -115,20 +153,33 @@ struct TranscriptView: View {
                     Label("Files", systemImage: "doc.text")
                 }
                 .help("Show working files")
-                .disabled(store.selectedConversation == nil)
+                .disabled(store.selectedConversationId == nil)
             }
         }
         .inspector(isPresented: $store.showFilesPanel) {
             FilesSidebarView()
         }
+        .onChange(of: store.showFilesPanel) { _, isPresented in
+            if isPresented {
+                Task { await store.refreshWorkdirFiles() }
+            }
+        }
     }
 
-    private var liveEvents: [CoreEvent] {
-        guard let selectedId = store.selectedConversation?.id else {
+    private var liveEvents: [IdentifiedCoreEvent] {
+        guard let selectedId = store.selectedConversationId else {
             return []
         }
-        return store.liveEvents.filter { $0.conversationId == selectedId }
+        return store.liveEvents
+            .enumerated()
+            .filter { $0.element.conversationId == selectedId }
+            .map { IdentifiedCoreEvent(id: $0.offset, event: $0.element) }
     }
+}
+
+private struct IdentifiedCoreEvent: Identifiable {
+    let id: Int
+    let event: CoreEvent
 }
 
 struct ConversationHeader: View {
@@ -180,7 +231,10 @@ struct EventRow: View {
             Text(EventPayload.text(from: event.payloadJSON))
                 .textSelection(.enabled)
         case "message_committed":
-            MessageRow(conversationId: event.conversationId, messageJSON: event.payloadJSON)
+            MessageRow(
+                conversationId: event.conversationId,
+                message: ParsedTranscriptMessage(json: event.payloadJSON, fallbackIndex: 0)
+            )
         case "permission_resolved":
             Text("Permission resolved")
                 .font(.caption)
@@ -229,14 +283,14 @@ struct GatewayEventCard: View {
 
 struct MessageRow: View {
     let conversationId: String
-    let messageJSON: String
-
-    private var message: TranscriptMessage? {
-        try? JSONDecoder().decode(TranscriptMessage.self, from: Data(messageJSON.utf8))
-    }
+    let message: ParsedTranscriptMessage
 
     var body: some View {
-        if let message {
+        if let rawJSON = message.rawJSON {
+            Text(rawJSON)
+                .font(.body.monospaced())
+                .textSelection(.enabled)
+        } else {
             VStack(alignment: .leading, spacing: 8) {
                 HStack(spacing: 6) {
                     Text(message.role.capitalized)
@@ -253,17 +307,13 @@ struct MessageRow: View {
             }
             .padding(.vertical, 6)
             .accessibilityElement(children: .contain)
-        } else {
-            Text(messageJSON)
-                .font(.body.monospaced())
-                .textSelection(.enabled)
         }
     }
 }
 
 struct ContentBlockView: View {
     let conversationId: String
-    fileprivate let block: TranscriptContentBlock
+    let block: TranscriptContentBlock
 
     var body: some View {
         switch block.type {
@@ -271,7 +321,7 @@ struct ContentBlockView: View {
             Text(block.text ?? "")
                 .textSelection(.enabled)
         case "thinking":
-            DisclosureGroup("Thinking") {
+            DisclosureGroup("Thinking", isExpanded: .constant(false)) {
                 Text(block.text ?? "")
                     .textSelection(.enabled)
             }
@@ -300,7 +350,7 @@ struct ContentBlockView: View {
 struct ArtifactCard: View {
     @EnvironmentObject private var store: AppStore
     let conversationId: String
-    fileprivate let block: TranscriptContentBlock
+    let block: TranscriptContentBlock
     @State private var verifiedInline: String?
     @State private var verifiedText: String?
     @State private var verifiedImage: NSImage?
@@ -718,54 +768,6 @@ private struct PermissionOptionPayload: Decodable, Identifiable {
     }
 }
 
-private struct TranscriptMessage: Decodable {
-    let role: String
-    let harnessId: String?
-    let content: [TranscriptContentBlock]
-
-    enum CodingKeys: String, CodingKey {
-        case role
-        case harnessId = "harness_id"
-        case content
-    }
-}
-
-private struct TranscriptContentBlock: Decodable {
-    let type: String
-    let text: String?
-    let name: String?
-    let input: JSONValue?
-    let callId: String?
-    let output: JSONValue?
-    let path: String?
-    let mimeType: String?
-    let size: UInt64?
-    let sha256: String?
-    let inline: String?
-
-    enum CodingKeys: String, CodingKey {
-        case type
-        case text
-        case name
-        case input
-        case callId = "call_id"
-        case output
-        case path
-        case mimeType = "mime_type"
-        case size
-        case sha256
-        case inline
-    }
-
-    var inputSummary: String {
-        input?.description ?? ""
-    }
-
-    var outputSummary: String {
-        output?.description ?? ""
-    }
-}
-
 private struct EventPayload: Decodable {
     let text: String?
 
@@ -787,70 +789,6 @@ private struct ToolSummary {
         self.title = name ?? event.kind.replacingOccurrences(of: "_", with: " ").capitalized
         self.subtitle = [status, path].compactMap { $0 }.joined(separator: " • ")
         self.detail = json?.description ?? event.payloadJSON
-    }
-}
-
-private enum JSONValue: Decodable, CustomStringConvertible {
-    case string(String)
-    case number(Double)
-    case bool(Bool)
-    case object([String: JSONValue])
-    case array([JSONValue])
-    case null
-
-    init(from decoder: Decoder) throws {
-        let container = try decoder.singleValueContainer()
-        if container.decodeNil() {
-            self = .null
-        } else if let value = try? container.decode(Bool.self) {
-            self = .bool(value)
-        } else if let value = try? container.decode(Double.self) {
-            self = .number(value)
-        } else if let value = try? container.decode(String.self) {
-            self = .string(value)
-        } else if let value = try? container.decode([JSONValue].self) {
-            self = .array(value)
-        } else {
-            self = .object(try container.decode([String: JSONValue].self))
-        }
-    }
-
-    var description: String {
-        switch self {
-        case .string(let value):
-            value
-        case .number(let value):
-            value.rounded() == value ? String(Int(value)) : String(value)
-        case .bool(let value):
-            String(value)
-        case .null:
-            "null"
-        case .array(let values):
-            values.map(\.description).joined(separator: "\n")
-        case .object(let object):
-            object
-                .sorted { $0.key < $1.key }
-                .map { "\($0.key): \($0.value.description)" }
-                .joined(separator: "\n")
-        }
-    }
-
-    static func from(json: String) -> JSONValue? {
-        try? JSONDecoder().decode(JSONValue.self, from: Data(json.utf8))
-    }
-
-    func value(at key: String) -> JSONValue? {
-        if case .object(let object) = self {
-            return object[key]
-        }
-        return nil
-    }
-
-    func string(at key: String) -> String? {
-        guard case .string(let value) = value(at: key) else {
-            return nil
-        }
-        return value
     }
 }
 

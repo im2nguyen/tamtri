@@ -54,6 +54,11 @@ impl FilesystemVault {
         self.resolve_folder(id)
     }
 
+    pub fn meta_updated_at(&self, id: Id) -> Result<chrono::DateTime<chrono::Utc>> {
+        let dir = self.resolve_folder(id)?;
+        Ok(Self::read_meta_at(&dir)?.updated_at)
+    }
+
     fn conversations_dir(&self) -> PathBuf {
         self.root.join("conversations")
     }

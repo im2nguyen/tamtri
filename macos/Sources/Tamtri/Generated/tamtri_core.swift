@@ -1132,16 +1132,16 @@ public struct ConversationDto: Equatable, Hashable {
     public var title: String
     public var activeHarnessId: String?
     public var modelId: String?
-    public var messagesJson: [String]
+    public var transcriptJson: String
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(id: String, title: String, activeHarnessId: String?, modelId: String?, messagesJson: [String]) {
+    public init(id: String, title: String, activeHarnessId: String?, modelId: String?, transcriptJson: String) {
         self.id = id
         self.title = title
         self.activeHarnessId = activeHarnessId
         self.modelId = modelId
-        self.messagesJson = messagesJson
+        self.transcriptJson = transcriptJson
     }
 
     
@@ -1164,7 +1164,7 @@ public struct FfiConverterTypeConversationDto: FfiConverterRustBuffer {
                 title: FfiConverterString.read(from: &buf), 
                 activeHarnessId: FfiConverterOptionString.read(from: &buf), 
                 modelId: FfiConverterOptionString.read(from: &buf), 
-                messagesJson: FfiConverterSequenceString.read(from: &buf)
+                transcriptJson: FfiConverterString.read(from: &buf)
         )
     }
 
@@ -1173,7 +1173,7 @@ public struct FfiConverterTypeConversationDto: FfiConverterRustBuffer {
         FfiConverterString.write(value.title, into: &buf)
         FfiConverterOptionString.write(value.activeHarnessId, into: &buf)
         FfiConverterOptionString.write(value.modelId, into: &buf)
-        FfiConverterSequenceString.write(value.messagesJson, into: &buf)
+        FfiConverterString.write(value.transcriptJson, into: &buf)
     }
 }
 
