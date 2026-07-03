@@ -21,6 +21,35 @@ final class Milestone6UIStateTests: XCTestCase {
         XCTAssertEqual(fields.count, 1)
         XCTAssertEqual(fields[0].id, "animal")
         XCTAssertEqual(fields[0].enumValues, ["cat", "dog"])
+
+        let presentation = ElicitationFormPresentationBuilder.build(fields: fields)
+        XCTAssertEqual(
+            presentation.cardAccessibilityLabel,
+            ElicitationFormPresentationBuilder.cardAccessibilityLabel
+        )
+        XCTAssertEqual(presentation.fieldAccessibilityLabels, ["Animal"])
+        XCTAssertTrue(presentation.submitUsesDefaultKeyboardShortcut)
+    }
+
+    func testElicitationFormFieldAccessibilityLabelsCoverRequiredFields() {
+        let schema: JSONValue = .object([
+            "type": .string("object"),
+            "properties": .object([
+                "name": .object([
+                    "type": .string("string"),
+                    "title": .string("Display name")
+                ]),
+                "count": .object([
+                    "type": .string("integer"),
+                    "title": .string("Count")
+                ])
+            ]),
+            "required": .array([.string("name"), .string("count")])
+        ])
+        let fields = ElicitationSchemaParser.fields(from: schema)
+        let presentation = ElicitationFormPresentationBuilder.build(fields: fields)
+        XCTAssertEqual(presentation.fieldAccessibilityLabels, ["Count", "Display name"])
+        XCTAssertEqual(presentation.cardAccessibilityLabel, "Elicitation requested")
     }
 
     func testURLHandoffConsentCardStateSnapshot() {

@@ -205,6 +205,90 @@ fn acp_form_elicitation_persists_request_and_response_in_messages_jsonl() {
 }
 
 #[test]
+fn acp_form_elicitation_redacts_access_token_in_messages_jsonl() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let observer = Arc::new(RecordingObserver::default());
+    let core = TamtriCore::new(temp.path().to_string_lossy().into_owned(), observer.clone())
+        .expect("core");
+
+    let mock_mcp = env!("CARGO_BIN_EXE_mock-mcp-server").to_string();
+    tamtri_core::config::replace_gateway_servers(
+        temp.path(),
+        vec![gateway_mock_server(&mock_mcp)],
+    )
+    .expect("save config");
+
+    core.register_acp_agent(
+        "mock-acp".to_string(),
+        "Mock ACP".to_string(),
+        env!("CARGO_BIN_EXE_mock-acp-agent").to_string(),
+        Vec::new(),
+    )
+    .expect("agent");
+
+    let conversation = core
+        .create_conversation(
+            "Token redact".to_string(),
+            "mock-acp".to_string(),
+            "mock".to_string(),
+        )
+        .expect("conversation");
+
+    core.send_message(conversation.id.clone(), "form-elicit".to_string())
+        .expect("send");
+
+    let (request_id, _) = wait_for_form_elicitation_requested(&observer);
+
+    const RAW_TOKEN: &str = "super-secret-access-token-value";
+    core.respond_elicitation(
+        conversation.id.clone(),
+        request_id,
+        "accept".to_string(),
+        Some(format!(
+            r#"{{"name":"tamtri","access_token":"{RAW_TOKEN}"}}"#
+        )),
+    )
+    .expect("respond elicitation");
+
+    let perm_request_id = wait_for_permission_requested(&observer);
+    core.respond_permission(
+        conversation.id.clone(),
+        perm_request_id,
+        "allow_once".to_string(),
+    )
+    .expect("permission");
+
+    wait_for_turn_end(&observer);
+    std::thread::sleep(Duration::from_millis(200));
+
+    let messages_path = find_file(temp.path(), "messages.jsonl").expect("messages.jsonl");
+    let messages_text = fs::read_to_string(&messages_path).expect("read messages");
+    assert!(
+        !messages_text.contains(RAW_TOKEN),
+        "messages.jsonl must not contain raw access_token value"
+    );
+    assert!(
+        messages_text.contains(r#""access_token":"[redacted]""#)
+            || messages_text.contains(r#""access_token": "[redacted]""#),
+        "messages.jsonl should redact access_token; got:\n{messages_text}"
+    );
+
+    let messages: Vec<Value> = messages_text
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| serde_json::from_str(line).expect("message line"))
+        .collect();
+    let response = messages
+        .iter()
+        .flat_map(|message| message["content"].as_array())
+        .flatten()
+        .find(|block| block["type"] == "elicitation_response")
+        .expect("elicitation_response block");
+    assert_eq!(response["data"]["name"], "tamtri");
+    assert_eq!(response["data"]["access_token"], "[redacted]");
+}
+
+#[test]
 fn acp_agent_receives_tool_result_after_form_elicitation() {
     let temp = tempfile::tempdir().expect("tempdir");
     let observer = Arc::new(RecordingObserver::default());

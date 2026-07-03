@@ -37,6 +37,73 @@ final class KeychainCredentialStoreTests: XCTestCase {
         XCTAssertNil(KeychainCredentialStore.load(for: ref))
     }
 
+    func testKeychainSaveFailureSurfacesError() {
+        let ref = "tamtri-denied-\(UUID().uuidString)"
+        KeychainCredentialStore.testSaveFailureStatus = errSecAuthFailed
+        defer { KeychainCredentialStore.testSaveFailureStatus = nil }
+
+        XCTAssertThrowsError(try KeychainCredentialStore.save(value: "secret", for: ref)) { error in
+            let nsError = error as NSError
+            XCTAssertEqual(nsError.domain, NSOSStatusErrorDomain)
+            XCTAssertEqual(nsError.code, Int(errSecAuthFailed))
+        }
+        XCTAssertNil(KeychainCredentialStore.load(for: ref))
+    }
+
+    func testBindingClientSurfacesKeychainSaveFailure() async throws {
+        let vaultURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("tamtri-kc-denied-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: vaultURL, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: vaultURL) }
+
+        guard let mockMcp = Self.mockMcpServerPath() else {
+            throw XCTSkip("mock-mcp-server not built; run cargo build first")
+        }
+
+        let credentialRef = "keychain://swift-denied-\(UUID().uuidString)"
+        let configJSON = """
+        {
+          "gateway": {
+            "default_call_timeout_secs": 300,
+            "servers": [{
+              "id": "mock",
+              "display_name": "Mock MCP",
+              "enabled": true,
+              "scope": "user",
+              "transport": {"type": "stdio", "command": "\(mockMcp)", "args": [], "env": []},
+              "credentials": [{
+                "credential_ref": "\(credentialRef)",
+                "target": {"type": "env_var", "name": "MOCK_TOKEN"}
+              }]
+            }]
+          }
+        }
+        """
+        try configJSON.write(
+            to: vaultURL.appendingPathComponent("config.json"),
+            atomically: true,
+            encoding: .utf8
+        )
+
+        let client = try TamtriBindingClient(vaultPath: vaultURL.path)
+        KeychainCredentialStore.testSaveFailureStatus = errSecAuthFailed
+        defer { KeychainCredentialStore.testSaveFailureStatus = nil }
+
+        do {
+            try await client.setGatewayCredential(credentialRef: credentialRef, value: "ffi-secret-value")
+            XCTFail("expected keychain save failure to propagate")
+        } catch {
+            let nsError = error as NSError
+            XCTAssertEqual(nsError.domain, NSOSStatusErrorDomain)
+            XCTAssertEqual(nsError.code, Int(errSecAuthFailed))
+        }
+
+        var servers = try await client.listGatewayServers()
+        XCTAssertEqual(servers[0].missingCredentialRefs, [credentialRef])
+        let exported = try await client.exportGatewayCredential(credentialRef: credentialRef)
+        XCTAssertNil(exported)
+    }
+
     /// Mirrors `AppStore.reloadGatewayServers` keychain preload into core memory.
     func testKeychainPreloadRoundTripMatchesReloadPath() throws {
         let ref = "tamtri-reload-test-\(UUID().uuidString)"

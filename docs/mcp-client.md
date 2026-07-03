@@ -98,6 +98,7 @@ Downstream servers may call `elicitation/create` while a `tools/call` is pending
 - **Form mode** renders a native SwiftUI card for structured, non-secret answers.
 - **URL mode** renders a consent card with exact destination origin and path (query stripped in audit logs), then opens the system browser only after explicit approval.
 - Shared URL validation lives in `core/src/mcp/url_handoff.rs`. Non-HTTPS URLs are rejected except loopback OAuth callbacks. Userinfo URLs are rejected.
+- **Timeout:** V1 has no separate elicitation idle timer. A pending elicitation resolves when the user responds, the run is cancelled, the app quits (`prepare_for_app_quit`), or the parent downstream `tools/call` hits `default_call_timeout_secs` / per-server `timeout_secs`.
 
 ## OAuth for remote HTTP servers (Milestone 6)
 

@@ -75,6 +75,10 @@ cargo test -p tamtri-core url_elicitation
 
 `core/tests/gateway_elicitation.rs` covers form accept round-trips. URL-mode tests cover accept/decline and validation (HTTPS required, userinfo rejected). Audit logs store `url_origin` and a query-stripped `url`.
 
+`core/tests/acp_gateway_elicitation.rs` includes end-to-end checks that accepted form data with an `access_token` field is redacted to `[redacted]` in `messages.jsonl`.
+
+Pending elicitation has no separate idle timer in V1; it resolves when the user responds, the run is cancelled, the app quits, or the parent downstream `tools/call` hits the gateway timeout.
+
 ## Known limitations
 
 - URL mode is for trusted-domain handoff only; do not use it to collect secrets in a form.

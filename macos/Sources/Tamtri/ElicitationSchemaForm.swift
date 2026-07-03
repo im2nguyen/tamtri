@@ -23,6 +23,24 @@ enum ElicitationCardRouter {
     }
 }
 
+struct ElicitationFormPresentation: Equatable {
+    let cardAccessibilityLabel: String
+    let fieldAccessibilityLabels: [String]
+    let submitUsesDefaultKeyboardShortcut: Bool
+}
+
+enum ElicitationFormPresentationBuilder {
+    static let cardAccessibilityLabel = "Elicitation requested"
+
+    static func build(fields: [ElicitationSchemaField]) -> ElicitationFormPresentation {
+        ElicitationFormPresentation(
+            cardAccessibilityLabel: cardAccessibilityLabel,
+            fieldAccessibilityLabels: fields.map(\.title),
+            submitUsesDefaultKeyboardShortcut: true
+        )
+    }
+}
+
 enum ElicitationSchemaPolicy {
     static func textLooksSecret(_ text: String) -> Bool {
         let normalized = text.lowercased()

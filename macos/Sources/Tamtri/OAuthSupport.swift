@@ -115,7 +115,17 @@ enum OAuthTokenStore {
 }
 
 enum KeychainCredentialStore {
+    #if DEBUG
+    /// When set, `save` throws with this status instead of calling SecItemAdd (tests only).
+    nonisolated(unsafe) static var testSaveFailureStatus: OSStatus?
+    #endif
+
     static func save(value: String, for credentialRef: String) throws {
+        #if DEBUG
+        if let status = testSaveFailureStatus {
+            throw NSError(domain: NSOSStatusErrorDomain, code: Int(status))
+        }
+        #endif
         let data = Data(value.utf8)
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
