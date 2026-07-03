@@ -101,6 +101,89 @@ async fn gateway_elicitation_form_accept_round_trip() {
 }
 
 #[tokio::test]
+async fn concurrent_tool_calls_keep_elicitation_correlation() {
+    let command = env!("CARGO_BIN_EXE_mock-mcp-server");
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    let gateway = Arc::new(
+        McpGateway::new(
+            GatewayConfig {
+                default_call_timeout_secs: 300,
+                servers: vec![stdio_server("mock", command)],
+            },
+            Arc::new(NoCredentials),
+            Some(tx),
+        )
+        .unwrap(),
+    );
+
+    let tools = gateway.list_tools().await.unwrap();
+    let elicit = tools
+        .iter()
+        .find(|tool| tool.original_name == "elicit")
+        .map(|tool| tool.exposed_name.clone())
+        .expect("elicit tool");
+    let echo = tools
+        .iter()
+        .find(|tool| tool.original_name == "echo")
+        .map(|tool| tool.exposed_name.clone())
+        .expect("echo tool");
+
+    let gateway_for_elicit = Arc::clone(&gateway);
+    let elicit_task = tokio::spawn(async move {
+        gateway_for_elicit
+            .call_tool_with_meta(
+                &elicit,
+                json!({}),
+                Some(json!({"toolCallId": "tool-elicit"})),
+            )
+            .await
+    });
+
+    let gateway_for_echo = Arc::clone(&gateway);
+    let echo_task = tokio::spawn(async move {
+        gateway_for_echo
+            .call_tool_with_meta(
+                &echo,
+                json!({"ping": true}),
+                Some(json!({"toolCallId": "tool-echo"})),
+            )
+            .await
+    });
+
+    let requested = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if let Some(GatewayEvent::ElicitationRequested {
+                request_id,
+                origin_tool_call_id,
+                ..
+            }) = rx.recv().await
+            {
+                return (request_id, origin_tool_call_id);
+            }
+        }
+    })
+    .await
+    .expect("elicitation request timed out");
+
+    assert_eq!(requested.1.as_deref(), Some("tool-elicit"));
+
+    gateway
+        .respond_elicitation(
+            &requested.0,
+            ElicitationAction::Accept,
+            Some(json!({"name": "parallel"})),
+        )
+        .await
+        .unwrap();
+
+    let elicit_result = elicit_task.await.unwrap().unwrap();
+    assert_eq!(elicit_result.structured_content.unwrap()["name"], "parallel");
+
+    let echo_result = echo_task.await.unwrap().unwrap();
+    assert_eq!(echo_result.structured_content.unwrap()["echo"]["ping"], true);
+}
+
+#[tokio::test]
 async fn gateway_elicitation_decline_round_trip() {
     let command = env!("CARGO_BIN_EXE_mock-mcp-server");
     let (tx, mut rx) = mpsc::unbounded_channel();

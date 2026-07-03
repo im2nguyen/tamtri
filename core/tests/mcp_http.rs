@@ -50,6 +50,99 @@ async fn streamable_http_sse_response() {
     assert_eq!(result.content[0]["text"], "hello from sse");
 }
 
+#[tokio::test]
+async fn remote_http_server_uses_oauth_header_without_logging_value() {
+    use tamtri_core::config::{GatewayConfig, GatewayScope, GatewayServerConfig, GatewayTransport, OAuthConfig};
+    use tamtri_core::mcp::gateway::{GatewayEvent, McpGateway, MemoryCredentials};
+    use tamtri_core::mcp::oauth::{StoredOAuthBundle, serialize_stored_oauth};
+
+    let expected_token = "secret-access-token-123";
+    let (url, mut seen_rx) = spawn_http_fixture(false).await;
+    let credentials = Arc::new(MemoryCredentials::default());
+    let token_ref = "keychain://remote-oauth".to_string();
+    let bundle = StoredOAuthBundle {
+        access_token: expected_token.to_string(),
+        refresh_token: None,
+        expires_at: None,
+        reauth_required: false,
+    };
+    credentials
+        .set(token_ref.clone(), serialize_stored_oauth(&bundle).unwrap())
+        .unwrap();
+
+    let server = GatewayServerConfig {
+        id: "remote".to_string(),
+        display_name: "Remote".to_string(),
+        enabled: true,
+        scope: GatewayScope::User,
+        transport: GatewayTransport::StreamableHttp {
+            endpoint: url.clone(),
+            headers: Vec::new(),
+        },
+        timeout_secs: Some(30),
+        credentials: Vec::new(),
+        oauth: Some(OAuthConfig {
+            issuer: None,
+            authorization_endpoint: None,
+            token_endpoint: Some("https://example.com/token".to_string()),
+            client_id: "tamtri-test".to_string(),
+            scopes: vec!["mcp".to_string()],
+            token_ref: token_ref.clone(),
+        }),
+    };
+
+    let (event_tx, mut event_rx) = mpsc::unbounded_channel();
+    let gateway = McpGateway::new(
+        GatewayConfig {
+            default_call_timeout_secs: 30,
+            servers: vec![server],
+        },
+        credentials,
+        Some(event_tx),
+    )
+    .unwrap();
+
+    let tools = gateway.list_tools().await.unwrap();
+    let exposed = tools
+        .iter()
+        .find(|tool| tool.original_name == "http_echo")
+        .map(|tool| tool.exposed_name.clone())
+        .expect("http_echo tool");
+
+    let _ = gateway
+        .call_tool(&exposed, json!({"message": "hello"}))
+        .await
+        .unwrap();
+
+    // Assert HTTP server saw the Authorization header, and it matches.
+    let headers = tokio::time::timeout(std::time::Duration::from_secs(2), seen_rx.recv())
+        .await
+        .unwrap()
+        .expect("seen headers");
+    let expected_header = format!("Bearer {expected_token}");
+    assert_eq!(
+        headers.get("authorization").map(|value| value.as_str()),
+        Some(expected_header.as_str())
+    );
+
+    // Assert gateway emitted injection events but never logged the token value.
+    let mut saw_injected = false;
+    let mut serialized_events = String::new();
+    while let Ok(Some(event)) =
+        tokio::time::timeout(std::time::Duration::from_millis(200), event_rx.recv()).await
+    {
+        if matches!(event, GatewayEvent::CredentialInjected { .. }) {
+            saw_injected = true;
+        }
+        serialized_events.push_str(&serde_json::to_string(&event).unwrap());
+    }
+    assert!(saw_injected, "expected credential injection event");
+    assert!(
+        !serialized_events.contains(expected_token),
+        "token value leaked into gateway event serialization"
+    );
+}
+
 async fn spawn_http_fixture(
     sse_tools_call: bool,
 ) -> (String, mpsc::Receiver<HashMap<String, String>>) {
