@@ -364,9 +364,19 @@ RustBuffer uniffi_tamtri_core_fn_method_tamtricore_read_workdir_file(uint64_t pt
 void uniffi_tamtri_core_fn_method_tamtricore_register_acp_agent(uint64_t ptr, RustBuffer id, RustBuffer display_name, RustBuffer command, RustBuffer args, RustCallStatus *_Nonnull out_status
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_TAMTRI_CORE_FN_METHOD_TAMTRICORE_RESPOND_ELICITATION
+#define UNIFFI_FFIDEF_UNIFFI_TAMTRI_CORE_FN_METHOD_TAMTRICORE_RESPOND_ELICITATION
+void uniffi_tamtri_core_fn_method_tamtricore_respond_elicitation(uint64_t ptr, RustBuffer conversation_id, RustBuffer request_id, RustBuffer action, RustBuffer data_json, RustCallStatus *_Nonnull out_status
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_TAMTRI_CORE_FN_METHOD_TAMTRICORE_RESPOND_PERMISSION
 #define UNIFFI_FFIDEF_UNIFFI_TAMTRI_CORE_FN_METHOD_TAMTRICORE_RESPOND_PERMISSION
 void uniffi_tamtri_core_fn_method_tamtricore_respond_permission(uint64_t ptr, RustBuffer conversation_id, RustBuffer request_id, RustBuffer option_id, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_TAMTRI_CORE_FN_METHOD_TAMTRICORE_SAVE_GATEWAY_SERVERS
+#define UNIFFI_FFIDEF_UNIFFI_TAMTRI_CORE_FN_METHOD_TAMTRICORE_SAVE_GATEWAY_SERVERS
+void uniffi_tamtri_core_fn_method_tamtricore_save_gateway_servers(uint64_t ptr, RustBuffer servers, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_TAMTRI_CORE_FN_METHOD_TAMTRICORE_SEND_MESSAGE
@@ -739,9 +749,21 @@ uint16_t uniffi_tamtri_core_checksum_method_tamtricore_register_acp_agent(void
     
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_TAMTRI_CORE_CHECKSUM_METHOD_TAMTRICORE_RESPOND_ELICITATION
+#define UNIFFI_FFIDEF_UNIFFI_TAMTRI_CORE_CHECKSUM_METHOD_TAMTRICORE_RESPOND_ELICITATION
+uint16_t uniffi_tamtri_core_checksum_method_tamtricore_respond_elicitation(void
+    
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_TAMTRI_CORE_CHECKSUM_METHOD_TAMTRICORE_RESPOND_PERMISSION
 #define UNIFFI_FFIDEF_UNIFFI_TAMTRI_CORE_CHECKSUM_METHOD_TAMTRICORE_RESPOND_PERMISSION
 uint16_t uniffi_tamtri_core_checksum_method_tamtricore_respond_permission(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_TAMTRI_CORE_CHECKSUM_METHOD_TAMTRICORE_SAVE_GATEWAY_SERVERS
+#define UNIFFI_FFIDEF_UNIFFI_TAMTRI_CORE_CHECKSUM_METHOD_TAMTRICORE_SAVE_GATEWAY_SERVERS
+uint16_t uniffi_tamtri_core_checksum_method_tamtricore_save_gateway_servers(void
     
 );
 #endif

@@ -36,12 +36,21 @@ struct CoreEvent: Equatable {
     let payloadJSON: String
 }
 
+struct GatewayEnvVar: Equatable {
+    let name: String
+    let value: String
+}
+
 struct GatewayServerRecord: Identifiable, Equatable {
     let id: String
     let displayName: String
     let enabled: Bool
     let scope: String
     let transport: String
+    let stdioCommand: String
+    let stdioArgs: [String]
+    let stdioEnv: [GatewayEnvVar]
+    let httpEndpoint: String
     let credentialRefs: [String]
     let missingCredentialRefs: [String]
 }
@@ -79,8 +88,10 @@ protocol CoreClient: Sendable {
     func readAttachmentVerified(conversationId: String, path: String, size: UInt64, sha256: String) async throws -> Data
     func verifiedAttachmentPath(conversationId: String, path: String, size: UInt64, sha256: String) async throws -> String
     func respondPermission(conversationId: String, requestId: String, optionId: String) async throws
+    func respondElicitation(conversationId: String, requestId: String, action: String, dataJSON: String?) async throws
     func cancelRun(conversationId: String) async throws
     func listGatewayServers() async throws -> [GatewayServerRecord]
+    func saveGatewayServers(_ servers: [GatewayServerRecord]) async throws
     func setGatewayCredential(credentialRef: String, value: String) async throws
 }
 
@@ -170,6 +181,10 @@ actor MockCoreClient: CoreClient {
         continuation.yield(CoreEvent(conversationId: conversationId, kind: "message_committed", payloadJSON: #"{"content":[{"type":"text","text":"Done."}]}"#))
     }
 
+    func respondElicitation(conversationId: String, requestId: String, action: String, dataJSON: String?) async throws {
+        continuation.yield(CoreEvent(conversationId: conversationId, kind: "elicitation_resolved", payloadJSON: "{}"))
+    }
+
     func cancelRun(conversationId: String) async throws {
         continuation.yield(CoreEvent(conversationId: conversationId, kind: "turn_ended", payloadJSON: #"{"reason":"cancelled"}"#))
     }
@@ -182,11 +197,17 @@ actor MockCoreClient: CoreClient {
                 enabled: true,
                 scope: "project",
                 transport: "stdio",
+                stdioCommand: "/tmp/mock-mcp",
+                stdioArgs: [],
+                stdioEnv: [],
+                httpEndpoint: "",
                 credentialRefs: [],
                 missingCredentialRefs: []
             )
         ]
     }
+
+    func saveGatewayServers(_ servers: [GatewayServerRecord]) async throws {}
 
     func setGatewayCredential(credentialRef: String, value: String) async throws {}
 }

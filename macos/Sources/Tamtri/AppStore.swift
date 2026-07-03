@@ -332,6 +332,22 @@ final class AppStore: ObservableObject {
         }
     }
 
+    func respondElicitation(requestId: String, action: String, dataJSON: String?) {
+        guard let conversation = selectedConversation else { return }
+        Task {
+            do {
+                try await core.respondElicitation(
+                    conversationId: conversation.id,
+                    requestId: requestId,
+                    action: action,
+                    dataJSON: dataJSON
+                )
+            } catch {
+                errorMessage = error.localizedDescription
+            }
+        }
+    }
+
     func refreshGatewayServers() {
         Task {
             do {
@@ -340,6 +356,21 @@ final class AppStore: ObservableObject {
                 errorMessage = error.localizedDescription
             }
         }
+    }
+
+    func saveGatewayServers(_ servers: [GatewayServerRecord]) {
+        Task {
+            do {
+                try await core.saveGatewayServers(servers)
+                refreshGatewayServers()
+            } catch {
+                errorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    func removeGatewayServer(id: String) {
+        saveGatewayServers(gatewayServers.filter { $0.id != id })
     }
 
     func setGatewayCredential(credentialRef: String, value: String) {

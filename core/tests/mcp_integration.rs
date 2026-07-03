@@ -9,7 +9,7 @@ async fn integration_echo_tool() {
         .unwrap();
 
     let tools = client.list_tools().await.unwrap();
-    assert_eq!(tools.len(), 2);
+    assert_eq!(tools.len(), 3);
     assert!(tools.iter().any(|tool| tool.name == "echo"));
 
     let result = client
