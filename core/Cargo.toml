@@ -1,0 +1,36 @@
+[package]
+name = "tamtri-core"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.89"
+license = "AGPL-3.0-or-later"
+
+[lib]
+crate-type = ["rlib", "staticlib", "cdylib"]
+
+[[bin]]
+name = "mock-mcp-server"
+path = "../fixtures/mock-mcp-server/src/main.rs"
+
+[[bin]]
+name = "mock-acp-agent"
+path = "../fixtures/mock-acp-agent/src/main.rs"
+
+[dependencies]
+async-trait = "0.1"
+chrono = { version = "0.4", features = ["serde"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "io-util", "sync", "time"] }
+tracing = "0.1"
+uniffi = "0.32.0"
+uuid = { version = "1", features = ["v7", "serde"] }
+
+[build-dependencies]
+uniffi = { version = "0.32.0", features = ["build"] }
+
+[dev-dependencies]
+pretty_assertions = "1"
+tempfile = "3"
+tracing-subscriber = "0.3"

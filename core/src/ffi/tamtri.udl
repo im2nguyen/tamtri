@@ -1,0 +1,54 @@
+dictionary ConversationSummaryDto {
+  string id;
+  string title;
+  string updated_at;
+};
+
+dictionary ConversationDto {
+  string id;
+  string title;
+  string? active_harness_id;
+  string? model_id;
+  sequence<string> messages_json;
+};
+
+dictionary UiEvent {
+  string conversation_id;
+  string kind;
+  string payload_json;
+};
+
+[Error]
+enum TamtriError {
+  "Core",
+};
+
+callback interface ConversationObserver {
+  void on_event(UiEvent event);
+};
+
+interface TamtriCore {
+  [Throws=TamtriError]
+  constructor(string vault_path, ConversationObserver observer);
+
+  [Throws=TamtriError]
+  void register_acp_agent(string id, string display_name, string command, sequence<string> args);
+  [Throws=TamtriError]
+  sequence<ConversationSummaryDto> list_conversations();
+  [Throws=TamtriError]
+  ConversationDto load_conversation(string id);
+  [Throws=TamtriError]
+  ConversationDto create_conversation(string title, string harness_id, string model_id);
+  [Throws=TamtriError]
+  ConversationDto fork_conversation(string id, string harness_id, string model_id);
+  [Throws=TamtriError]
+  void delete_conversation(string id);
+  [Throws=TamtriError]
+  void send_message(string conversation_id, string text);
+  [Throws=TamtriError]
+  void respond_permission(string conversation_id, string request_id, string option_id);
+  [Throws=TamtriError]
+  void cancel_run(string conversation_id);
+};
+
+namespace tamtri {};

@@ -1,0 +1,12 @@
+pub mod app;
+pub mod conversation;
+pub mod error;
+pub mod harness;
+pub mod mcp;
+pub mod rpc;
+pub mod vault;
+
+pub use app::{ConversationDto, ConversationObserver, ConversationSummaryDto, TamtriCore, UiEvent};
+pub use error::{CoreError, Result};
+
+uniffi::setup_scaffolding!();
