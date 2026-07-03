@@ -341,11 +341,11 @@ fn call_gateway_elicit_form(
         .pointer("/structuredContent/name")
         .and_then(Value::as_str)
         .unwrap_or_default();
-    if let Some(cwd) = cwd {
-        if !name.is_empty() {
-            std::fs::write(cwd.join(".gateway-elicit-form-ok"), name)
-                .map_err(|err| err.to_string())?;
-        }
+    if let Some(cwd) = cwd
+        && !name.is_empty()
+    {
+        std::fs::write(cwd.join(".gateway-elicit-form-ok"), name)
+            .map_err(|err| err.to_string())?;
     }
     Ok(())
 }

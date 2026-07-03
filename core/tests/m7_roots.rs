@@ -94,7 +94,7 @@ fn root_missing_bookmark_surfaces_error_state() {
         scope: RootScope::Conversation,
     };
     assert!(
-        !(kb_root.kind == RootKind::Filesystem && !bookmark_present),
+        kb_root.kind != RootKind::Filesystem || bookmark_present,
         "knowledge-base roots do not require filesystem bookmarks"
     );
 }

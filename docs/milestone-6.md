@@ -1,5 +1,7 @@
 # Milestone 6: Elicitation + Remote Auth
 
+**Status: Complete.** Form and URL elicitation, OAuth 2.1 + PKCE, keychain tokens, hermetic + Swift policy tests.
+
 Sixth build session. Downstream MCP servers can now ask the user a follow-up question through tamtri, and remote HTTP servers can authenticate without the user touching a terminal. The agent still sees an ordinary tool call: tamtri pauses the downstream call, renders the prompt or browser handoff, collects the result, and resumes the call.
 
 The security rule is simple: never route secrets through elicitation form mode. Form mode is for structured non-secret answers. Secrets and account authorization use URL/OAuth flows to trusted domains, with values stored in the macOS keychain and referenced from the vault.

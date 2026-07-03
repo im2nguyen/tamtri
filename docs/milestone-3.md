@@ -1,5 +1,7 @@
 # Milestone 3: AcpAdapter + First Light
 
+**Status: Complete.** Core + Swift first light, mock ACP fixture, consent cards, `events.jsonl`, UniFFI bridge.
+
 Third build session. The core meets the shell. Build the `HarnessAdapter` seam and its first implementation (`AcpAdapter`), the reducer that turns live events into persisted `ContentBlock`s, the start of `events.jsonl`, the UniFFI bridge, and a minimal Swift outer shell. The transcript can be native SwiftUI for first light or an initial WebKit renderer island if that is faster, but Swift owns the app and the renderer owns no product logic. At the end, a real conversation with a real ACP agent runs inside a real Mac app and survives relaunch.
 
 Two protocol facts shape this milestone. First, ACP is JSON-RPC 2.0 over stdio, same as MCP, so the M2 JSON-RPC layer is promoted to a shared module rather than duplicated. Second, ACP agents send server-initiated requests (`session/request_permission`) *while a prompt is in flight*, so the ACP client needs the multiplexed dispatch loop on day one. Build that loop generically here; milestone 4 reuses it for the MCP client.
@@ -23,11 +25,7 @@ Milestone 3 intentionally does many firsts at once. Track it in two checkpoints:
 
 Current repo status:
 
-- Core first light is implemented and covered by hermetic tests.
-- The Swift shell compiles against generated UniFFI bindings and falls back to `MockCoreClient` only if the native core cannot initialize.
-- The UniFFI export source is the Rust facade in `core/src/app.rs`; `core/src/ffi/tamtri.udl` is a readable contract mirror. The Rust crate builds as `rlib`, `staticlib`, and `cdylib`.
-- Generated Swift bindings live under `macos/Sources/Tamtri/Generated`, with the generated C shim exposed through `macos/Sources/tamtri_coreFFI/module.modulemap`.
-- A real-agent smoke test has been manually verified against Hermes ACP (`/Users/dos/.local/bin/hermes acp`) with `hermes_acp_smoke`. A broader real-agent compatibility matrix belongs with the M4/M8 health-screen work.
+- Complete. Core and shell first light ship with hermetic coverage; real-agent smoke remains manual/`#[ignore]`.
 
 ## Task 1: Shared RPC layer (`rpc/`)
 

@@ -1,6 +1,6 @@
 # Milestone 7: Apps + Tasks + Roots
 
-**Status: feature complete (branch `reconciliation/milestones-complete`).** Apps, Tasks, and Roots are wired end-to-end with RC capability gates, fixtures, settings badges, accessibility fallbacks, composer attach-root → roots picker, task subscribe fixture + test, app redirect-block coverage, roots_listed audit receipts, live task nesting under origin tool calls, app bridge allow-for-conversation consent, persisted app state rehydration on webview reload, and docs. Sampling remains declined by design.
+**Status: Complete.** Apps, Tasks, and Roots wired end-to-end with RC capability gates, fixtures, and tests. Sampling remains declined by design.
 
 Seventh build session. The remaining rich MCP primitives come online. Apps reuse the M5 webview host or React renderer island with a stricter declared-origin policy and a consent-gated UI-to-host bridge. Tasks turn long-running server work into durable task cards. Roots let users attach filesystem or knowledge roots per conversation and expose them through the gateway.
 

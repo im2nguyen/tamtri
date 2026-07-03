@@ -1,5 +1,7 @@
 # Milestone 4: Gateway + Full MCP Client
 
+**Status: Complete.** Gateway proxy, multiplexed MCP client, registry, fork-into, settings panel. Release packaging of `tamtri-gateway-stdio` deferred to M9.
+
 Fourth build session. tamtri takes its place in the middle: the agent sees tamtri as its MCP server, and tamtri connects to the real downstream MCP servers as a client. This is the largest core milestone because it turns the M2 downstream client and the M3 shared JSON-RPC loop into the gateway that the product thesis depends on.
 
 Two boundaries shape the work. First, the gateway owns the capability plane. Rich MCP primitives must flow through tamtri, not disappear inside a harness. Second, the core stays platform-agnostic. The macOS shell may read and write keychain entries, but Rust core only receives credential references from config and resolved secret values in memory.
@@ -19,20 +21,7 @@ Two boundaries shape the work. First, the gateway owns the capability plane. Ric
 
 ## Implementation checkpoints and gaps
 
-Current repo status:
-
-- `McpClient` now uses the shared `rpc::dispatch::RpcConnection` internally while preserving the public `&self` API shape.
-- The MCP client supports tools, resources, prompts, pagination, stdio, and streamable HTTP. HTTP JSON and SSE behavior is covered by a local loopback fixture.
-- A vault-level `config.json` registry exists in `core/src/config.rs` with atomic writes, duplicate-id validation, enabled-server filtering, and strict credential-reference-only deserialization.
-- `McpGateway` connects to enabled downstream servers, injects credentials by reference, aggregates tools/resources/prompts, exposes stable gateway names and resource URIs, routes calls/reads/gets, and emits in-memory gateway events.
-- An in-process agent-facing gateway server surface exists in `core/src/mcp/server.rs` for `initialize`, `ping`, `tools/list`, `tools/call`, `resources/list`, `resources/read`, `prompts/list`, and `prompts/get`.
-- `core/src/mcp/endpoint.rs` starts a run-scoped loopback HTTP MCP endpoint. It supports request/response POSTs plus an SSE GET stream for upstream progress/logging/cancellation notifications. `TamtriCore` creates one endpoint per run, passes exactly that single Tamtri gateway server to `AcpAdapter` in `session/new`, and shuts the endpoint down when the run ends.
-- Gateway server connection, tool routing, credential-injection, progress, logging, cancellation, and downstream-error events write local receipts to `events.jsonl` and emit UI events.
-- The Swift shell has a minimal settings panel that separates Tamtri gateway servers from agent-native tools, shows server status/scope/transport, shows credential-reference presence, and saves entered values to Keychain before feeding the in-memory core resolver.
-- The Swift shell has a "Fork Into" affordance that forks the current conversation into a selected harness/model.
-- `tamtri-gateway-stdio` is a small stdio forwarding helper binary that can bridge ACP agents requiring stdio MCP server refs to the same run-scoped loopback endpoint. `TamtriCore` discovers it next to the app/test binary, through `TAMTRI_GATEWAY_STDIO_HELPER`, or under `target/debug`, and uses it as the default ACP-facing MCP ref when available.
-
-Remaining packaging follow-up (deferred to Milestone 9):
+**Status: Complete** for M4 scope. Remaining packaging follow-up (deferred to Milestone 9):
 
 - Bundle `tamtri-gateway-stdio` beside the signed macOS executable in release packaging. Development and tests discover `target/debug/tamtri-gateway-stdio`; copying the helper into the app bundle, DMG layout, and notarized release packaging are M9 scope, not M4.
 
