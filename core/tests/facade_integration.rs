@@ -99,6 +99,12 @@ fn facade_run_commits_exactly_one_assistant_message() {
     assert!(artifact["inline"].as_str().unwrap().contains("<h1>ok</h1>"));
     let attachment_path = artifact["path"].as_str().unwrap();
     assert!(attachment_path.starts_with("attachments/"));
+    assert!(artifact["sha256"].as_str().is_some_and(|hash| hash.len() == 64));
+    assert!(artifact["size"].as_u64().is_some_and(|size| size > 0));
+    assert!(
+        find_file(temp.path(), attachment_path).is_some(),
+        "attachment file should exist in vault"
+    );
     assert!(Path::new(temp.path()).join("conversations").exists());
 
     let workdir_report = find_file(temp.path(), "workdir/report.html").unwrap();
@@ -127,11 +133,19 @@ fn facade_run_commits_exactly_one_assistant_message() {
         .filter(|event| event["kind"] == "artifact_snapshotted")
         .collect();
     assert!(!snapshotted.is_empty());
+    assert_eq!(snapshotted.len(), 1);
+    assert_eq!(
+        snapshotted[0]["payload"]["tool_call_id"].as_str(),
+        Some("tool-1")
+    );
     assert!(
-        snapshotted.iter().any(|event| {
-            event["payload"]["tool_call_id"].as_str() == Some("tool-1")
-        }),
-        "expected artifact_snapshotted receipt with tool_call_id"
+        snapshotted[0]["payload"]["original_path"]
+            .as_str()
+            .is_some_and(|path| path.ends_with("workdir/report.html")),
+    );
+    assert_eq!(
+        snapshotted[0]["payload"]["attachment_path"].as_str(),
+        Some(attachment_path)
     );
     let kinds: Vec<_> = events
         .iter()
@@ -150,6 +164,216 @@ fn facade_run_commits_exactly_one_assistant_message() {
             "missing events.jsonl receipt: {expected}"
         );
     }
+}
+
+#[test]
+fn referenced_only_paths_snapshot_without_file_changed() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let observer = Arc::new(RecordingObserver::default());
+    let core = TamtriCore::new(temp.path().to_string_lossy().into_owned(), Arc::clone(&observer) as Arc<dyn ConversationObserver>)
+        .expect("core");
+    core.register_acp_agent_with_env(
+        "mock-acp".to_string(),
+        "Mock ACP".to_string(),
+        env!("CARGO_BIN_EXE_mock-acp-agent").to_string(),
+        Vec::new(),
+        vec![tamtri_core::app::GatewayEnvVarDto {
+            name: "MOCK_ACP_SKIP_FILE_CHANGED".to_string(),
+            value: "1".to_string(),
+        }],
+    )
+    .expect("agent");
+    let conversation = core
+        .create_conversation(
+            "Referenced only".to_string(),
+            "mock-acp".to_string(),
+            "mock".to_string(),
+        )
+        .expect("conversation");
+
+    core.send_message(conversation.id.clone(), "hello".to_string())
+        .expect("send");
+    let request_id = wait_for_permission_requested(observer.as_ref());
+    core.respond_permission(
+        conversation.id.clone(),
+        request_id,
+        "allow_once".to_string(),
+    )
+    .expect("permission");
+    wait_for_turn_end(observer.as_ref());
+    std::thread::sleep(Duration::from_millis(200));
+
+    let loaded = core.load_conversation(conversation.id.clone()).expect("load");
+    let messages: Vec<serde_json::Value> =
+        serde_json::from_str(&loaded.transcript_json).expect("transcript");
+    assert_eq!(messages.len(), 2);
+    let assistant = &messages[1];
+    let artifact = assistant["content"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|block| block["type"] == "artifact")
+        .expect("artifact block from referenced_paths snapshot");
+    assert_eq!(artifact["mime_type"], "text/html");
+    assert!(artifact["inline"].as_str().unwrap().contains("<h1>ok</h1>"));
+    let attachment_path = artifact["path"].as_str().unwrap();
+    assert!(attachment_path.starts_with("attachments/"));
+    assert!(
+        find_file(temp.path(), attachment_path).is_some(),
+        "attachment file should exist in vault"
+    );
+
+    let workdir_report = find_file(temp.path(), "workdir/report.html").unwrap();
+    fs::write(workdir_report, "<h1>mutated</h1>").unwrap();
+    let reloaded = core.load_conversation(conversation.id).expect("reload");
+    let messages: Vec<serde_json::Value> =
+        serde_json::from_str(&reloaded.transcript_json).expect("transcript");
+    let artifact = messages[1]["content"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|block| block["type"] == "artifact")
+        .expect("artifact block");
+    assert!(artifact["inline"].as_str().unwrap().contains("<h1>ok</h1>"));
+
+    let events_path = find_file(temp.path(), "events.jsonl").expect("events");
+    let events_text = fs::read_to_string(events_path).expect("read events");
+    let events: Vec<serde_json::Value> = events_text
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| serde_json::from_str(line).expect("event line"))
+        .collect();
+    let snapshotted: Vec<_> = events
+        .iter()
+        .filter(|event| event["kind"] == "artifact_snapshotted")
+        .collect();
+    assert_eq!(
+        snapshotted.len(),
+        1,
+        "referenced-only snapshot should produce exactly one receipt"
+    );
+    assert!(
+        snapshotted[0]["payload"]["tool_call_id"].is_null(),
+        "referenced_paths snapshot should omit tool_call_id"
+    );
+    assert!(
+        snapshotted[0]["payload"]["original_path"]
+            .as_str()
+            .is_some_and(|path| path.ends_with("workdir/report.html")),
+    );
+    assert_eq!(
+        snapshotted[0]["payload"]["attachment_path"].as_str(),
+        Some(attachment_path)
+    );
+    assert_eq!(snapshotted[0]["payload"]["mime_type"].as_str(), Some("text/html"));
+    assert!(snapshotted[0]["payload"]["sha256"].as_str().is_some());
+}
+
+#[test]
+fn events_vs_transcript_permission_resolution() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let observer = Arc::new(RecordingObserver::default());
+    let core = TamtriCore::new(
+        temp.path().to_string_lossy().into_owned(),
+        Arc::clone(&observer) as Arc<dyn ConversationObserver>,
+    )
+    .expect("core");
+    core.register_acp_agent(
+        "mock-acp".to_string(),
+        "Mock ACP".to_string(),
+        env!("CARGO_BIN_EXE_mock-acp-agent").to_string(),
+        Vec::new(),
+    )
+    .expect("agent");
+    let conversation = core
+        .create_conversation(
+            "Permission audit".to_string(),
+            "mock-acp".to_string(),
+            "mock".to_string(),
+        )
+        .expect("conversation");
+
+    core.send_message(conversation.id.clone(), "hello".to_string())
+        .expect("send");
+    let request_id = wait_for_permission_requested(observer.as_ref());
+    core.respond_permission(
+        conversation.id.clone(),
+        request_id.clone(),
+        "allow_once".to_string(),
+    )
+    .expect("permission");
+    wait_for_turn_end(observer.as_ref());
+    std::thread::sleep(Duration::from_millis(200));
+
+    let events_path = find_file(temp.path(), "events.jsonl").expect("events");
+    let events_text = fs::read_to_string(events_path).expect("read events");
+    let events: Vec<serde_json::Value> = events_text
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| serde_json::from_str(line).expect("event line"))
+        .collect();
+
+    let requested = events
+        .iter()
+        .find(|event| event["kind"] == "permission_requested")
+        .expect("permission_requested receipt");
+    assert_eq!(requested["payload"]["request_id"], request_id);
+    assert_eq!(requested["payload"]["action"], "edit");
+    assert!(
+        requested["payload"]["detail"]["diff"]["new_text"]
+            .as_str()
+            .is_some_and(|text| text.contains("<h1>ok</h1>")),
+        "events.jsonl must carry full permission diff detail"
+    );
+
+    let resolved = events
+        .iter()
+        .find(|event| event["kind"] == "permission_resolved")
+        .expect("permission_resolved receipt");
+    assert_eq!(resolved["payload"]["request_id"], request_id);
+    assert_eq!(resolved["payload"]["option_id"], "allow_once");
+
+    let messages_path = find_file(temp.path(), "messages.jsonl").expect("messages");
+    let messages_text = fs::read_to_string(messages_path).expect("read messages");
+    let messages: Vec<serde_json::Value> = messages_text
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| serde_json::from_str(line).expect("message line"))
+        .collect();
+    let assistant = messages
+        .iter()
+        .find(|message| message["role"] == "assistant")
+        .expect("assistant message");
+    let permission_blocks: Vec<_> = assistant["content"]
+        .as_array()
+        .expect("content")
+        .iter()
+        .filter(|block| {
+            block["type"] == "tool_result"
+                && block["output"]["permission"].is_object()
+        })
+        .collect();
+    assert_eq!(
+        permission_blocks.len(),
+        2,
+        "transcript should carry compact permission request + resolution blocks"
+    );
+    for block in &permission_blocks {
+        let permission = &block["output"]["permission"];
+        assert!(permission.get("diff").is_none());
+        assert!(permission.get("old_text").is_none());
+        assert!(permission.get("new_text").is_none());
+        assert!(permission.get("detail").is_none());
+    }
+    assert_eq!(
+        permission_blocks[0]["output"]["permission"]["status"], "requested"
+    );
+    assert_eq!(
+        permission_blocks[1]["output"]["permission"]["status"], "resolved"
+    );
+    assert_eq!(
+        permission_blocks[1]["output"]["permission"]["selected_option"], "allow_once"
+    );
 }
 
 #[test]

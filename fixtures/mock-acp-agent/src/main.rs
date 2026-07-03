@@ -160,6 +160,29 @@ fn main() {
 }
 
 fn emit_updates(stdout: &mut io::Stdout) {
+    let skip_file_changed = std::env::var("MOCK_ACP_SKIP_FILE_CHANGED")
+        .ok()
+        .is_some_and(|value| value == "1");
+    let tool_update = if skip_file_changed {
+        json!({
+            "type": "tool_call_update",
+            "toolCallId": "tool-1",
+            "status": "completed",
+            "text": "done"
+        })
+    } else {
+        json!({
+            "type": "tool_call_update",
+            "toolCallId": "tool-1",
+            "status": "completed",
+            "diff": {
+                "path": "report.html",
+                "change": "modified",
+                "oldText": "",
+                "newText": "<h1>ok</h1>"
+            }
+        })
+    };
     let updates = [
         json!({"type": "agent_thought_chunk", "text": "thinking"}),
         json!({"type": "agent_message_chunk", "text": "Hello"}),
@@ -172,17 +195,7 @@ fn emit_updates(stdout: &mut io::Stdout) {
             "title": "Write report",
             "input": {"path": "report.html"}
         }),
-        json!({
-            "type": "tool_call_update",
-            "toolCallId": "tool-1",
-            "status": "completed",
-            "diff": {
-                "path": "report.html",
-                "change": "modified",
-                "oldText": "",
-                "newText": "<h1>ok</h1>"
-            }
-        }),
+        tool_update,
     ];
     for update in updates {
         write_msg(

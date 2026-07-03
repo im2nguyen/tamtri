@@ -530,4 +530,121 @@ mod tests {
         let reduced = reducer.finish();
         assert_eq!(reduced.referenced_paths, vec!["report.html".to_string()]);
     }
+
+    #[test]
+    fn reducer_collects_paths_from_edit_tool_input() {
+        let mut reducer = TurnReducer::new("acp:test");
+        reducer
+            .apply(&HarnessEvent::ToolCallStarted {
+                id: "tool-1".into(),
+                name: "Edit".into(),
+                kind: ToolKind::Edit,
+                title: "Edit report".into(),
+                input: json!({"path": "notes.md"}),
+            })
+            .unwrap();
+        let reduced = reducer.finish();
+        assert_eq!(reduced.referenced_paths, vec!["notes.md".to_string()]);
+    }
+
+    #[test]
+    fn reducer_collects_paths_from_resource_ref_in_tool_output() {
+        let mut reducer = TurnReducer::new("acp:test");
+        reducer
+            .apply(&HarnessEvent::ToolCallProgress {
+                id: "tool-1".into(),
+                status: ToolStatus::Completed,
+                content: vec![ToolContent::ResourceRef {
+                    uri: "file://nested/report.html".into(),
+                }],
+            })
+            .unwrap();
+        let reduced = reducer.finish();
+        assert_eq!(
+            reduced.referenced_paths,
+            vec!["nested/report.html".to_string()]
+        );
+    }
+
+    #[test]
+    fn reducer_skips_deleted_diff_in_tool_output() {
+        let mut reducer = TurnReducer::new("acp:test");
+        reducer
+            .apply(&HarnessEvent::ToolCallProgress {
+                id: "tool-1".into(),
+                status: ToolStatus::Completed,
+                content: vec![ToolContent::Diff {
+                    diff: Diff {
+                        path: "report.html".into(),
+                        change: FileChange::Deleted,
+                        old_text: Some("<h1>ok</h1>".into()),
+                        new_text: None,
+                    },
+                }],
+            })
+            .unwrap();
+        let reduced = reducer.finish();
+        assert!(reduced.referenced_paths.is_empty());
+    }
+
+    #[test]
+    fn reducer_skips_deleted_file_changed_path() {
+        let diff = Diff {
+            path: "report.html".into(),
+            change: FileChange::Deleted,
+            old_text: Some("<h1>ok</h1>".into()),
+            new_text: None,
+        };
+        let mut reducer = TurnReducer::new("acp:test");
+        reducer
+            .apply(&HarnessEvent::FileChanged {
+                tool_call_id: "tool-1".into(),
+                path: diff.path.clone(),
+                change: diff.change.clone(),
+                diff: diff.clone(),
+            })
+            .unwrap();
+        let reduced = reducer.finish();
+        assert!(reduced.referenced_paths.is_empty());
+        assert_eq!(reduced.file_changes.len(), 1);
+    }
+
+    #[test]
+    fn reducer_deduplicates_referenced_paths_from_multiple_sources() {
+        let diff = Diff {
+            path: "report.html".into(),
+            change: FileChange::Modified,
+            old_text: None,
+            new_text: Some("<h1>ok</h1>".into()),
+        };
+        let mut reducer = TurnReducer::new("acp:test");
+        reducer
+            .apply(&HarnessEvent::ToolCallStarted {
+                id: "tool-1".into(),
+                name: "Write".into(),
+                kind: ToolKind::Write,
+                title: "Write report".into(),
+                input: json!({"path": "report.html"}),
+            })
+            .unwrap();
+        reducer
+            .apply(&HarnessEvent::ToolCallProgress {
+                id: "tool-1".into(),
+                status: ToolStatus::Completed,
+                content: vec![ToolContent::Diff {
+                    diff: diff.clone(),
+                }],
+            })
+            .unwrap();
+        reducer
+            .apply(&HarnessEvent::FileChanged {
+                tool_call_id: "tool-1".into(),
+                path: diff.path.clone(),
+                change: diff.change.clone(),
+                diff,
+            })
+            .unwrap();
+        let reduced = reducer.finish();
+        assert_eq!(reduced.referenced_paths, vec!["report.html".to_string()]);
+    }
 }
