@@ -38,7 +38,7 @@ tamtri reads gateway servers from `<vault>/config.json`. Example entry:
         "scope": "user",
         "transport": {
           "type": "stdio",
-          "command": "/Users/you/Desktop/tamtri/target/debug/twenty-questions-mcp",
+          "command": "/absolute/path/to/tamtri/target/debug/twenty-questions-mcp",
           "args": [],
           "env": [
             ["TWENTY_QUESTIONS_SEED", "42"]
