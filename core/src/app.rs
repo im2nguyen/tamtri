@@ -1540,6 +1540,42 @@ fn gateway_mcp_ref(endpoint: &GatewayEndpoint) -> McpServerRef {
     }
 }
 
+fn gateway_stdio_helper_binary_name() -> &'static str {
+    if cfg!(windows) {
+        "tamtri-gateway-stdio.exe"
+    } else {
+        "tamtri-gateway-stdio"
+    }
+}
+
+fn gateway_stdio_helper_candidates(
+    exe_dir: &std::path::Path,
+    cwd: Option<&std::path::Path>,
+    home: Option<&std::path::Path>,
+) -> Vec<std::path::PathBuf> {
+    let binary_name = gateway_stdio_helper_binary_name();
+    let mut candidates = vec![
+        exe_dir.join(binary_name),
+        exe_dir.join("..").join(binary_name),
+        // SwiftPM debug layout: macos/.build/<triple>/debug/Tamtri -> repo/target/debug.
+        exe_dir
+            .join("../../../..")
+            .join("target/debug")
+            .join(binary_name),
+    ];
+    if let Some(cwd) = cwd {
+        candidates.push(cwd.join("target/debug").join(binary_name));
+        candidates.push(cwd.join("../target/debug").join(binary_name));
+    }
+    if let Some(home) = home {
+        candidates.push(
+            home.join("Desktop/tamtri/target/debug")
+                .join(binary_name),
+        );
+    }
+    candidates
+}
+
 fn gateway_stdio_helper_path() -> Option<String> {
     if let Ok(path) = std::env::var("TAMTRI_GATEWAY_STDIO_HELPER")
         && std::path::Path::new(&path).is_file()
@@ -1548,23 +1584,16 @@ fn gateway_stdio_helper_path() -> Option<String> {
     }
     let exe = std::env::current_exe().ok()?;
     let exe_dir = exe.parent()?;
-    let binary_name = if cfg!(windows) {
-        "tamtri-gateway-stdio.exe"
-    } else {
-        "tamtri-gateway-stdio"
-    };
-    let candidates = [
-        exe_dir.join(binary_name),
-        exe_dir.join("..").join(binary_name),
-        std::env::current_dir()
-            .ok()?
-            .join("target/debug")
-            .join(binary_name),
-    ];
-    candidates
-        .into_iter()
-        .find(|path| path.is_file())
-        .map(|path| path.to_string_lossy().to_string())
+    let cwd = std::env::current_dir().ok();
+    let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
+    gateway_stdio_helper_candidates(
+        exe_dir,
+        cwd.as_deref(),
+        home.as_deref(),
+    )
+    .into_iter()
+    .find(|path| path.is_file())
+    .map(|path| path.to_string_lossy().to_string())
 }
 
 fn collect_workdir_files(
@@ -1671,4 +1700,22 @@ fn conversation_to_dto(conversation: &Conversation) -> Result<ConversationDto> {
         model_id: conversation.model_id.clone(),
         transcript_json,
     })
+}
+
+#[cfg(test)]
+mod gateway_stdio_helper_tests {
+    use super::gateway_stdio_helper_candidates;
+
+    #[test]
+    fn gateway_stdio_helper_candidates_include_swiftpm_debug_layout() {
+        let exe_dir = std::path::Path::new("/repo/macos/.build/arm64-apple-macosx/debug");
+        let candidates = gateway_stdio_helper_candidates(exe_dir, None, None);
+        assert!(
+            candidates.iter().any(|path| {
+                path.ends_with("target/debug/tamtri-gateway-stdio")
+                    && !path.starts_with("/repo/macos/target/debug")
+            }),
+            "expected repo-root target/debug candidate, got: {candidates:?}"
+        );
+    }
 }

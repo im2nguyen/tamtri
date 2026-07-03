@@ -273,7 +273,26 @@ func defaultModelId() -> String {
     hermesAgentPath() == nil ? "mock" : "default"
 }
 
+func configureDevelopmentGatewayStdioHelper() {
+    if ProcessInfo.processInfo.environment["TAMTRI_GATEWAY_STDIO_HELPER"] != nil {
+        return
+    }
+    let fileManager = FileManager.default
+    let cwd = fileManager.currentDirectoryPath
+    let home = fileManager.homeDirectoryForCurrentUser.path
+    let candidates = [
+        "\(cwd)/target/debug/tamtri-gateway-stdio",
+        "\(cwd)/../target/debug/tamtri-gateway-stdio",
+        "\(home)/Desktop/tamtri/target/debug/tamtri-gateway-stdio"
+    ]
+    guard let path = candidates.first(where: { fileManager.isExecutableFile(atPath: $0) }) else {
+        return
+    }
+    setenv("TAMTRI_GATEWAY_STDIO_HELPER", path, 1)
+}
+
 func makeDefaultCoreClient() -> CoreClient {
+    configureDevelopmentGatewayStdioHelper()
     let home = FileManager.default.homeDirectoryForCurrentUser
     let vaultURL = home.appendingPathComponent(".tamtri/vault", isDirectory: true)
     if let client = try? TamtriBindingClient(vaultPath: vaultURL.path) {
