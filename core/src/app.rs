@@ -24,6 +24,7 @@ use crate::mcp::gateway::{GatewayEvent, McpGateway, MemoryCredentials};
 use crate::vault::events::{Event, EventKind};
 use crate::vault::fs::FilesystemVault;
 use crate::vault::{ConversationSummary, ConversationVault};
+use crate::debug_log::debug_log;
 use crate::{CoreError, Result};
 
 #[uniffi::export(foreign)]
@@ -339,8 +340,7 @@ impl TamtriCore {
             && let Some(cached) = cache.get(&id)
             && cached.updated_at == updated_at
         {
-            #[cfg(debug_assertions)]
-            eprintln!("[tamtri] load_conversation cache hit {id}");
+            debug_log(format!("[tamtri] load_conversation cache hit {id}"));
             return Ok(cached.dto.clone());
         }
 
@@ -348,12 +348,11 @@ impl TamtriCore {
         let conversation = self.vault.load(id)?;
         let dto = conversation_to_dto(&conversation)?;
         self.store_conversation_cache(conversation.updated_at, dto.clone());
-        #[cfg(debug_assertions)]
-        eprintln!(
+        debug_log(format!(
             "[tamtri] load_conversation cache miss {id} {:?} messages={}",
             started.elapsed(),
             conversation.messages.len()
-        );
+        ));
         Ok(dto)
     }
 
