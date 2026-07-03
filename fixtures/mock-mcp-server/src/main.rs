@@ -25,7 +25,11 @@ fn main() {
                 &message,
                 json!({
                     "protocolVersion": "2025-11-25",
-                    "capabilities": {"tools": {"listChanged": false}},
+                    "capabilities": {
+                        "tools": {"listChanged": false},
+                        "resources": {"listChanged": false},
+                        "prompts": {"listChanged": false}
+                    },
                     "serverInfo": {"name": "mock-mcp-server", "version": "0.1.0"}
                 }),
             ),
@@ -53,6 +57,47 @@ fn main() {
                     }),
                 )
             }
+            Some("resources/list") => response(
+                &message,
+                json!({
+                    "resources": [{
+                        "uri": "mock://report",
+                        "name": "Report",
+                        "description": "A mock resource",
+                        "mimeType": "text/plain"
+                    }]
+                }),
+            ),
+            Some("resources/read") => response(
+                &message,
+                json!({
+                    "contents": [{
+                        "uri": message.pointer("/params/uri").cloned().unwrap_or_else(|| json!("mock://report")),
+                        "mimeType": "text/plain",
+                        "text": "mock resource"
+                    }]
+                }),
+            ),
+            Some("prompts/list") => response(
+                &message,
+                json!({
+                    "prompts": [{
+                        "name": "summarize",
+                        "description": "Summarize something",
+                        "arguments": [{"name": "topic", "required": true}]
+                    }]
+                }),
+            ),
+            Some("prompts/get") => response(
+                &message,
+                json!({
+                    "description": "Summarize something",
+                    "messages": [{
+                        "role": "user",
+                        "content": {"type": "text", "text": "Summarize the topic."}
+                    }]
+                }),
+            ),
             Some(method) => error_response(&message, -32601, format!("unknown method: {method}")),
             None => error_response(&message, -32600, "missing method"),
         };

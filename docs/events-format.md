@@ -24,6 +24,13 @@
 - `permission_resolved`
 - `tool_call_started`
 - `tool_call_completed`
+- `gateway_server_connected`
+- `gateway_tool_routed`
+- `gateway_progress`
+- `gateway_log`
+- `gateway_cancellation`
+- `gateway_credential_injected`
+- `gateway_downstream_error`
 - `harness_spawned`
 - `harness_exited`
 - `error`
@@ -36,5 +43,8 @@ The event log is local by default. It is not part of a portable share bundle unl
 
 Secrets never appear in payloads. The codec rejects secret-like keys such as `secret`, `token`, `password`, and `api_key`.
 
-Standalone event appends take the same per-conversation advisory lock as message writes. Reads tolerate a torn final line in memory. Writers repair torn tails before appending.
+Gateway credential receipts record references and target kinds only, for example `{ "server_id": "linear", "credential_ref": "keychain://linear", "target_kind": "header" }`. The resolved value is never serialized.
 
+Milestone 4 writes gateway receipts for server connection, tool routing, credential injection, progress, logging, cancellation, and downstream errors.
+
+Standalone event appends take the same per-conversation advisory lock as message writes. Reads tolerate a torn final line in memory. Writers repair torn tails before appending.

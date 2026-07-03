@@ -3,6 +3,7 @@
 tamtri stores conversations as a legible vault, not an opaque app database. The vault root contains a `conversations/` directory, and each conversation lives in one user-visible folder:
 
 ```text
+<vault>/config.json
 <vault>/conversations/<yyyy-mm-dd>-<slug>--<shortid>/
   meta.json
   messages.jsonl
@@ -11,11 +12,13 @@ tamtri stores conversations as a legible vault, not an opaque app database. The 
   workdir/
 ```
 
+`config.json` is vault-level app configuration. Milestone 4 uses it for the default harness id, hand-editable agent roster, and MCP gateway registry. It stores downstream server definitions, scopes, timeout overrides, and credential references only. It never stores resolved secret values. Writes are atomic via `config.json.tmp` in the same vault root. At run time, core reads this registry, starts a run-scoped Tamtri gateway endpoint, and exposes that single endpoint to the ACP harness instead of exposing downstream server definitions directly.
+
 `meta.json` is the small mutable header. It contains `schema_version`, conversation identity, timestamps, harness/model ids, working directory mode, MCP server refs, roots, and fork lineage. Writes are atomic: tamtri writes `meta.json.tmp` in the same folder, then renames it over `meta.json`.
 
 `messages.jsonl` is the transcript and the complete render source. It is append-only: one compact JSON `Message` per line. Streaming deltas are buffered in memory and committed only when the message is complete, so in-flight tokens never hit the log. `load` reads the full transcript into memory in V1; long sessions can therefore produce multi-megabyte in-memory transcripts. A streaming reader is a future implementation option, not a format change.
 
-`events.jsonl` is reserved in milestone 1. Later it becomes the local audit log for permission receipts, command execution, and gateway routing. It is not portable by default, and secrets never persist to either log.
+`events.jsonl` is the local audit log for permission receipts, command execution, and gateway routing. It is not portable by default, and secrets never persist to either log.
 
 `attachments/` contains curated rendered artifacts. Anything the transcript renders is a content-hashed snapshot under `attachments/`, frozen at render time. `workdir/` stays messy, mutable, and local.
 

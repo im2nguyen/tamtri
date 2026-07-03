@@ -20,15 +20,28 @@ struct CoreEvent: Equatable {
     let payloadJSON: String
 }
 
+struct GatewayServerRecord: Identifiable, Equatable {
+    let id: String
+    let displayName: String
+    let enabled: Bool
+    let scope: String
+    let transport: String
+    let credentialRefs: [String]
+    let missingCredentialRefs: [String]
+}
+
 protocol CoreClient: Sendable {
     var events: AsyncStream<CoreEvent> { get }
 
     func listConversations() async throws -> [ConversationSummary]
     func loadConversation(id: String) async throws -> ConversationRecord
     func createConversation(title: String, harnessId: String, modelId: String) async throws -> ConversationRecord
+    func forkConversation(id: String, harnessId: String, modelId: String) async throws -> ConversationRecord
     func sendMessage(conversationId: String, text: String) async throws
     func respondPermission(conversationId: String, requestId: String, optionId: String) async throws
     func cancelRun(conversationId: String) async throws
+    func listGatewayServers() async throws -> [GatewayServerRecord]
+    func setGatewayCredential(credentialRef: String, value: String) async throws
 }
 
 actor MockCoreClient: CoreClient {
@@ -66,6 +79,13 @@ actor MockCoreClient: CoreClient {
         return record
     }
 
+    func forkConversation(id: String, harnessId: String, modelId: String) async throws -> ConversationRecord {
+        let parent = conversations.first(where: { $0.id == id }) ?? conversations[0]
+        let record = ConversationRecord(id: UUID().uuidString, title: "\(parent.title) fork", harnessId: harnessId, modelId: modelId, messagesJSON: parent.messagesJSON)
+        conversations.insert(record, at: 0)
+        return record
+    }
+
     func sendMessage(conversationId: String, text: String) async throws {
         continuation.yield(CoreEvent(conversationId: conversationId, kind: "text_delta", payloadJSON: #"{"text":"Thinking about it..."}"#))
         continuation.yield(CoreEvent(conversationId: conversationId, kind: "permission_requested", payloadJSON: #"{"request_id":"mock-permission","action":"edit","options":[{"id":"allow_once","label":"Allow once"},{"id":"deny","label":"Deny"}]}"#))
@@ -79,4 +99,20 @@ actor MockCoreClient: CoreClient {
     func cancelRun(conversationId: String) async throws {
         continuation.yield(CoreEvent(conversationId: conversationId, kind: "turn_ended", payloadJSON: #"{"reason":"cancelled"}"#))
     }
+
+    func listGatewayServers() async throws -> [GatewayServerRecord] {
+        [
+            GatewayServerRecord(
+                id: "mock",
+                displayName: "Mock MCP",
+                enabled: true,
+                scope: "project",
+                transport: "stdio",
+                credentialRefs: [],
+                missingCredentialRefs: []
+            )
+        ]
+    }
+
+    func setGatewayCredential(credentialRef: String, value: String) async throws {}
 }

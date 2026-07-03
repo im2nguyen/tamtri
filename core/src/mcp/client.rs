@@ -1,21 +1,31 @@
 use std::time::Duration;
 
 use serde::de::DeserializeOwned;
+use serde_json::Value;
 use serde_json::json;
-use tokio::sync::Mutex;
+use tokio::sync::mpsc;
+use tokio::task::JoinHandle;
 
-use crate::mcp::jsonrpc::{
-    IncomingMessage, JsonRpcNotification, JsonRpcRequest, JsonRpcResponse, METHOD_NOT_FOUND,
-    RequestId,
-};
+use crate::Result;
+use crate::mcp::jsonrpc::{JsonRpcError, METHOD_NOT_FOUND};
 use crate::mcp::protocol::{
-    CallToolParams, CallToolResult, ClientCapabilities, Implementation, InitializeParams,
-    InitializeResult, ListToolsParams, ListToolsResult, MCP_PROTOCOL_VERSION, ServerCapabilities,
-    Tool,
+    CallToolParams, CallToolResult, ClientCapabilities, GetPromptParams, GetPromptResult,
+    Implementation, InitializeParams, InitializeResult, ListPromptsParams, ListPromptsResult,
+    ListResourcesParams, ListResourcesResult, ListToolsParams, ListToolsResult,
+    MCP_PROTOCOL_VERSION, Prompt, ReadResourceParams, ReadResourceResult, Resource,
+    ServerCapabilities, Tool,
 };
+use crate::rpc::dispatch::{InboundMessage, RpcConnection, RpcHandle};
 use crate::rpc::transport::Transport;
+use crate::rpc::transport::http::HttpTransport;
 use crate::rpc::transport::stdio::StdioTransport;
-use crate::{CoreError, Result};
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum McpClientEvent {
+    Progress { params: Value },
+    Log { params: Value },
+    Cancelled { params: Value },
+}
 
 pub struct McpClientConfig {
     pub init_timeout: Duration,
@@ -32,16 +42,11 @@ impl Default for McpClientConfig {
 }
 
 pub struct McpClient {
-    inner: Mutex<ClientInner>,
+    handle: RpcHandle,
+    inbound_driver: JoinHandle<()>,
     config: McpClientConfig,
     server_info: Option<Implementation>,
     server_capabilities: Option<ServerCapabilities>,
-}
-
-struct ClientInner {
-    transport: Box<dyn Transport>,
-    next_id: i64,
-    poisoned: bool,
 }
 
 impl McpClient {
@@ -52,19 +57,61 @@ impl McpClient {
         config: McpClientConfig,
     ) -> Result<Self> {
         let transport = StdioTransport::spawn(command, args, env).await?;
-        let mut client = Self::with_transport(Box::new(transport), config);
+        let mut client = Self::with_transport(Box::new(transport), config, None);
         client.initialize().await?;
         client.send_initialized_notification().await?;
         Ok(client)
     }
 
-    fn with_transport(transport: Box<dyn Transport>, config: McpClientConfig) -> Self {
+    pub async fn connect_stdio_with_events(
+        command: &str,
+        args: &[String],
+        env: &[(String, String)],
+        config: McpClientConfig,
+        events: mpsc::UnboundedSender<McpClientEvent>,
+    ) -> Result<Self> {
+        let transport = StdioTransport::spawn(command, args, env).await?;
+        let mut client = Self::with_transport(Box::new(transport), config, Some(events));
+        client.initialize().await?;
+        client.send_initialized_notification().await?;
+        Ok(client)
+    }
+
+    pub async fn connect_http(
+        endpoint: &str,
+        headers: &[(String, String)],
+        config: McpClientConfig,
+    ) -> Result<Self> {
+        let transport = HttpTransport::new(endpoint, headers)?;
+        let mut client = Self::with_transport(Box::new(transport), config, None);
+        client.initialize().await?;
+        client.send_initialized_notification().await?;
+        Ok(client)
+    }
+
+    pub async fn connect_http_with_events(
+        endpoint: &str,
+        headers: &[(String, String)],
+        config: McpClientConfig,
+        events: mpsc::UnboundedSender<McpClientEvent>,
+    ) -> Result<Self> {
+        let transport = HttpTransport::new(endpoint, headers)?;
+        let mut client = Self::with_transport(Box::new(transport), config, Some(events));
+        client.initialize().await?;
+        client.send_initialized_notification().await?;
+        Ok(client)
+    }
+
+    fn with_transport(
+        transport: Box<dyn Transport>,
+        config: McpClientConfig,
+        events: Option<mpsc::UnboundedSender<McpClientEvent>>,
+    ) -> Self {
+        let (handle, inbound) = RpcConnection::start(transport);
+        let inbound_driver = tokio::spawn(run_inbound_driver(handle.clone(), inbound, events));
         Self {
-            inner: Mutex::new(ClientInner {
-                transport,
-                next_id: 1,
-                poisoned: false,
-            }),
+            handle,
+            inbound_driver,
             config,
             server_info: None,
             server_capabilities: None,
@@ -125,10 +172,12 @@ impl McpClient {
         &self,
         name: &str,
         arguments: serde_json::Value,
+        meta: Option<serde_json::Value>,
     ) -> Result<CallToolResult> {
         let params = CallToolParams {
             name: name.to_string(),
             arguments,
+            meta,
         };
         self.request(
             "tools/call",
@@ -138,9 +187,83 @@ impl McpClient {
         .await
     }
 
+    pub async fn list_resources(&self) -> Result<Vec<Resource>> {
+        let mut resources = Vec::new();
+        let mut cursor = None;
+        loop {
+            let params = ListResourcesParams {
+                cursor: cursor.clone(),
+            };
+            let page: ListResourcesResult = self
+                .request(
+                    "resources/list",
+                    Some(serde_json::to_value(params)?),
+                    self.config.init_timeout,
+                )
+                .await?;
+            resources.extend(page.resources);
+            match page.next_cursor {
+                Some(next) => cursor = Some(next),
+                None => return Ok(resources),
+            }
+        }
+    }
+
+    pub async fn read_resource(&self, uri: &str) -> Result<ReadResourceResult> {
+        let params = ReadResourceParams {
+            uri: uri.to_string(),
+        };
+        self.request(
+            "resources/read",
+            Some(serde_json::to_value(params)?),
+            self.config.call_timeout,
+        )
+        .await
+    }
+
+    pub async fn list_prompts(&self) -> Result<Vec<Prompt>> {
+        let mut prompts = Vec::new();
+        let mut cursor = None;
+        loop {
+            let params = ListPromptsParams {
+                cursor: cursor.clone(),
+            };
+            let page: ListPromptsResult = self
+                .request(
+                    "prompts/list",
+                    Some(serde_json::to_value(params)?),
+                    self.config.init_timeout,
+                )
+                .await?;
+            prompts.extend(page.prompts);
+            match page.next_cursor {
+                Some(next) => cursor = Some(next),
+                None => return Ok(prompts),
+            }
+        }
+    }
+
+    pub async fn get_prompt(
+        &self,
+        name: &str,
+        arguments: serde_json::Value,
+    ) -> Result<GetPromptResult> {
+        let params = GetPromptParams {
+            name: name.to_string(),
+            arguments,
+        };
+        self.request(
+            "prompts/get",
+            Some(serde_json::to_value(params)?),
+            self.config.call_timeout,
+        )
+        .await
+    }
+
     pub async fn close(self) -> Result<()> {
-        let mut inner = self.inner.lock().await;
-        inner.transport.close().await
+        let result = self.handle.close().await;
+        self.inbound_driver.abort();
+        result
     }
 
     pub fn server_info(&self) -> Option<&Implementation> {
@@ -152,14 +275,7 @@ impl McpClient {
     }
 
     async fn send_initialized_notification(&self) -> Result<()> {
-        let mut inner = self.inner.lock().await;
-        if inner.poisoned {
-            return Err(CoreError::TransportClosed);
-        }
-        inner
-            .transport
-            .send_notification(&JsonRpcNotification::new("notifications/initialized", None))
-            .await
+        self.handle.notify("notifications/initialized", None).await
     }
 
     async fn request<T: DeserializeOwned>(
@@ -178,74 +294,59 @@ impl McpClient {
         params: Option<serde_json::Value>,
         timeout: Duration,
     ) -> Result<serde_json::Value> {
-        let mut inner = self.inner.lock().await;
-        if inner.poisoned {
-            return Err(CoreError::TransportClosed);
-        }
-        let id = RequestId::Number(inner.next_id);
-        inner.next_id += 1;
-        let request = JsonRpcRequest::new(id.clone(), method, params);
-
-        let outcome = tokio::time::timeout(timeout, async {
-            inner.transport.send_request(&request).await?;
-            read_until_response(&mut *inner.transport, &id).await
-        })
-        .await;
-
-        match outcome {
-            Ok(Ok(value)) => Ok(value),
-            Ok(Err(err)) => Err(err),
-            Err(_) => {
-                inner.poisoned = true;
-                let _ = inner.transport.close().await;
-                Err(CoreError::Timeout {
-                    method: method.to_string(),
-                })
-            }
-        }
+        self.handle.request(method, params, timeout).await
     }
 }
 
-async fn read_until_response(
-    transport: &mut dyn Transport,
-    expected_id: &RequestId,
-) -> Result<serde_json::Value> {
-    loop {
-        match transport.recv().await? {
-            IncomingMessage::Response(response) if &response.id == expected_id => {
-                if let Some(error) = response.error {
-                    return Err(CoreError::JsonRpc {
-                        code: error.code,
-                        message: error.message,
-                    });
-                }
-                return response.result.ok_or_else(|| {
-                    CoreError::Protocol("response missing result and error".to_string())
-                });
+async fn run_inbound_driver(
+    handle: RpcHandle,
+    mut inbound: crate::rpc::dispatch::InboundRequests,
+    events: Option<mpsc::UnboundedSender<McpClientEvent>>,
+) {
+    while let Some(message) = inbound.recv().await {
+        match message {
+            InboundMessage::Request(req) if req.method == "ping" => {
+                let _ = handle.respond(req.id, Ok(json!({}))).await;
             }
-            IncomingMessage::Response(response) => {
-                tracing::debug!(
-                    "ignoring response for unmatched request id {:?}",
-                    response.id
-                );
-            }
-            IncomingMessage::Notification(note) => {
-                tracing::debug!("received MCP notification {}", note.method);
-            }
-            IncomingMessage::Request(req) if req.method == "ping" => {
-                transport
-                    .send_response(&JsonRpcResponse::success(req.id, json!({})))
-                    .await?;
-            }
-            IncomingMessage::Request(req) => {
+            InboundMessage::Request(req) => {
                 tracing::warn!("unsupported MCP server request {}", req.method);
-                transport
-                    .send_response(&JsonRpcResponse::error(
+                let _ = handle
+                    .respond(
                         req.id,
-                        METHOD_NOT_FOUND,
-                        "method not found",
-                    ))
-                    .await?;
+                        Err(JsonRpcError {
+                            code: METHOD_NOT_FOUND,
+                            message: "method not found".to_string(),
+                            data: None,
+                        }),
+                    )
+                    .await;
+            }
+            InboundMessage::Notification(note) => {
+                match note.method.as_str() {
+                    "notifications/progress" | "$/progress" => {
+                        if let Some(tx) = &events {
+                            let _ = tx.send(McpClientEvent::Progress {
+                                params: note.params.unwrap_or_else(|| json!({})),
+                            });
+                        }
+                    }
+                    "notifications/message" | "notifications/logging/message" => {
+                        if let Some(tx) = &events {
+                            let _ = tx.send(McpClientEvent::Log {
+                                params: note.params.unwrap_or_else(|| json!({})),
+                            });
+                        }
+                    }
+                    "notifications/cancelled" | "$/cancelRequest" => {
+                        if let Some(tx) = &events {
+                            let _ = tx.send(McpClientEvent::Cancelled {
+                                params: note.params.unwrap_or_else(|| json!({})),
+                            });
+                        }
+                    }
+                    _ => {}
+                }
+                tracing::debug!("received MCP notification {}", note.method);
             }
         }
     }
@@ -262,9 +363,13 @@ mod tests {
     use tokio::sync::Mutex as TokioMutex;
 
     use super::*;
+    use crate::CoreError;
     use crate::conversation::ContentBlock;
     use crate::mcp::bridge::tool_result_block;
-    use crate::mcp::jsonrpc::JsonRpcError;
+    use crate::mcp::jsonrpc::{
+        IncomingMessage, JsonRpcError, JsonRpcNotification, JsonRpcRequest, JsonRpcResponse,
+        RequestId,
+    };
     use crate::mcp::protocol::{Tool, ToolsCapability};
 
     #[derive(Clone, Debug)]
@@ -278,6 +383,8 @@ mod tests {
         incoming: VecDeque<IncomingMessage>,
         sent: Arc<TokioMutex<Vec<Sent>>>,
         never_recv: bool,
+        requests_sent: usize,
+        responses_delivered: usize,
     }
 
     impl MockTransport {
@@ -288,6 +395,8 @@ mod tests {
                     incoming: incoming.into(),
                     sent: Arc::clone(&sent),
                     never_recv: false,
+                    requests_sent: 0,
+                    responses_delivered: 0,
                 },
                 sent,
             )
@@ -298,6 +407,8 @@ mod tests {
                 incoming: VecDeque::new(),
                 sent: Arc::new(TokioMutex::new(Vec::new())),
                 never_recv: true,
+                requests_sent: 0,
+                responses_delivered: 0,
             }
         }
     }
@@ -305,6 +416,7 @@ mod tests {
     #[async_trait]
     impl Transport for MockTransport {
         async fn send_request(&mut self, req: &JsonRpcRequest) -> Result<()> {
+            self.requests_sent += 1;
             self.sent.lock().await.push(Sent::Request(req.clone()));
             Ok(())
         }
@@ -327,7 +439,20 @@ mod tests {
                 tokio::time::sleep(Duration::from_secs(60)).await;
                 return Err(CoreError::TransportClosed);
             }
-            self.incoming.pop_front().ok_or(CoreError::TransportClosed)
+            if matches!(self.incoming.front(), Some(IncomingMessage::Response(_)))
+                && self.responses_delivered >= self.requests_sent
+            {
+                tokio::time::sleep(Duration::from_secs(60)).await;
+                return Err(CoreError::TransportClosed);
+            }
+            if let Some(message) = self.incoming.pop_front() {
+                if matches!(message, IncomingMessage::Response(_)) {
+                    self.responses_delivered += 1;
+                }
+                return Ok(message);
+            }
+            tokio::time::sleep(Duration::from_secs(60)).await;
+            Err(CoreError::TransportClosed)
         }
 
         async fn close(&mut self) -> Result<()> {
@@ -351,7 +476,24 @@ mod tests {
         config: McpClientConfig,
     ) -> (McpClient, Arc<TokioMutex<Vec<Sent>>>) {
         let (transport, sent) = MockTransport::new(incoming);
-        (McpClient::with_transport(Box::new(transport), config), sent)
+        (
+            McpClient::with_transport(Box::new(transport), config, None),
+            sent,
+        )
+    }
+
+    async fn wait_for_sent_len(sent: &Arc<TokioMutex<Vec<Sent>>>, len: usize) -> Vec<Sent> {
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                let snapshot = sent.lock().await.clone();
+                if snapshot.len() >= len {
+                    return snapshot;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap()
     }
 
     #[tokio::test]
@@ -364,7 +506,9 @@ mod tests {
             Some(&ServerCapabilities {
                 tools: Some(ToolsCapability {
                     list_changed: Some(false)
-                })
+                }),
+                resources: None,
+                prompts: None,
             })
         );
         let sent = sent.lock().await;
@@ -385,10 +529,11 @@ mod tests {
     #[tokio::test]
     async fn sends_initialized_notification() {
         let (transport, sent) = MockTransport::new(vec![init_response()]);
-        let mut client = McpClient::with_transport(Box::new(transport), McpClientConfig::default());
+        let mut client =
+            McpClient::with_transport(Box::new(transport), McpClientConfig::default(), None);
         client.initialize().await.unwrap();
         client.send_initialized_notification().await.unwrap();
-        let sent = sent.lock().await;
+        let sent = wait_for_sent_len(&sent, 2).await;
         assert!(matches!(
             &sent[1],
             Sent::Notification(note) if note.method == "notifications/initialized"
@@ -450,7 +595,7 @@ mod tests {
             McpClientConfig::default(),
         );
         let result = client
-            .call_tool("echo", json!({"text": "hi"}))
+            .call_tool("echo", json!({"text": "hi"}), None)
             .await
             .unwrap();
         assert_eq!(result.content[0]["text"], "hi");
@@ -466,8 +611,63 @@ mod tests {
             ))],
             McpClientConfig::default(),
         );
-        let result = client.call_tool("echo", json!({})).await.unwrap();
+        let result = client.call_tool("echo", json!({}), None).await.unwrap();
         assert_eq!(result.is_error, Some(true));
+    }
+
+    #[tokio::test]
+    async fn resources_list_and_read() {
+        let (client, sent) = client_with(
+            vec![
+                IncomingMessage::Response(JsonRpcResponse::success(
+                    RequestId::Number(1),
+                    json!({"resources": [{"uri": "mock://one", "name": "One", "mimeType": "text/plain"}]}),
+                )),
+                IncomingMessage::Response(JsonRpcResponse::success(
+                    RequestId::Number(2),
+                    json!({"contents": [{"uri": "mock://one", "mimeType": "text/plain", "text": "hello"}]}),
+                )),
+            ],
+            McpClientConfig::default(),
+        );
+        let resources = client.list_resources().await.unwrap();
+        assert_eq!(resources[0].uri, "mock://one");
+        let contents = client.read_resource("mock://one").await.unwrap();
+        assert_eq!(contents.contents[0]["text"], "hello");
+        let sent = wait_for_sent_len(&sent, 2).await;
+        assert!(matches!(
+            &sent[1],
+            Sent::Request(req) if req.method == "resources/read" && req.params.as_ref().unwrap()["uri"] == "mock://one"
+        ));
+    }
+
+    #[tokio::test]
+    async fn prompts_list_and_get() {
+        let (client, sent) = client_with(
+            vec![
+                IncomingMessage::Response(JsonRpcResponse::success(
+                    RequestId::Number(1),
+                    json!({"prompts": [{"name": "summarize", "description": "Summarize"}]}),
+                )),
+                IncomingMessage::Response(JsonRpcResponse::success(
+                    RequestId::Number(2),
+                    json!({"description": "Summarize", "messages": [{"role": "user", "content": {"type": "text", "text": "go"}}]}),
+                )),
+            ],
+            McpClientConfig::default(),
+        );
+        let prompts = client.list_prompts().await.unwrap();
+        assert_eq!(prompts[0].name, "summarize");
+        let prompt = client
+            .get_prompt("summarize", json!({"topic": "tamtri"}))
+            .await
+            .unwrap();
+        assert_eq!(prompt.messages[0]["role"], "user");
+        let sent = wait_for_sent_len(&sent, 2).await;
+        assert!(matches!(
+            &sent[1],
+            Sent::Request(req) if req.method == "prompts/get" && req.params.as_ref().unwrap()["name"] == "summarize"
+        ));
     }
 
     #[tokio::test]
@@ -486,6 +686,40 @@ mod tests {
             McpClientConfig::default(),
         );
         assert!(client.list_tools().await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn emits_progress_and_log_notifications() {
+        let (events_tx, mut events_rx) = mpsc::unbounded_channel();
+        let (transport, _sent) = MockTransport::new(vec![
+            IncomingMessage::Notification(JsonRpcNotification::new(
+                "notifications/progress",
+                Some(json!({"progress": 0.5, "message": "halfway"})),
+            )),
+            IncomingMessage::Notification(JsonRpcNotification::new(
+                "notifications/message",
+                Some(json!({"level": "info", "data": "working"})),
+            )),
+            IncomingMessage::Response(JsonRpcResponse::success(
+                RequestId::Number(1),
+                json!({"tools": []}),
+            )),
+        ]);
+        let client = McpClient::with_transport(
+            Box::new(transport),
+            McpClientConfig::default(),
+            Some(events_tx),
+        );
+        assert!(client.list_tools().await.unwrap().is_empty());
+
+        assert!(matches!(
+            events_rx.recv().await,
+            Some(McpClientEvent::Progress { params }) if params["message"] == "halfway"
+        ));
+        assert!(matches!(
+            events_rx.recv().await,
+            Some(McpClientEvent::Log { params }) if params["data"] == "working"
+        ));
     }
 
     #[tokio::test]
@@ -578,7 +812,7 @@ mod tests {
             McpClientConfig::default(),
         );
         client.list_tools().await.unwrap();
-        let sent = sent.lock().await;
+        let sent = wait_for_sent_len(&sent, 2).await;
         assert!(matches!(
             &sent[1],
             Sent::Response(resp) if resp.id == RequestId::String("srv-1".to_string()) && resp.result == Some(json!({}))
@@ -602,7 +836,7 @@ mod tests {
             McpClientConfig::default(),
         );
         client.list_tools().await.unwrap();
-        let sent = sent.lock().await;
+        let sent = wait_for_sent_len(&sent, 2).await;
         assert!(matches!(
             &sent[1],
             Sent::Response(resp) if resp.error.as_ref().is_some_and(|err| err.code == METHOD_NOT_FOUND)
@@ -617,6 +851,7 @@ mod tests {
                 init_timeout: Duration::from_millis(5),
                 call_timeout: Duration::from_millis(5),
             },
+            None,
         );
         assert!(matches!(
             client.list_tools().await,

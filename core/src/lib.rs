@@ -1,4 +1,5 @@
 pub mod app;
+pub mod config;
 pub mod conversation;
 pub mod error;
 pub mod harness;

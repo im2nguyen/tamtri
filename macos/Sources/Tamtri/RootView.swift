@@ -13,6 +13,12 @@ struct RootView: View {
         .sheet(isPresented: $store.showNewConversation) {
             NewConversationView()
         }
+        .sheet(isPresented: $store.showSettings) {
+            SettingsView()
+        }
+        .sheet(isPresented: $store.showForkConversation) {
+            ForkConversationView()
+        }
         .alert("Tamtri", isPresented: errorPresented) {
             Button("OK") {
                 store.errorMessage = nil
@@ -54,6 +60,12 @@ struct SidebarView: View {
         }
         .navigationTitle("tamtri")
         .toolbar {
+            Button {
+                store.showSettings = true
+                store.refreshGatewayServers()
+            } label: {
+                Label("Settings", systemImage: "gearshape")
+            }
             Button {
                 store.showNewConversation = true
             } label: {
@@ -104,12 +116,23 @@ struct TranscriptView: View {
 }
 
 struct ConversationHeader: View {
+    @EnvironmentObject private var store: AppStore
     let conversation: ConversationRecord
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text(conversation.title)
-                .font(.title2.bold())
+            HStack(alignment: .firstTextBaseline) {
+                Text(conversation.title)
+                    .font(.title2.bold())
+                Spacer()
+                Button {
+                    store.showForkConversation = true
+                } label: {
+                    Label("Fork Into", systemImage: "arrow.triangle.branch")
+                }
+                .labelStyle(.iconOnly)
+                .help("Fork into another harness or model")
+            }
             HStack {
                 Text(conversation.harnessId ?? "No harness")
                 Text(conversation.modelId ?? "No model")
@@ -150,8 +173,40 @@ struct EventRow: View {
             Text("Turn ended")
                 .font(.caption)
                 .foregroundStyle(.secondary)
+        case "gateway_server_connected", "gateway_tool_routed", "gateway_progress", "gateway_log", "gateway_cancellation", "gateway_credential_injected", "gateway_downstream_error":
+            GatewayEventCard(event: event)
         default:
             EmptyView()
+        }
+    }
+}
+
+struct GatewayEventCard: View {
+    let event: CoreEvent
+
+    var body: some View {
+        CompactCard(title: title, systemImage: systemImage) {
+            Text(JSONValue.from(json: event.payloadJSON)?.description ?? event.payloadJSON)
+                .font(.body.monospaced())
+                .textSelection(.enabled)
+        }
+        .accessibilityLabel(title)
+    }
+
+    private var title: String {
+        event.kind.replacingOccurrences(of: "_", with: " ").capitalized
+    }
+
+    private var systemImage: String {
+        switch event.kind {
+        case "gateway_downstream_error":
+            "exclamationmark.triangle"
+        case "gateway_progress":
+            "progress.indicator"
+        case "gateway_credential_injected":
+            "key"
+        default:
+            "point.3.connected.trianglepath.dotted"
         }
     }
 }
@@ -563,5 +618,127 @@ struct NewConversationView: View {
         }
         .padding()
         .frame(width: 360)
+    }
+}
+
+struct ForkConversationView: View {
+    @EnvironmentObject private var store: AppStore
+    @Environment(\.dismiss) private var dismiss
+    @State private var harnessId = defaultHarnessId()
+    @State private var modelId = defaultModelId()
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Fork Into")
+                .font(.title2.bold())
+            if let conversation = store.selectedConversation {
+                Text(conversation.title)
+                    .foregroundStyle(.secondary)
+            }
+            TextField("Harness", text: $harnessId)
+            TextField("Model", text: $modelId)
+            HStack {
+                Spacer()
+                Button("Cancel") {
+                    dismiss()
+                }
+                Button("Fork") {
+                    store.forkSelectedConversation(harnessId: harnessId, modelId: modelId)
+                    dismiss()
+                }
+                .keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding()
+        .frame(width: 360)
+    }
+}
+
+struct SettingsView: View {
+    @EnvironmentObject private var store: AppStore
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack {
+                Text("Settings")
+                    .font(.title2.bold())
+                Spacer()
+                Button("Done") {
+                    dismiss()
+                }
+            }
+            Text("Tamtri gateway tools")
+                .font(.headline)
+            if store.gatewayServers.isEmpty {
+                Text("No gateway servers are configured in config.json.")
+                    .foregroundStyle(.secondary)
+            } else {
+                List(store.gatewayServers) { server in
+                    GatewayServerRow(server: server)
+                }
+                .frame(minHeight: 220)
+            }
+            Text("Agent-native tools are not exposed by this harness yet.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .padding()
+        .frame(width: 520, height: 380)
+        .onAppear {
+            store.refreshGatewayServers()
+        }
+    }
+}
+
+struct GatewayServerRow: View {
+    @EnvironmentObject private var store: AppStore
+    let server: GatewayServerRecord
+    @State private var credentialValues: [String: String] = [:]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Image(systemName: server.enabled ? "checkmark.circle.fill" : "circle")
+                    .foregroundStyle(server.enabled ? .green : .secondary)
+                Text(server.displayName)
+                    .font(.headline)
+                Spacer()
+                Text(server.scope)
+                Text(server.transport)
+            }
+            .font(.caption)
+            if server.credentialRefs.isEmpty {
+                Text("No credentials required")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else {
+                ForEach(server.credentialRefs, id: \.self) { credentialRef in
+                    HStack {
+                        Image(systemName: server.missingCredentialRefs.contains(credentialRef) ? "key.slash" : "key.fill")
+                        Text(credentialRef)
+                            .lineLimit(1)
+                        SecureField("Value", text: binding(for: credentialRef))
+                        Button("Save") {
+                            store.setGatewayCredential(
+                                credentialRef: credentialRef,
+                                value: credentialValues[credentialRef, default: ""]
+                            )
+                            credentialValues[credentialRef] = ""
+                        }
+                        .disabled(credentialValues[credentialRef, default: ""].isEmpty)
+                    }
+                    .font(.caption)
+                }
+            }
+        }
+        .padding(.vertical, 6)
+    }
+
+    private func binding(for credentialRef: String) -> Binding<String> {
+        Binding(
+            get: { credentialValues[credentialRef, default: ""] },
+            set: { credentialValues[credentialRef] = $0 }
+        )
     }
 }
