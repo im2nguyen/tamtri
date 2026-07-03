@@ -785,6 +785,8 @@ public protocol TamtriCoreProtocol: AnyObject, Sendable {
     
     func completeOauthCallback(callbackUrl: String) throws  -> OAuthCompletionDto
     
+    func conversationFolderPath(conversationId: String) throws  -> String
+    
     func conversationWorkdirPath(conversationId: String) throws  -> String
     
     func copyFileToWorkdir(conversationId: String, sourcePath: String) throws  -> String
@@ -983,6 +985,16 @@ open func completeOauthCallback(callbackUrl: String)throws  -> OAuthCompletionDt
     uniffi_tamtri_core_fn_method_tamtricore_complete_oauth_callback(
             self.uniffiCloneHandle(),
         FfiConverterString.lower(callbackUrl),uniffiCallStatus
+    )
+})
+}
+    
+open func conversationFolderPath(conversationId: String)throws  -> String  {
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeTamtriError_lift) {
+        uniffiCallStatus in
+    uniffi_tamtri_core_fn_method_tamtricore_conversation_folder_path(
+            self.uniffiCloneHandle(),
+        FfiConverterString.lower(conversationId),uniffiCallStatus
     )
 })
 }
@@ -3235,6 +3247,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_tamtri_core_checksum_method_tamtricore_complete_oauth_callback() != 30265) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tamtri_core_checksum_method_tamtricore_conversation_folder_path() != 30545) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_tamtri_core_checksum_method_tamtricore_conversation_workdir_path() != 50463) {
