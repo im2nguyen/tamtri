@@ -3,6 +3,7 @@ pub mod client;
 pub mod elicitation;
 pub mod endpoint;
 pub mod gateway;
+pub mod oauth;
 pub mod jsonrpc;
 pub mod protocol;
 pub mod server;

@@ -9,7 +9,8 @@ use tokio::sync::{Mutex, broadcast, mpsc, oneshot};
 use uuid::Uuid;
 
 use crate::config::{
-    CredentialTarget, GatewayConfig, GatewayServerConfig, GatewayTransport, validate_app_config,
+    CredentialTarget, GatewayConfig, GatewayServerConfig, GatewayTransport, OAuthConfig,
+    validate_app_config,
 };
 use crate::conversation::{ElicitationAction, ElicitationMode};
 use crate::mcp::client::{ElicitationHandler, McpClient, McpClientConfig, McpClientEvent};
@@ -20,12 +21,22 @@ use crate::mcp::elicitation::{
 use crate::mcp::protocol::{
     CallToolResult, GetPromptResult, Prompt, ReadResourceResult, Resource, Tool,
 };
+use crate::mcp::oauth::{
+    OAuthResolveOutcome, resolve_oauth_access_token, serialize_stored_oauth,
+};
 use crate::rpc::jsonrpc::JsonRpcError;
 use crate::{CoreError, Result};
 
 #[async_trait]
 pub trait CredentialResolver: Send + Sync {
     async fn resolve(&self, credential_ref: &str) -> Result<Option<String>>;
+    async fn store(&self, credential_ref: &str, value: &str) -> Result<()> {
+        let _ = credential_ref;
+        let _ = value;
+        Err(CoreError::Protocol(
+            "credential store not supported".to_string(),
+        ))
+    }
 }
 
 pub struct NoCredentials;
@@ -58,6 +69,15 @@ impl MemoryCredentials {
             .map_err(|_| CoreError::Protocol("credential resolver lock poisoned".to_string()))?
             .contains_key(credential_ref))
     }
+
+    pub fn get_stored(&self, credential_ref: &str) -> Result<Option<String>> {
+        Ok(self
+            .values
+            .lock()
+            .map_err(|_| CoreError::Protocol("credential resolver lock poisoned".to_string()))?
+            .get(credential_ref)
+            .cloned())
+    }
 }
 
 #[async_trait]
@@ -69,6 +89,10 @@ impl CredentialResolver for MemoryCredentials {
             .map_err(|_| CoreError::Protocol("credential resolver lock poisoned".to_string()))?
             .get(credential_ref)
             .cloned())
+    }
+
+    async fn store(&self, credential_ref: &str, value: &str) -> Result<()> {
+        self.set(credential_ref.to_string(), value.to_string())
     }
 }
 
@@ -117,6 +141,19 @@ pub enum GatewayEvent {
         server_id: String,
         request_id: String,
         action: ElicitationAction,
+    },
+    OAuthHandoffStarted {
+        server_id: String,
+        credential_ref: String,
+    },
+    OAuthHandoffCompleted {
+        server_id: String,
+        credential_ref: String,
+        status: String,
+    },
+    OAuthRefreshFailed {
+        server_id: String,
+        credential_ref: String,
     },
 }
 
@@ -506,25 +543,8 @@ impl McpGateway {
             GatewayTransport::StreamableHttp { endpoint, headers } => {
                 let mut resolved_headers = headers.clone();
                 if let Some(oauth) = &server.oauth {
-                    if let Some(token) = self.credentials.resolve(&oauth.token_ref).await? {
-                        resolved_headers.push((
-                            "Authorization".to_string(),
-                            format!("Bearer {token}"),
-                        ));
-                        self.emit(GatewayEvent::CredentialInjected {
-                            server_id: server.id.clone(),
-                            credential_ref: oauth.token_ref.clone(),
-                            target_kind: "oauth_bearer".to_string(),
-                        });
-                    } else {
-                        self.emit(GatewayEvent::DownstreamError {
-                            server_id: server.id.clone(),
-                            message: format!(
-                                "oauth token missing for {}; connect in settings",
-                                server.id
-                            ),
-                        });
-                    }
+                    self.inject_oauth_header(&server.id, oauth, &mut resolved_headers)
+                        .await?;
                 }
                 for credential in &server.credentials {
                     if let CredentialTarget::Header { name, prefix } = &credential.target
@@ -589,6 +609,70 @@ impl McpGateway {
         if let Some(tx) = &self.events {
             let _ = tx.send(event);
         }
+    }
+
+    async fn inject_oauth_header(
+        &self,
+        server_id: &str,
+        oauth: &OAuthConfig,
+        resolved_headers: &mut Vec<(String, String)>,
+    ) -> Result<()> {
+        let Some(stored_raw) = self.credentials.resolve(&oauth.token_ref).await? else {
+            self.emit(GatewayEvent::DownstreamError {
+                server_id: server_id.to_string(),
+                message: format!(
+                    "oauth token missing for {server_id}; connect in settings"
+                ),
+            });
+            return Ok(());
+        };
+        let client = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .map_err(|err| CoreError::Protocol(format!("oauth http client failed: {err}")))?;
+        let credentials = Arc::clone(&self.credentials);
+        let token_ref = oauth.token_ref.clone();
+        let oauth_config = oauth.clone();
+        let (outcome, updated_bundle) = resolve_oauth_access_token(
+            &client,
+            &oauth_config,
+            &stored_raw,
+        )
+        .await?;
+        if let Some(bundle) = updated_bundle {
+            credentials
+                .store(&token_ref, &serialize_stored_oauth(&bundle)?)
+                .await?;
+        }
+        match outcome {
+            OAuthResolveOutcome::AccessToken(token) => {
+                resolved_headers.push(("Authorization".to_string(), format!("Bearer {token}")));
+                self.emit(GatewayEvent::CredentialInjected {
+                    server_id: server_id.to_string(),
+                    credential_ref: oauth.token_ref.clone(),
+                    target_kind: "oauth_bearer".to_string(),
+                });
+            }
+            OAuthResolveOutcome::ReauthRequired => {
+                self.emit(GatewayEvent::OAuthRefreshFailed {
+                    server_id: server_id.to_string(),
+                    credential_ref: oauth.token_ref.clone(),
+                });
+                self.emit(GatewayEvent::DownstreamError {
+                    server_id: server_id.to_string(),
+                    message: format!("oauth re-authentication required for {server_id}"),
+                });
+            }
+            OAuthResolveOutcome::Missing => {
+                self.emit(GatewayEvent::DownstreamError {
+                    server_id: server_id.to_string(),
+                    message: format!(
+                        "oauth token missing for {server_id}; connect in settings"
+                    ),
+                });
+            }
+        }
+        Ok(())
     }
 }
 

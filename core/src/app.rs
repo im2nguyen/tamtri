@@ -8,6 +8,8 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tokio::runtime::{Builder, Runtime};
+use url::Url;
+use uuid::Uuid;
 
 use crate::artifact::{detect_mime, verify_inline_artifact, ArtifactSnapshot, ArtifactSnapshotter, verify_attachment};
 use crate::config::{
@@ -22,6 +24,11 @@ use crate::harness::{
     ContextSeed, ConversationContext, HarnessAdapter, HarnessEvent, RunControl, TurnInput,
 };
 use crate::mcp::elicitation::{audit_safe_elicitation_url, sanitize_transcript_data};
+use crate::mcp::oauth::{
+    PkceChallenge, build_authorization_url, exchange_authorization_code, generate_pkce,
+    oauth_connection_status, oauth_status_label, parse_stored_oauth, serialize_stored_oauth,
+    stored_oauth_from_token_response, validate_callback_url,
+};
 use crate::mcp::url_handoff::validate_handoff_url;
 use crate::mcp::endpoint::{GatewayEndpoint, start_loopback_gateway};
 use crate::mcp::gateway::{GatewayEvent, McpGateway, MemoryCredentials};
@@ -98,6 +105,24 @@ pub struct GatewayServerDto {
     pub http_endpoint: String,
     pub credential_refs: Vec<String>,
     pub missing_credential_refs: Vec<String>,
+    pub oauth_status: String,
+    pub oauth_token_ref: String,
+    pub oauth_client_id: String,
+    pub oauth_authorization_endpoint: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, uniffi::Record)]
+pub struct OAuthHandoffDto {
+    pub server_id: String,
+    pub authorization_url: String,
+    pub state: String,
+    pub redirect_uri: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, uniffi::Record)]
+pub struct OAuthCompletionDto {
+    pub server_id: String,
+    pub oauth_status: String,
 }
 
 type FfiResult<T> = std::result::Result<T, TamtriError>;
@@ -116,6 +141,14 @@ impl From<CoreError> for TamtriError {
 }
 
 #[derive(Clone)]
+struct PendingOAuthFlow {
+    server_id: String,
+    pkce: PkceChallenge,
+    redirect_uri: String,
+    token_ref: String,
+}
+
+#[derive(Clone)]
 struct ActiveRun {
     control: RunControl,
     gateway: Arc<McpGateway>,
@@ -131,6 +164,7 @@ pub struct TamtriCore {
     credentials: Arc<MemoryCredentials>,
     observer: Arc<dyn ConversationObserver>,
     conversation_cache: Arc<Mutex<HashMap<Id, CachedConversationDto>>>,
+    pending_oauth: Arc<Mutex<HashMap<String, PendingOAuthFlow>>>,
 }
 
 const CONVERSATION_CACHE_LIMIT: usize = 32;
@@ -154,6 +188,7 @@ impl TamtriCore {
             credentials: Arc::new(MemoryCredentials::default()),
             observer,
             conversation_cache: Arc::new(Mutex::new(HashMap::new())),
+            pending_oauth: Arc::new(Mutex::new(HashMap::new())),
         })
     }
 
@@ -286,6 +321,29 @@ impl TamtriCore {
 
     pub fn save_gateway_servers(&self, servers: Vec<GatewayServerDto>) -> FfiResult<()> {
         self.save_gateway_servers_inner(&servers).map_err(ffi_err)
+    }
+
+    pub fn start_oauth_flow(
+        &self,
+        server_id: String,
+        redirect_uri: String,
+    ) -> FfiResult<OAuthHandoffDto> {
+        self.start_oauth_flow_inner(&server_id, &redirect_uri)
+            .map_err(ffi_err)
+    }
+
+    pub fn complete_oauth_callback(
+        &self,
+        callback_url: String,
+    ) -> FfiResult<OAuthCompletionDto> {
+        self.complete_oauth_callback_inner(&callback_url)
+            .map_err(ffi_err)
+    }
+
+    pub fn export_gateway_credential(&self, credential_ref: String) -> FfiResult<Option<String>> {
+        self.credentials
+            .get_stored(&credential_ref)
+            .map_err(ffi_err)
     }
 
     pub fn copy_file_to_workdir(
@@ -714,6 +772,115 @@ impl TamtriCore {
         replace_gateway_servers(self.vault.root(), gateway_servers)
     }
 
+    pub fn start_oauth_flow_inner(
+        &self,
+        server_id: &str,
+        redirect_uri: &str,
+    ) -> Result<OAuthHandoffDto> {
+        let config = load_app_config(self.vault.root())?;
+        let server = config
+            .gateway
+            .servers
+            .iter()
+            .find(|server| server.id == server_id)
+            .ok_or_else(|| CoreError::Protocol(format!("unknown gateway server: {server_id}")))?;
+        let oauth = server.oauth.as_ref().ok_or_else(|| {
+            CoreError::Protocol(format!("gateway server {server_id} has no oauth config"))
+        })?;
+        let pkce = generate_pkce();
+        let state = Uuid::now_v7().to_string();
+        let authorization_url =
+            build_authorization_url(oauth, redirect_uri, &pkce, &state)?;
+        self.pending_oauth
+            .lock()
+            .map_err(|_| CoreError::Protocol("oauth flow lock poisoned".to_string()))?
+            .insert(
+                state.clone(),
+                PendingOAuthFlow {
+                    server_id: server_id.to_string(),
+                    pkce,
+                    redirect_uri: redirect_uri.to_string(),
+                    token_ref: oauth.token_ref.clone(),
+                },
+            );
+        Ok(OAuthHandoffDto {
+            server_id: server_id.to_string(),
+            authorization_url,
+            state,
+            redirect_uri: redirect_uri.to_string(),
+        })
+    }
+
+    pub fn complete_oauth_callback_inner(
+        &self,
+        callback_url: &str,
+    ) -> Result<OAuthCompletionDto> {
+        let state = Url::parse(callback_url)
+            .map_err(|err| CoreError::Protocol(format!("invalid callback URL: {err}")))?
+            .query_pairs()
+            .find(|(key, _)| key == "state")
+            .map(|(_, value)| value.into_owned())
+            .ok_or_else(|| CoreError::Protocol("oauth callback missing state".to_string()))?;
+        let pending = self
+            .pending_oauth
+            .lock()
+            .map_err(|_| CoreError::Protocol("oauth flow lock poisoned".to_string()))?
+            .remove(&state)
+            .ok_or_else(|| CoreError::Protocol("unknown oauth flow state".to_string()))?;
+        let config = load_app_config(self.vault.root())?;
+        let server = config
+            .gateway
+            .servers
+            .iter()
+            .find(|server| server.id == pending.server_id)
+            .ok_or_else(|| {
+                CoreError::Protocol(format!("unknown gateway server: {}", pending.server_id))
+            })?;
+        let oauth = server.oauth.as_ref().ok_or_else(|| {
+            CoreError::Protocol(format!(
+                "gateway server {} has no oauth config",
+                pending.server_id
+            ))
+        })?;
+        let (code, _) = validate_callback_url(callback_url, &state)?;
+        let client = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .map_err(|err| CoreError::Protocol(format!("oauth http client failed: {err}")))?;
+        let tokens = std::thread::scope(|scope| -> Result<crate::mcp::oauth::TokenEndpointResponse> {
+            let handle = scope.spawn(|| {
+                let rt = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .map_err(|err| CoreError::Protocol(format!("oauth runtime failed: {err}")))?;
+                rt.block_on(exchange_authorization_code(
+                    &client,
+                    oauth,
+                    &code,
+                    &pending.redirect_uri,
+                    &pending.pkce,
+                ))
+            });
+            handle
+                .join()
+                .map_err(|_| CoreError::Protocol("oauth exchange thread panicked".to_string()))?
+        })?;
+        let bundle = stored_oauth_from_token_response(&tokens);
+        let serialized = serialize_stored_oauth(&bundle)?;
+        self.credentials
+            .set(pending.token_ref.clone(), serialized)?;
+        let status = oauth_status_label(oauth_connection_status(
+            Some(oauth),
+            true,
+            bundle.expires_at,
+            false,
+        ));
+        Ok(OAuthCompletionDto {
+            server_id: pending.server_id,
+            oauth_status: status.to_string(),
+        })
+    }
+
     pub fn copy_file_to_workdir_inner(
         &self,
         conversation_id: &str,
@@ -967,6 +1134,38 @@ fn append_event_for_gateway_event(
                 "action": action,
             }),
         ),
+        GatewayEvent::OAuthHandoffStarted {
+            server_id,
+            credential_ref,
+        } => (
+            EventKind::OAuthHandoffStarted,
+            json!({
+                "server_id": server_id,
+                "credential_ref": credential_ref,
+            }),
+        ),
+        GatewayEvent::OAuthHandoffCompleted {
+            server_id,
+            credential_ref,
+            status,
+        } => (
+            EventKind::OAuthHandoffCompleted,
+            json!({
+                "server_id": server_id,
+                "credential_ref": credential_ref,
+                "status": status,
+            }),
+        ),
+        GatewayEvent::OAuthRefreshFailed {
+            server_id,
+            credential_ref,
+        } => (
+            EventKind::OAuthRefreshFailed,
+            json!({
+                "server_id": server_id,
+                "credential_ref": credential_ref,
+            }),
+        ),
     };
     vault.append_event(id, &Event::new(kind, payload))
 }
@@ -1041,6 +1240,9 @@ fn gateway_event_kind(event: &GatewayEvent) -> &'static str {
         GatewayEvent::DownstreamError { .. } => "gateway_downstream_error",
         GatewayEvent::ElicitationRequested { .. } => "elicitation_requested",
         GatewayEvent::ElicitationResolved { .. } => "elicitation_resolved",
+        GatewayEvent::OAuthHandoffStarted { .. } => "oauth_handoff_started",
+        GatewayEvent::OAuthHandoffCompleted { .. } => "oauth_handoff_completed",
+        GatewayEvent::OAuthRefreshFailed { .. } => "oauth_refresh_failed",
     }
 }
 
@@ -1125,6 +1327,48 @@ fn gateway_server_to_dto(
                 endpoint.clone(),
             ),
         };
+    let oauth_status = server
+        .oauth
+        .as_ref()
+        .map(|oauth| {
+            let stored = credentials
+                .get_stored(&oauth.token_ref)
+                .ok()
+                .flatten()
+                .and_then(|raw| parse_stored_oauth(&raw).ok());
+            let (has_access, expires_at, reauth_required) = stored
+                .as_ref()
+                .map(|bundle| {
+                    (
+                        !bundle.access_token.is_empty(),
+                        bundle.expires_at,
+                        bundle.reauth_required,
+                    )
+                })
+                .unwrap_or((false, None, false));
+            oauth_status_label(oauth_connection_status(
+                Some(oauth),
+                has_access,
+                expires_at,
+                reauth_required,
+            ))
+            .to_string()
+        })
+        .unwrap_or_else(|| "not_configured".to_string());
+    let (oauth_token_ref, oauth_client_id, oauth_authorization_endpoint) = server
+        .oauth
+        .as_ref()
+        .map(|oauth| {
+            (
+                oauth.token_ref.clone(),
+                oauth.client_id.clone(),
+                oauth
+                    .authorization_endpoint
+                    .clone()
+                    .unwrap_or_default(),
+            )
+        })
+        .unwrap_or_default();
     Ok(GatewayServerDto {
         id: server.id.clone(),
         display_name: server.display_name.clone(),
@@ -1139,6 +1383,10 @@ fn gateway_server_to_dto(
         http_endpoint,
         credential_refs,
         missing_credential_refs,
+        oauth_status,
+        oauth_token_ref,
+        oauth_client_id,
+        oauth_authorization_endpoint,
     })
 }
 

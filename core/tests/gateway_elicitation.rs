@@ -4,6 +4,7 @@ use std::time::Duration;
 use serde_json::json;
 use tamtri_core::config::{GatewayConfig, GatewayScope, GatewayServerConfig, GatewayTransport};
 use tamtri_core::conversation::ElicitationAction;
+use tamtri_core::mcp::elicitation::{schema_is_renderable, schema_looks_secret};
 use tamtri_core::mcp::gateway::{GatewayEvent, McpGateway, NoCredentials};
 use tokio::sync::mpsc;
 
@@ -152,7 +153,6 @@ async fn gateway_elicitation_decline_round_trip() {
 }
 
 #[tokio::test]
-#[ignore = "twenty-questions fixture elicitation round-trip needs follow-up debugging"]
 async fn gateway_elicitation_twenty_questions_form_accept_round_trip() {
     let command = env!("CARGO_BIN_EXE_twenty-questions-mcp");
     let (tx, mut rx) = mpsc::unbounded_channel();
@@ -340,4 +340,208 @@ fn url_elicitation_requires_https() {
 fn url_elicitation_rejects_userinfo() {
     use tamtri_core::mcp::elicitation::validate_elicitation_url;
     assert!(validate_elicitation_url("https://user:pass@example.com/path").is_err());
+}
+
+#[tokio::test]
+async fn gateway_elicitation_cancel_on_run_cancel() {
+    let command = env!("CARGO_BIN_EXE_mock-mcp-server");
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    let gateway = Arc::new(
+        McpGateway::new(
+            GatewayConfig {
+                default_call_timeout_secs: 300,
+                servers: vec![stdio_server("mock", command)],
+            },
+            Arc::new(NoCredentials),
+            Some(tx),
+        )
+        .unwrap(),
+    );
+
+    let exposed = gateway
+        .list_tools()
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|tool| tool.original_name == "elicit")
+        .map(|tool| tool.exposed_name)
+        .expect("elicit tool");
+
+    let gateway_for_call = Arc::clone(&gateway);
+    let call_task = tokio::spawn(async move { gateway_for_call.call_tool(&exposed, json!({})).await });
+
+    let request_id = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if let Some(GatewayEvent::ElicitationRequested { request_id, .. }) = rx.recv().await {
+                return request_id;
+            }
+        }
+    })
+    .await
+    .expect("elicitation request timed out");
+
+    gateway.cancel_pending_elicitations().await;
+
+    let result = call_task.await.unwrap().unwrap();
+    assert!(
+        result.content[0]["text"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("cancel")
+    );
+    let _ = request_id;
+}
+
+#[tokio::test]
+async fn elicitation_nested_under_origin_tool_call() {
+    let command = env!("CARGO_BIN_EXE_mock-mcp-server");
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    let gateway = Arc::new(
+        McpGateway::new(
+            GatewayConfig {
+                default_call_timeout_secs: 300,
+                servers: vec![stdio_server("mock", command)],
+            },
+            Arc::new(NoCredentials),
+            Some(tx),
+        )
+        .unwrap(),
+    );
+
+    let exposed = gateway
+        .list_tools()
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|tool| tool.original_name == "elicit")
+        .map(|tool| tool.exposed_name)
+        .expect("elicit tool");
+
+    let gateway_for_call = Arc::clone(&gateway);
+    let call_task = tokio::spawn(async move {
+        gateway_for_call
+            .call_tool_with_meta(
+                &exposed,
+                json!({}),
+                Some(json!({"toolCallId": "parent-tool"})),
+            )
+            .await
+    });
+
+    let (request_id, origin) = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if let Some(GatewayEvent::ElicitationRequested {
+                request_id,
+                origin_tool_call_id,
+                ..
+            }) = rx.recv().await
+            {
+                return (request_id, origin_tool_call_id);
+            }
+        }
+    })
+    .await
+    .expect("elicitation request timed out");
+
+    assert_eq!(origin.as_deref(), Some("parent-tool"));
+    gateway
+        .respond_elicitation(
+            &request_id,
+            ElicitationAction::Accept,
+            Some(json!({"name": "nested"})),
+        )
+        .await
+        .unwrap();
+    call_task.await.unwrap().unwrap();
+}
+
+#[tokio::test]
+async fn agent_receives_tool_result_after_elicitation() {
+    let command = env!("CARGO_BIN_EXE_mock-mcp-server");
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    let gateway = Arc::new(
+        McpGateway::new(
+            GatewayConfig {
+                default_call_timeout_secs: 300,
+                servers: vec![stdio_server("mock", command)],
+            },
+            Arc::new(NoCredentials),
+            Some(tx),
+        )
+        .unwrap(),
+    );
+
+    let exposed = gateway
+        .list_tools()
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|tool| tool.original_name == "elicit")
+        .map(|tool| tool.exposed_name)
+        .expect("elicit tool");
+
+    let gateway_for_call = Arc::clone(&gateway);
+    let call_task = tokio::spawn(async move {
+        gateway_for_call
+            .call_tool(&exposed, json!({}))
+            .await
+            .map(|result| result.structured_content)
+    });
+
+    let request_id = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if let Some(GatewayEvent::ElicitationRequested { request_id, .. }) = rx.recv().await {
+                return request_id;
+            }
+        }
+    })
+    .await
+    .expect("elicitation request timed out");
+
+    gateway
+        .respond_elicitation(
+            &request_id,
+            ElicitationAction::Accept,
+            Some(json!({"name": "agent-visible"})),
+        )
+        .await
+        .unwrap();
+
+    let structured = call_task.await.unwrap().unwrap().unwrap();
+    assert_eq!(structured["name"], "agent-visible");
+}
+
+#[test]
+fn elicitation_secret_field_rejected() {
+    let schema = json!({
+        "type": "object",
+        "properties": {
+            "api_key": { "type": "string", "title": "API key" }
+        }
+    });
+    assert!(schema_looks_secret(&schema));
+}
+
+#[test]
+fn elicitation_complex_schema_graceful_fallback() {
+    let schema = json!({
+        "type": "object",
+        "properties": {
+            "address": {
+                "type": "object",
+                "properties": {
+                    "street": { "type": "string" }
+                }
+            }
+        }
+    });
+    assert!(!schema_is_renderable(&schema));
+}
+
+#[test]
+fn url_elicitation_redacts_query_in_events() {
+    use tamtri_core::mcp::elicitation::audit_safe_elicitation_url;
+    let redacted = audit_safe_elicitation_url("https://example.com/oauth?client_id=demo&state=abc");
+    assert!(!redacted.contains("client_id"));
+    assert_eq!(redacted, "https://example.com/oauth");
 }

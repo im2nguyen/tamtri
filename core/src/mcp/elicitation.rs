@@ -29,9 +29,9 @@ pub fn schema_looks_secret(schema: &Value) -> bool {
     let Some(properties) = schema.get("properties").and_then(Value::as_object) else {
         return false;
     };
-    properties
-        .values()
-        .any(field_descriptor_looks_secret)
+    properties.iter().any(|(name, property)| {
+        text_looks_secret(name) || field_descriptor_looks_secret(property)
+    })
 }
 
 fn field_descriptor_looks_secret(property: &Value) -> bool {
@@ -108,6 +108,33 @@ pub fn origin_tool_call_id_from_meta(meta: Option<&Value>) -> Option<String> {
         }
     }
     None
+}
+
+pub fn schema_is_renderable(schema: &Value) -> bool {
+    let Some(properties) = schema.get("properties").and_then(Value::as_object) else {
+        return false;
+    };
+    for property in properties.values() {
+        if !property_is_renderable(property) {
+            return false;
+        }
+    }
+    true
+}
+
+fn property_is_renderable(property: &Value) -> bool {
+    let ty = property
+        .get("type")
+        .and_then(Value::as_str)
+        .unwrap_or("string");
+    match ty {
+        "string" | "number" | "integer" | "boolean" => true,
+        "array" => property
+            .get("items")
+            .is_none_or(|items| items.get("type").and_then(Value::as_str) != Some("object")),
+        "object" => false,
+        _ => false,
+    }
 }
 
 pub fn validate_elicitation_url(raw: &str) -> Result<String> {

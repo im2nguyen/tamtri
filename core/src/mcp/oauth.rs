@@ -1,4 +1,5 @@
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
+use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use url::Url;
@@ -6,6 +7,20 @@ use url::Url;
 use crate::config::OAuthConfig;
 use crate::mcp::url_handoff::{ValidatedHandoffUrl, validate_handoff_url};
 use crate::{CoreError, Result};
+
+/// JSON blob stored in the keychain at `OAuthConfig.token_ref`. Never written to events.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct StoredOAuthBundle {
+    pub access_token: String,
+    #[serde(default)]
+    pub refresh_token: Option<String>,
+    #[serde(default)]
+    pub expires_at: Option<i64>,
+    #[serde(default)]
+    pub reauth_required: bool,
+}
+
+pub const OAUTH_REFRESH_LEEWAY_SECS: i64 = 300;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PkceChallenge {
@@ -192,11 +207,93 @@ pub fn oauth_connection_status(
         return OAuthConnectionStatus::MissingCredential;
     }
     if let Some(expires_at) = expires_at
-        && expires_at <= chrono::Utc::now().timestamp()
+        && expires_at <= Utc::now().timestamp()
     {
         return OAuthConnectionStatus::Expired;
     }
     OAuthConnectionStatus::Connected
+}
+
+pub fn parse_stored_oauth(raw: &str) -> Result<StoredOAuthBundle> {
+    serde_json::from_str(raw).map_err(|err| {
+        CoreError::Protocol(format!("invalid stored oauth bundle: {err}"))
+    })
+}
+
+pub fn serialize_stored_oauth(bundle: &StoredOAuthBundle) -> Result<String> {
+    serde_json::to_string(bundle).map_err(|err| {
+        CoreError::Protocol(format!("failed to serialize oauth bundle: {err}"))
+    })
+}
+
+pub fn stored_oauth_from_token_response(response: &TokenEndpointResponse) -> StoredOAuthBundle {
+    let expires_at = response.expires_in.map(|seconds| {
+        Utc::now().timestamp() + i64::try_from(seconds).unwrap_or(i64::MAX)
+    });
+    StoredOAuthBundle {
+        access_token: response.access_token.clone(),
+        refresh_token: response.refresh_token.clone(),
+        expires_at,
+        reauth_required: false,
+    }
+}
+
+pub fn oauth_needs_refresh(expires_at: Option<i64>) -> bool {
+    let Some(expires_at) = expires_at else {
+        return false;
+    };
+    expires_at <= Utc::now().timestamp() + OAUTH_REFRESH_LEEWAY_SECS
+}
+
+pub fn oauth_status_label(status: OAuthConnectionStatus) -> &'static str {
+    match status {
+        OAuthConnectionStatus::NotConfigured => "not_configured",
+        OAuthConnectionStatus::MissingCredential => "missing",
+        OAuthConnectionStatus::Connected => "connected",
+        OAuthConnectionStatus::Expired => "expired",
+        OAuthConnectionStatus::ReauthRequired => "reauth_required",
+    }
+}
+
+pub enum OAuthResolveOutcome {
+    AccessToken(String),
+    ReauthRequired,
+    Missing,
+}
+
+pub async fn resolve_oauth_access_token(
+    client: &reqwest::Client,
+    config: &OAuthConfig,
+    stored_raw: &str,
+) -> Result<(OAuthResolveOutcome, Option<StoredOAuthBundle>)> {
+    let mut bundle = parse_stored_oauth(stored_raw)?;
+    if bundle.reauth_required {
+        return Ok((OAuthResolveOutcome::ReauthRequired, Some(bundle)));
+    }
+    if bundle.access_token.is_empty() {
+        return Ok((OAuthResolveOutcome::Missing, None));
+    }
+    if oauth_needs_refresh(bundle.expires_at) {
+        let Some(refresh_token) = bundle.refresh_token.clone() else {
+            bundle.reauth_required = true;
+            return Ok((OAuthResolveOutcome::ReauthRequired, Some(bundle)));
+        };
+        match refresh_access_token(client, config, &refresh_token).await {
+            Ok(tokens) => {
+                bundle = stored_oauth_from_token_response(&tokens);
+                let access = bundle.access_token.clone();
+                return Ok((OAuthResolveOutcome::AccessToken(access), Some(bundle)));
+            }
+            Err(_) => {
+                bundle.reauth_required = true;
+                return Ok((OAuthResolveOutcome::ReauthRequired, Some(bundle)));
+            }
+        }
+    }
+    Ok((
+        OAuthResolveOutcome::AccessToken(bundle.access_token.clone()),
+        None,
+    ))
 }
 
 impl std::fmt::Debug for TokenEndpointResponse {
