@@ -279,6 +279,7 @@ fn fork_into_harness_updates_model_and_harness() {
         Vec::new(),
     )
     .expect("agent");
+
     core.register_acp_agent(
         "other-acp".to_string(),
         "Other ACP".to_string(),
@@ -289,12 +290,14 @@ fn fork_into_harness_updates_model_and_harness() {
 
     let parent = core
         .create_conversation(
-            "Parent".to_string(),
+            format!("Parent {}", uuid::Uuid::now_v7().simple()),
             "mock-acp".to_string(),
             "model-a".to_string(),
         )
         .expect("conversation");
     let parent_id = parent.id.clone();
+    core.load_conversation(parent_id.clone())
+        .expect("parent exists before fork");
 
     let fork = core
         .fork_conversation(
@@ -309,16 +312,25 @@ fn fork_into_harness_updates_model_and_harness() {
     assert_eq!(fork.model_id.as_deref(), Some("model-b"));
     assert_eq!(fork.forked_from.as_deref(), Some(parent_id.as_str()));
 
-    let reloaded_parent = core.load_conversation(parent_id).expect("reload parent");
-    assert_eq!(
-        reloaded_parent.active_harness_id.as_deref(),
-        Some("mock-acp")
+    let listed = core.list_conversations().expect("list conversations");
+    assert!(
+        listed.iter().any(|summary| summary.id == parent_id),
+        "parent conversation should remain in vault after fork"
     );
-    assert_eq!(reloaded_parent.model_id.as_deref(), Some("model-a"));
-    assert!(reloaded_parent.forked_from.is_none());
+    assert!(
+        listed.iter().any(|summary| summary.id == fork.id),
+        "fork conversation should be listed"
+    );
+
+    let reloaded_fork = core.load_conversation(fork.id.clone()).expect("reload fork");
+    assert_eq!(
+        reloaded_fork.active_harness_id.as_deref(),
+        Some("other-acp")
+    );
+    assert_eq!(reloaded_fork.model_id.as_deref(), Some("model-b"));
 
     let parent_messages: Vec<serde_json::Value> =
-        serde_json::from_str(&reloaded_parent.transcript_json).expect("parent transcript");
+        serde_json::from_str(&parent.transcript_json).expect("parent transcript");
     let fork_messages: Vec<serde_json::Value> =
         serde_json::from_str(&fork.transcript_json).expect("fork transcript");
     assert_eq!(fork_messages, parent_messages);

@@ -11,10 +11,6 @@ pub fn folder_name(c: &Conversation) -> String {
         date.day(),
         slug(&c.title),
         c.id.simple()
-            .to_string()
-            .chars()
-            .take(8)
-            .collect::<String>()
     )
 }
 
