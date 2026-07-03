@@ -11,7 +11,23 @@ struct ConversationRecord: Equatable {
     let title: String
     let harnessId: String?
     let modelId: String?
-    let messagesJSON: [String]
+    let transcriptJSON: String
+    let parsedMessages: [ParsedTranscriptMessage]
+
+    init(
+        id: String,
+        title: String,
+        harnessId: String?,
+        modelId: String?,
+        transcriptJSON: String
+    ) {
+        self.id = id
+        self.title = title
+        self.harnessId = harnessId
+        self.modelId = modelId
+        self.transcriptJSON = transcriptJSON
+        self.parsedMessages = TranscriptParsing.parseTranscript(transcriptJSON)
+    }
 }
 
 struct CoreEvent: Equatable {
@@ -77,7 +93,7 @@ actor MockCoreClient: CoreClient {
             title: "Report from CSV",
             harnessId: "mock-acp",
             modelId: "mock",
-            messagesJSON: []
+            transcriptJSON: "[]"
         )
     ]
 
@@ -98,14 +114,20 @@ actor MockCoreClient: CoreClient {
     }
 
     func createConversation(title: String, harnessId: String, modelId: String) async throws -> ConversationRecord {
-        let record = ConversationRecord(id: UUID().uuidString, title: title, harnessId: harnessId, modelId: modelId, messagesJSON: [])
+        let record = ConversationRecord(id: UUID().uuidString, title: title, harnessId: harnessId, modelId: modelId, transcriptJSON: "[]")
         conversations.insert(record, at: 0)
         return record
     }
 
     func forkConversation(id: String, harnessId: String, modelId: String) async throws -> ConversationRecord {
         let parent = conversations.first(where: { $0.id == id }) ?? conversations[0]
-        let record = ConversationRecord(id: UUID().uuidString, title: "\(parent.title) fork", harnessId: harnessId, modelId: modelId, messagesJSON: parent.messagesJSON)
+        let record = ConversationRecord(
+            id: UUID().uuidString,
+            title: "\(parent.title) fork",
+            harnessId: harnessId,
+            modelId: modelId,
+            transcriptJSON: parent.transcriptJSON
+        )
         conversations.insert(record, at: 0)
         return record
     }

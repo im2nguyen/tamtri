@@ -48,8 +48,10 @@ fn facade_run_commits_exactly_one_assistant_message() {
     std::thread::sleep(Duration::from_millis(500));
 
     let loaded = core.load_conversation(conversation.id).expect("load");
-    assert_eq!(loaded.messages_json.len(), 2);
-    let assistant: serde_json::Value = serde_json::from_str(&loaded.messages_json[1]).unwrap();
+    let messages: Vec<serde_json::Value> =
+        serde_json::from_str(&loaded.transcript_json).expect("transcript");
+    assert_eq!(messages.len(), 2);
+    let assistant = &messages[1];
     let artifact = assistant["content"]
         .as_array()
         .unwrap()
@@ -65,7 +67,9 @@ fn facade_run_commits_exactly_one_assistant_message() {
     let workdir_report = find_file(temp.path(), "workdir/report.html").unwrap();
     fs::write(workdir_report, "<h1>changed</h1>").unwrap();
     let reloaded = core.load_conversation(loaded.id).expect("reload");
-    let assistant: serde_json::Value = serde_json::from_str(&reloaded.messages_json[1]).unwrap();
+    let messages: Vec<serde_json::Value> =
+        serde_json::from_str(&reloaded.transcript_json).expect("transcript");
+    let assistant = &messages[1];
     let artifact = assistant["content"]
         .as_array()
         .unwrap()

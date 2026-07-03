@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::UNIX_EPOCH;
 
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tokio::runtime::{Builder, Runtime};
@@ -24,6 +24,7 @@ use crate::mcp::gateway::{GatewayEvent, McpGateway, MemoryCredentials};
 use crate::vault::events::{Event, EventKind};
 use crate::vault::fs::FilesystemVault;
 use crate::vault::{ConversationSummary, ConversationVault};
+use crate::debug_log::debug_log;
 use crate::{CoreError, Result};
 
 #[uniffi::export(foreign)]
@@ -51,7 +52,13 @@ pub struct ConversationDto {
     pub title: String,
     pub active_harness_id: Option<String>,
     pub model_id: Option<String>,
-    pub messages_json: Vec<String>,
+    pub transcript_json: String,
+}
+
+#[derive(Debug, Clone)]
+struct CachedConversationDto {
+    updated_at: DateTime<Utc>,
+    dto: ConversationDto,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, uniffi::Record)]
@@ -102,7 +109,10 @@ pub struct TamtriCore {
     active_runs: Arc<Mutex<HashMap<Id, RunControl>>>,
     credentials: Arc<MemoryCredentials>,
     observer: Arc<dyn ConversationObserver>,
+    conversation_cache: Arc<Mutex<HashMap<Id, CachedConversationDto>>>,
 }
+
+const CONVERSATION_CACHE_LIMIT: usize = 32;
 
 #[uniffi::export]
 impl TamtriCore {
@@ -122,7 +132,29 @@ impl TamtriCore {
             active_runs: Arc::new(Mutex::new(HashMap::new())),
             credentials: Arc::new(MemoryCredentials::default()),
             observer,
+            conversation_cache: Arc::new(Mutex::new(HashMap::new())),
         })
+    }
+
+    fn invalidate_conversation_cache(&self, id: Id) {
+        if let Ok(mut cache) = self.conversation_cache.lock() {
+            cache.remove(&id);
+        }
+    }
+
+    fn store_conversation_cache(&self, updated_at: DateTime<Utc>, dto: ConversationDto) {
+        let Ok(id) = parse_id(&dto.id) else {
+            return;
+        };
+        let Ok(mut cache) = self.conversation_cache.lock() else {
+            return;
+        };
+        if cache.len() >= CONVERSATION_CACHE_LIMIT
+            && let Some(oldest) = cache.keys().next().copied()
+        {
+            cache.remove(&oldest);
+        }
+        cache.insert(id, CachedConversationDto { updated_at, dto });
     }
 
     fn register_acp_agent_spec(&self, spec: AgentLaunchSpec) -> Result<()> {
@@ -188,7 +220,9 @@ impl TamtriCore {
     }
 
     pub fn delete_conversation(&self, id: String) -> FfiResult<()> {
-        self.vault.delete(parse_id(&id)?).map_err(ffi_err)
+        let id = parse_id(&id)?;
+        self.invalidate_conversation_cache(id);
+        self.vault.delete(id).map_err(ffi_err)
     }
 
     pub fn send_message(&self, conversation_id: String, text: String) -> FfiResult<()> {
@@ -301,7 +335,25 @@ impl TamtriCore {
 impl TamtriCore {
     pub fn load_conversation_inner(&self, id: &str) -> Result<ConversationDto> {
         let id = parse_id(id)?;
-        conversation_to_dto(self.vault.load(id)?)
+        let updated_at = self.vault.meta_updated_at(id)?;
+        if let Ok(cache) = self.conversation_cache.lock()
+            && let Some(cached) = cache.get(&id)
+            && cached.updated_at == updated_at
+        {
+            debug_log(format!("[tamtri] load_conversation cache hit {id}"));
+            return Ok(cached.dto.clone());
+        }
+
+        let started = std::time::Instant::now();
+        let conversation = self.vault.load(id)?;
+        let dto = conversation_to_dto(&conversation)?;
+        self.store_conversation_cache(conversation.updated_at, dto.clone());
+        debug_log(format!(
+            "[tamtri] load_conversation cache miss {id} {:?} messages={}",
+            started.elapsed(),
+            conversation.messages.len()
+        ));
+        Ok(dto)
     }
 
     pub fn create_conversation_inner(
@@ -314,7 +366,9 @@ impl TamtriCore {
         conversation.active_harness_id = Some(harness_id.to_string());
         conversation.model_id = Some(model_id.to_string());
         self.vault.create(&conversation)?;
-        conversation_to_dto(conversation)
+        let dto = conversation_to_dto(&conversation)?;
+        self.store_conversation_cache(conversation.updated_at, dto.clone());
+        Ok(dto)
     }
 
     pub fn fork_conversation_inner(
@@ -328,7 +382,9 @@ impl TamtriCore {
         fork.active_harness_id = Some(harness_id.to_string());
         fork.model_id = Some(model_id.to_string());
         self.vault.create(&fork)?;
-        conversation_to_dto(fork)
+        let dto = conversation_to_dto(&fork)?;
+        self.store_conversation_cache(fork.updated_at, dto.clone());
+        Ok(dto)
     }
 
     pub fn send_message_inner(&self, conversation_id: &str, text: &str) -> Result<()> {
@@ -377,6 +433,7 @@ impl TamtriCore {
             created_at: Utc::now(),
         };
         self.vault.append_message(id, &user_message)?;
+        self.invalidate_conversation_cache(id);
         conversation.messages.push(user_message.clone());
         let ctx = ConversationContext {
             seed: ContextSeed::FreshTranscript {
@@ -397,6 +454,7 @@ impl TamtriCore {
         let vault = Arc::clone(&self.vault);
         let active_runs = Arc::clone(&self.active_runs);
         let observer = Arc::clone(&self.observer);
+        let conversation_cache = Arc::clone(&self.conversation_cache);
         self.runtime.spawn(async move {
             let gateway_vault = Arc::clone(&vault);
             let gateway_observer = Arc::clone(&observer);
@@ -474,6 +532,9 @@ impl TamtriCore {
                             }
                             if !message.content.is_empty() {
                                 let _ = vault.append_message(id, &message);
+                                if let Ok(mut cache) = conversation_cache.lock() {
+                                    cache.remove(&id);
+                                }
                                 observer.on_event(UiEvent {
                                     conversation_id: id.to_string(),
                                     kind: "message_committed".to_string(),
@@ -999,17 +1060,13 @@ fn ffi_err(err: CoreError) -> TamtriError {
     }
 }
 
-fn conversation_to_dto(conversation: Conversation) -> Result<ConversationDto> {
-    let messages_json = conversation
-        .messages
-        .iter()
-        .map(serde_json::to_string)
-        .collect::<std::result::Result<Vec<_>, _>>()?;
+fn conversation_to_dto(conversation: &Conversation) -> Result<ConversationDto> {
+    let transcript_json = serde_json::to_string(&conversation.messages)?;
     Ok(ConversationDto {
         id: conversation.id.to_string(),
-        title: conversation.title,
-        active_harness_id: conversation.active_harness_id,
-        model_id: conversation.model_id,
-        messages_json,
+        title: conversation.title.clone(),
+        active_harness_id: conversation.active_harness_id.clone(),
+        model_id: conversation.model_id.clone(),
+        transcript_json,
     })
 }

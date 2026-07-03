@@ -9,7 +9,7 @@ dictionary ConversationDto {
   string title;
   string? active_harness_id;
   string? model_id;
-  sequence<string> messages_json;
+  string transcript_json;
 };
 
 dictionary UiEvent {

@@ -192,7 +192,7 @@ private func record(from dto: ConversationDto) -> ConversationRecord {
         title: dto.title,
         harnessId: dto.activeHarnessId,
         modelId: dto.modelId,
-        messagesJSON: dto.messagesJson
+        transcriptJSON: dto.transcriptJson
     )
 }
 

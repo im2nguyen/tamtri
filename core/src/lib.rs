@@ -2,6 +2,7 @@ pub mod app;
 pub mod artifact;
 pub mod config;
 pub mod conversation;
+pub mod debug_log;
 pub mod error;
 pub mod harness;
 pub mod mcp;
