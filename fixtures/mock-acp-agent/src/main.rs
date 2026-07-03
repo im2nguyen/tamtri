@@ -113,6 +113,18 @@ fn main() {
                         }
                         let _ = call_gateway_echo(&mcp_servers, std::path::Path::new(cwd_path));
                         let _ = call_gateway_probe_roots(&mcp_servers, std::path::Path::new(cwd_path));
+                        if std::env::var("MOCK_ACP_GATEWAY_RELIST")
+                            .ok()
+                            .is_some_and(|value| value == "1")
+                        {
+                            let _ = list_gateway_tools(&mcp_servers);
+                            if let Some(cwd_path) = cwd.as_deref() {
+                                let _ = std::fs::write(
+                                    std::path::Path::new(cwd_path).join(".gateway-relist-ok"),
+                                    "1",
+                                );
+                            }
+                        }
                     }
                     if prompt_text.contains("form-elicit") {
                         let cwd_path = cwd.as_deref().map(std::path::Path::new);

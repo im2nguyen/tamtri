@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
-use std::time::UNIX_EPOCH;
+use std::time::{Duration, UNIX_EPOCH};
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -1044,6 +1044,8 @@ impl TamtriCore {
             }
             gateway_endpoint.shutdown().await;
             gateway_for_run.cancel_pending_elicitations().await;
+            gateway_for_run.disconnect_all_clients().await;
+            tokio::time::sleep(Duration::from_millis(100)).await;
             gateway_event_task.abort();
         });
         Ok(())

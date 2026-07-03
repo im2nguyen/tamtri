@@ -161,6 +161,35 @@ async fn gateway_list_tools_skips_unreachable_servers() {
     assert!(saw_broken_error);
 }
 
+#[tokio::test]
+async fn gateway_disabled_server_exclusion() {
+    let command = env!("CARGO_BIN_EXE_mock-mcp-server");
+    let mut disabled = stdio_server("disabled", command);
+    disabled.enabled = false;
+    let gateway = McpGateway::new(
+        GatewayConfig {
+            default_call_timeout_secs: 300,
+            servers: vec![stdio_server("enabled", command), disabled],
+        },
+        Arc::new(NoCredentials),
+        None,
+    )
+    .unwrap();
+
+    let tools = gateway.list_tools().await.unwrap();
+    assert!(
+        tools.iter().any(|tool| tool.exposed_name == "enabled__echo"),
+        "expected enabled server tools, got: {:?}",
+        tools
+            .iter()
+            .map(|tool| tool.exposed_name.as_str())
+            .collect::<Vec<_>>()
+    );
+    assert!(
+        !tools.iter().any(|tool| tool.server_id == "disabled"),
+        "disabled server tools must not appear in gateway aggregate"
+    );
+}
 
 #[tokio::test]
 async fn gateway_resources_route_to_downstream() {

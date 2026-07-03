@@ -47,13 +47,56 @@ final class GatewaySettingsTests: XCTestCase {
                 connectionStatus: "unknown",
                 lastError: "",
                 timeoutSecs: nil
+            ),
+            GatewayServerDto(
+                id: "disabled-mock",
+                displayName: "Disabled MCP",
+                enabled: false,
+                scope: "user",
+                transport: "stdio",
+                stdioCommand: mockMcp,
+                stdioArgs: [],
+                stdioEnv: [],
+                httpEndpoint: "",
+                credentialRefs: [],
+                missingCredentialRefs: [],
+                oauthStatus: "none",
+                oauthTokenRef: "",
+                oauthClientId: "",
+                oauthAuthorizationEndpoint: "",
+                oauthTokenEndpoint: "",
+                oauthScopes: [],
+                capTools: "unknown",
+                capResources: "unknown",
+                capPrompts: "unknown",
+                capElicitation: "unknown",
+                capApps: "unknown",
+                capTasks: "unknown",
+                capRoots: "unknown",
+                capSampling: "declined",
+                connectionStatus: "unknown",
+                lastError: "",
+                timeoutSecs: nil
             )
         ])
 
+        let servers = try core.listGatewayServers()
+        XCTAssertEqual(servers.count, 2)
+        XCTAssertTrue(servers.contains(where: { $0.id == "mock" && $0.enabled }))
+        XCTAssertTrue(servers.contains(where: { $0.id == "disabled-mock" && !$0.enabled }))
+
         let tools = try core.listGatewayTools()
         XCTAssertFalse(tools.isEmpty)
+        XCTAssertTrue(tools.allSatisfy { $0.serverId == "mock" })
+        XCTAssertFalse(tools.contains(where: { $0.serverId == "disabled-mock" }))
         XCTAssertTrue(tools.allSatisfy { !$0.exposedName.isEmpty && !$0.serverId.isEmpty })
         XCTAssertTrue(tools.contains(where: { $0.exposedName == "mock__echo" && $0.serverId == "mock" && $0.originalName == "echo" }))
+
+        // Agent-native tools are not surfaced through listGatewayTools; the UI keeps them separate.
+        XCTAssertTrue(
+            GatewaySettingsCopy.agentNativeToolsDisclaimer.contains("not exposed by this harness yet")
+        )
+        XCTAssertEqual(GatewaySettingsCopy.tamtriGatewayToolsHeading, "Tamtri gateway tools")
     }
 
     func test_settings_agent_native_tools_disclaimer() {

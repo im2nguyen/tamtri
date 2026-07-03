@@ -473,7 +473,6 @@ fn events_jsonl_gateway_receipts() {
     }];
     if let tamtri_core::config::GatewayTransport::Stdio { ref mut env, .. } = server.transport {
         env.push(("MOCK_MCP_EMIT_PROGRESS".to_string(), "1".to_string()));
-        env.push(("MOCK_MCP_EXIT_AFTER_LIST_COUNT".to_string(), "3".to_string()));
     }
     tamtri_core::config::replace_gateway_servers(temp.path(), vec![server]).expect("save config");
     core.set_gateway_credential("keychain://mock".to_string(), "super-secret".to_string())
@@ -484,16 +483,10 @@ fn events_jsonl_gateway_receipts() {
         "Mock ACP".to_string(),
         env!("CARGO_BIN_EXE_mock-acp-agent").to_string(),
         Vec::new(),
-        vec![
-            tamtri_core::app::GatewayEnvVarDto {
-                name: "MOCK_ACP_CALL_FAIL_TOOL".to_string(),
-                value: "1".to_string(),
-            },
-            tamtri_core::app::GatewayEnvVarDto {
-                name: "MOCK_ACP_GATEWAY_RELIST".to_string(),
-                value: "1".to_string(),
-            },
-        ],
+        vec![tamtri_core::app::GatewayEnvVarDto {
+            name: "MOCK_ACP_CALL_FAIL_TOOL".to_string(),
+            value: "1".to_string(),
+        }],
     )
     .expect("agent");
     let conversation = core

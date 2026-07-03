@@ -405,6 +405,13 @@ impl McpGateway {
         self.elicitation.cancel_all().await;
     }
 
+    pub async fn disconnect_all_clients(&self) {
+        let server_ids: Vec<String> = self.clients.lock().await.keys().cloned().collect();
+        for server_id in server_ids {
+            self.evict_client(&server_id).await;
+        }
+    }
+
     pub fn agent_cancelled(&self, params: Value) {
         self.emit(GatewayEvent::Cancellation {
             server_id: "tamtri-gateway".to_string(),
