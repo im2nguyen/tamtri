@@ -62,9 +62,7 @@ pub fn validate_handoff_url(raw: &str) -> Result<ValidatedHandoffUrl> {
     let origin = format!(
         "{}://{}",
         scheme,
-        parsed
-            .host_str()
-            .expect("host checked above")
+        host
     );
     let port = parsed.port();
     let origin = if let Some(port) = port {

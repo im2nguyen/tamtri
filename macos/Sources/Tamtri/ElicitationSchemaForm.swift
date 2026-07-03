@@ -183,6 +183,9 @@ enum ElicitationSchemaFormBuilder {
                 if let minLength = field.minLength, raw.count < minLength {
                     return ([:], "\(field.title) must be at least \(minLength) characters.")
                 }
+                if let maxLength = field.maxLength, raw.count > maxLength {
+                    return ([:], "\(field.title) must be at most \(maxLength) characters.")
+                }
             }
         }
         var payload: [String: Any] = [:]

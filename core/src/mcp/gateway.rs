@@ -231,7 +231,7 @@ struct PendingElicitation {
 struct GatewayElicitationService {
     events: Option<mpsc::UnboundedSender<GatewayEvent>>,
     event_broadcast: broadcast::Sender<GatewayEvent>,
-    active_tool_calls: Mutex<HashMap<String, ActiveToolCall>>,
+    active_tool_calls: Mutex<HashMap<String, Vec<ActiveToolCall>>>,
     pending_elicitations: Mutex<HashMap<String, PendingElicitation>>,
 }
 
@@ -358,6 +358,11 @@ impl McpGateway {
         Ok(reports)
     }
 
+    pub async fn check_server_connection(&self, server: &GatewayServerConfig) -> Result<()> {
+        self.client_for(server).await?;
+        Ok(())
+    }
+
     async fn store_capability_report(&self, report: ServerCapabilityReport) {
         self.server_capability_reports
             .lock()
@@ -445,6 +450,9 @@ impl McpGateway {
                     }
                 }
                 Err(err) => {
+                    if matches!(&err, CoreError::Timeout { .. }) {
+                        self.evict_client(&server.id).await;
+                    }
                     self.emit(GatewayEvent::DownstreamError {
                         server_id: server.id.clone(),
                         message: err.to_string(),
@@ -495,7 +503,7 @@ impl McpGateway {
         let _guard = lock.lock().await;
         let origin_tool_call_id = origin_tool_call_id_from_meta(meta.as_ref());
         self.elicitation
-            .set_active_tool_call(&route.server_id, origin_tool_call_id.clone())
+            .push_active_tool_call(&route.server_id, origin_tool_call_id.clone())
             .await;
         let tasks_enabled = client
             .server_capabilities()
@@ -513,14 +521,19 @@ impl McpGateway {
                 task_param,
                 meta.clone(),
             )
-            .await
-            .inspect_err(|err| {
-                self.emit(GatewayEvent::DownstreamError {
-                    server_id: route.server_id.clone(),
-                    message: err.to_string(),
-                });
+            .await;
+        if let Err(err) = &raw_result {
+            if matches!(err, CoreError::Timeout { .. }) {
+                self.evict_client(&route.server_id).await;
+            }
+            self.emit(GatewayEvent::DownstreamError {
+                server_id: route.server_id.clone(),
+                message: err.to_string(),
             });
-        self.elicitation.clear_active_tool_call(&route.server_id).await;
+        }
+        self.elicitation
+            .pop_active_tool_call(&route.server_id)
+            .await;
         let result = match raw_result {
             Ok(raw) => {
                 if tasks_enabled
@@ -791,6 +804,15 @@ impl McpGateway {
             .ok_or_else(|| CoreError::Protocol(format!("gateway server not found: {server_id}")))
     }
 
+    async fn evict_client(&self, server_id: &str) {
+        if let Some(client) = self.clients.lock().await.remove(server_id)
+            && let Ok(client) = Arc::try_unwrap(client)
+        {
+            let _ = client.close().await;
+        }
+        self.task_tracker.unregister_client(server_id).await;
+    }
+
     async fn client_for(&self, server: &GatewayServerConfig) -> Result<Arc<McpClient>> {
         if let Some(client) = self.clients.lock().await.get(&server.id).cloned() {
             return Ok(client);
@@ -818,7 +840,10 @@ impl McpGateway {
                 .unwrap_or(self.config.default_call_timeout_secs),
         );
         let client_config = McpClientConfig {
-            init_timeout: Duration::from_secs(30),
+            init_timeout: server
+                .timeout_secs
+                .map(Duration::from_secs)
+                .unwrap_or(Duration::from_secs(30)),
             call_timeout: timeout,
         };
         let client_events = self.client_event_sender(&server.id);
@@ -1122,17 +1147,25 @@ impl GatewayElicitationService {
         }
     }
 
-    async fn set_active_tool_call(&self, server_id: &str, origin_tool_call_id: Option<String>) {
-        self.active_tool_calls.lock().await.insert(
-            server_id.to_string(),
-            ActiveToolCall {
+    async fn push_active_tool_call(&self, server_id: &str, origin_tool_call_id: Option<String>) {
+        self.active_tool_calls
+            .lock()
+            .await
+            .entry(server_id.to_string())
+            .or_default()
+            .push(ActiveToolCall {
                 origin_tool_call_id,
-            },
-        );
+            });
     }
 
-    async fn clear_active_tool_call(&self, server_id: &str) {
-        self.active_tool_calls.lock().await.remove(server_id);
+    async fn pop_active_tool_call(&self, server_id: &str) {
+        let mut map = self.active_tool_calls.lock().await;
+        if let Some(stack) = map.get_mut(server_id) {
+            stack.pop();
+            if stack.is_empty() {
+                map.remove(server_id);
+            }
+        }
     }
 
     async fn respond(
@@ -1219,6 +1252,7 @@ impl GatewayElicitationService {
             .lock()
             .await
             .get(server_id)
+            .and_then(|stack| stack.last())
             .and_then(|call| call.origin_tool_call_id.clone());
         let (response_tx, response_rx) = oneshot::channel();
         let (content_tx, content_rx) = oneshot::channel();

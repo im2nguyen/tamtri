@@ -109,9 +109,21 @@ struct TranscriptView: View {
                         ConversationHeader(conversation: conversation)
                             .padding(.horizontal)
                             .padding(.top, 12)
-                        WebTranscriptView(transcriptJSON: conversation.transcriptJSON)
-                            .id(conversation.id)
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        ScrollView {
+                            LazyVStack(alignment: .leading, spacing: 12) {
+                                ForEach(conversation.parsedMessages) { message in
+                                    MessageRow(
+                                        conversationId: conversation.id,
+                                        message: message
+                                    )
+                                }
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.horizontal)
+                            .padding(.bottom, 16)
+                        }
+                        .id(conversation.id)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                     }
                 } else if switching {
                     VStack(spacing: 12) {
@@ -350,8 +362,18 @@ struct MessageRow: View {
                             .foregroundStyle(.secondary)
                     }
                 }
-                ForEach(Array(message.content.enumerated()), id: \.offset) { _, block in
-                    ContentBlockView(conversationId: conversationId, block: block)
+                ForEach(TranscriptContentGrouping.build(from: message.content)) { group in
+                    if let toolBlock = group.toolBlock {
+                        VStack(alignment: .leading, spacing: 8) {
+                            ContentBlockView(conversationId: conversationId, block: toolBlock)
+                            ForEach(Array(group.nested.enumerated()), id: \.offset) { _, nested in
+                                ContentBlockView(conversationId: conversationId, block: nested)
+                                    .padding(.leading, 16)
+                            }
+                        }
+                    } else if let standalone = group.standalone {
+                        ContentBlockView(conversationId: conversationId, block: standalone)
+                    }
                 }
             }
             .padding(.vertical, 6)
@@ -409,9 +431,7 @@ struct ContentBlockView: View {
         case "task_ref":
             TaskRefCard(block: block)
         case "artifact":
-            // Frozen attachments stay in messages.jsonl for replay/export;
-            // live previews belong in the Files inspector, not the transcript.
-            EmptyView()
+            ArtifactCard(conversationId: conversationId, block: block)
         default:
             EmptyView()
         }
@@ -682,6 +702,7 @@ struct ArtifactCard: View {
     @State private var verifiedInline: String?
     @State private var verifiedText: String?
     @State private var verifiedImage: NSImage?
+    @State private var verifiedNonPreviewable = false
     @State private var loadError: String?
 
     var body: some View {
@@ -724,6 +745,8 @@ struct ArtifactCard: View {
                         .frame(maxHeight: 360)
                 } else if let verifiedText {
                     preview(for: verifiedText)
+                } else if verifiedNonPreviewable {
+                    TypedFileCard(path: block.path, mimeType: block.mimeType, size: block.size)
                 } else if let loadError {
                     Text("Integrity check failed: \(loadError)")
                         .foregroundStyle(.red)
@@ -764,8 +787,7 @@ struct ArtifactCard: View {
         case "text/csv", "text/tab-separated-values":
             CSVPreview(text: content, separator: block.mimeType == "text/tab-separated-values" ? "\t" : ",")
         case "text/markdown":
-            Text(content)
-                .textSelection(.enabled)
+            MarkdownPreview(content: content)
         default:
             Text(content)
                 .font(.body.monospaced())
@@ -782,6 +804,7 @@ struct ArtifactCard: View {
         guard verifiedInline == nil,
               verifiedText == nil,
               verifiedImage == nil,
+              !verifiedNonPreviewable,
               loadError == nil
         else {
             return
@@ -814,6 +837,8 @@ struct ArtifactCard: View {
                 verifiedImage = image
             } else if artifactIsTextLikeMime(block.mimeType), let text = String(data: data, encoding: .utf8) {
                 verifiedText = text
+            } else {
+                verifiedNonPreviewable = true
             }
         } catch {
             loadError = error.localizedDescription
@@ -848,6 +873,98 @@ func artifactIsImageMime(_ mimeType: String?) -> Bool {
     return ["image/png", "image/jpeg", "image/gif", "image/webp"].contains(mimeType)
 }
 
+func artifactFileIcon(_ mimeType: String?) -> String {
+    switch mimeType {
+    case "text/html": return "doc.richtext"
+    case "text/csv", "text/tab-separated-values": return "tablecells"
+    case "text/markdown": return "text.quote"
+    case "image/png", "image/jpeg", "image/gif", "image/webp", "image/svg+xml": return "photo"
+    case "application/json": return "curlybraces"
+    case "application/pdf": return "doc.fill"
+    default: return "doc"
+    }
+}
+
+func artifactMimeLabel(_ mimeType: String?) -> String {
+    guard let mimeType else { return "File" }
+    switch mimeType {
+    case "text/html": return "HTML"
+    case "text/csv": return "CSV"
+    case "text/tab-separated-values": return "TSV"
+    case "text/markdown": return "Markdown"
+    case "text/plain": return "Text"
+    case "application/json": return "JSON"
+    case "application/pdf": return "PDF"
+    case "image/png": return "PNG"
+    case "image/jpeg": return "JPEG"
+    case "image/gif": return "GIF"
+    case "image/webp": return "WebP"
+    case "image/svg+xml": return "SVG"
+    default: return mimeType
+    }
+}
+
+struct TypedFileCard: View {
+    let path: String?
+    let mimeType: String?
+    let size: UInt64?
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: artifactFileIcon(mimeType))
+                .font(.title2)
+                .foregroundStyle(.secondary)
+                .frame(width: 28)
+            VStack(alignment: .leading, spacing: 4) {
+                Text((path as NSString?)?.lastPathComponent ?? "Attachment")
+                    .font(.body.weight(.medium))
+                    .lineLimit(1)
+                Text(subtitle)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+        }
+        .padding(10)
+        .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(accessibilityLabel)
+    }
+
+    private var subtitle: String {
+        let type = artifactMimeLabel(mimeType)
+        if let size {
+            let formatted = ByteCountFormatter.string(fromByteCount: Int64(size), countStyle: .file)
+            return "\(type) · \(formatted)"
+        }
+        return type
+    }
+
+    private var accessibilityLabel: String {
+        let name = (path as NSString?)?.lastPathComponent ?? "Attachment"
+        let type = artifactMimeLabel(mimeType)
+        if let size {
+            let formatted = ByteCountFormatter.string(fromByteCount: Int64(size), countStyle: .file)
+            return "\(name), \(type), \(formatted). Open or reveal in Finder."
+        }
+        return "\(name), \(type). Open or reveal in Finder."
+    }
+}
+
+struct MarkdownPreview: View {
+    let content: String
+
+    var body: some View {
+        if let attributed = try? AttributedString(markdown: content) {
+            Text(attributed)
+                .textSelection(.enabled)
+        } else {
+            Text(content)
+                .textSelection(.enabled)
+        }
+    }
+}
+
 struct SandboxedHTMLView: NSViewRepresentable {
     let html: String
     var policy: WebContentPolicy = .artifactNoNetwork
@@ -865,6 +982,7 @@ struct SandboxedHTMLView: NSViewRepresentable {
         }
         let webView = WKWebView(frame: .zero, configuration: configuration)
         webView.navigationDelegate = context.coordinator
+        webView.uiDelegate = context.coordinator
         context.coordinator.webView = webView
         return webView
     }
@@ -891,7 +1009,7 @@ struct SandboxedHTMLView: NSViewRepresentable {
         )
     }
 
-    final class Coordinator: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
+    final class Coordinator: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptMessageHandler {
         var policy: WebContentPolicy
         var bridgeContext: AppBridgeContext?
         var onBridgeRequest: ((String, UUID) -> Void)?
@@ -958,6 +1076,46 @@ struct SandboxedHTMLView: NSViewRepresentable {
                 .replacingOccurrences(of: "\\", with: "\\\\")
                 .replacingOccurrences(of: "'", with: "\\'")
             webView.evaluateJavaScript("window.__tamtriAppBridgeDeliver('\(escaped)');", completionHandler: nil)
+        }
+
+        func webView(
+            _ webView: WKWebView,
+            createWebViewWith configuration: WKWebViewConfiguration,
+            for navigationAction: WKNavigationAction,
+            windowFeatures: WKWindowFeatures
+        ) -> WKWebView? {
+            if let url = navigationAction.request.url {
+                onBlockedNavigation?(url)
+            }
+            return nil
+        }
+
+        func webView(
+            _ webView: WKWebView,
+            runJavaScriptAlertPanelWithMessage message: String,
+            initiatedByFrame frame: WKFrameInfo,
+            completionHandler: @escaping @MainActor @Sendable () -> Void
+        ) {
+            completionHandler()
+        }
+
+        func webView(
+            _ webView: WKWebView,
+            runJavaScriptConfirmPanelWithMessage message: String,
+            initiatedByFrame frame: WKFrameInfo,
+            completionHandler: @escaping @MainActor @Sendable (Bool) -> Void
+        ) {
+            completionHandler(false)
+        }
+
+        func webView(
+            _ webView: WKWebView,
+            runJavaScriptTextInputPanelWithPrompt prompt: String,
+            defaultText: String?,
+            initiatedByFrame frame: WKFrameInfo,
+            completionHandler: @escaping @MainActor @Sendable (String?) -> Void
+        ) {
+            completionHandler(nil)
         }
     }
 }
@@ -1044,20 +1202,35 @@ struct PermissionCard: View {
             Label("Permission requested", systemImage: "hand.raised")
                 .font(.headline)
             if let request {
-                Text(request.summary)
-                    .textSelection(.enabled)
+                if let harnessName = request.harnessDisplayName, !harnessName.isEmpty {
+                    Text("From \(harnessName)")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+                if let command = request.detail?.command, !command.isEmpty {
+                    Text(command)
+                        .font(.body.monospaced())
+                        .textSelection(.enabled)
+                } else if let diff = request.detail?.diff {
+                    PermissionDiffView(diff: diff)
+                } else if !request.summary.isEmpty {
+                    Text(request.summary)
+                        .textSelection(.enabled)
+                }
             }
             HStack {
                 if let request {
                     ForEach(request.rejectOptions) { option in
-                        Button(option.label) {
+                        Button(option.label, role: .destructive) {
                             store.respondPermission(requestId: request.requestId, optionId: option.id)
                         }
+                        .buttonStyle(.borderedProminent)
                     }
                     ForEach(request.allowOptions) { option in
                         Button(option.label) {
                             store.respondPermission(requestId: request.requestId, optionId: option.id)
                         }
+                        .buttonStyle(.bordered)
                     }
                     .keyboardShortcut(.defaultAction)
                 } else {
@@ -1069,6 +1242,40 @@ struct PermissionCard: View {
         .padding(10)
         .background(.yellow.opacity(0.18), in: RoundedRectangle(cornerRadius: 8))
         .accessibilityLabel("Permission requested")
+    }
+}
+
+private struct PermissionDiffView: View {
+    let diff: DiffPayload
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if let path = diff.path, !path.isEmpty {
+                Text(path)
+                    .font(.subheadline.bold())
+            }
+            if let change = diff.change, !change.isEmpty {
+                Text(change.capitalized)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            if let oldText = diff.oldText, !oldText.isEmpty {
+                Text("Before")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Text(oldText)
+                    .font(.body.monospaced())
+                    .textSelection(.enabled)
+            }
+            if let newText = diff.newText, !newText.isEmpty {
+                Text("After")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Text(newText)
+                    .font(.body.monospaced())
+                    .textSelection(.enabled)
+            }
+        }
     }
 }
 
@@ -1276,12 +1483,14 @@ private struct PermissionPayload: Decodable {
     let action: String
     let options: [PermissionOptionPayload]
     let detail: PermissionDetailPayload?
+    let harnessDisplayName: String?
 
     enum CodingKeys: String, CodingKey {
         case requestId = "request_id"
         case action
         case options
         case detail
+        case harnessDisplayName = "harness_display_name"
     }
 
     var summary: String {
@@ -1396,7 +1605,7 @@ struct FilesSidebarView: View {
             .padding(.top, 12)
             .padding(.bottom, 8)
 
-            if store.workdirFiles.isEmpty {
+            if store.transcriptArtifacts.isEmpty && store.workdirFiles.isEmpty {
                 Spacer()
                 VStack(spacing: 8) {
                     Image(systemName: "doc")
@@ -1412,26 +1621,67 @@ struct FilesSidebarView: View {
                 .padding()
                 Spacer()
             } else {
-                List(store.workdirFiles, selection: selectedFileBinding) { file in
-                    FilesSidebarRow(file: file)
-                        .tag(file.relativePath)
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 0) {
+                        if !store.transcriptArtifacts.isEmpty {
+                            Text("Artifacts")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.secondary)
+                                .padding(.horizontal)
+                                .padding(.bottom, 4)
+                            List(store.transcriptArtifacts, selection: selectedArtifactBinding) { artifact in
+                                TranscriptArtifactRow(artifact: artifact)
+                                    .tag(artifact.id)
+                            }
+                            .listStyle(.sidebar)
+                            .frame(minHeight: 80, maxHeight: 160)
+                        }
+                        if !store.workdirFiles.isEmpty {
+                            Text("Working files")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.secondary)
+                                .padding(.horizontal)
+                                .padding(.top, store.transcriptArtifacts.isEmpty ? 0 : 8)
+                                .padding(.bottom, 4)
+                            List(store.workdirFiles, selection: selectedFileBinding) { file in
+                                FilesSidebarRow(file: file)
+                                    .tag(file.relativePath)
+                            }
+                            .listStyle(.sidebar)
+                            .frame(minHeight: 80, maxHeight: 160)
+                        }
+                    }
                 }
-                .listStyle(.sidebar)
-                .frame(minHeight: 100, maxHeight: 220)
+                .frame(maxHeight: 220)
 
                 Divider()
 
-                if let preview = store.workdirPreview {
+                if let preview = store.attachmentPreview {
+                    AttachmentFilePreviewView(preview: preview)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else if let preview = store.workdirPreview {
                     WorkdirFilePreviewView(preview: preview)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else if store.selectedWorkdirFile != nil {
+                } else if store.selectedTranscriptArtifact != nil || store.selectedWorkdirFile != nil {
                     ProgressView()
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
             }
         }
         .inspectorColumnWidth(min: 260, ideal: 340, max: 520)
-        .accessibilityLabel("Working files")
+        .accessibilityLabel("Working files and artifacts")
+    }
+
+    private var selectedArtifactBinding: Binding<String?> {
+        Binding(
+            get: { store.selectedTranscriptArtifact?.id },
+            set: { id in
+                guard let id,
+                      let artifact = store.transcriptArtifacts.first(where: { $0.id == id })
+                else { return }
+                Task { await store.selectTranscriptArtifact(artifact) }
+            }
+        )
     }
 
     private var selectedFileBinding: Binding<String?> {
@@ -1444,6 +1694,95 @@ struct FilesSidebarView: View {
                 Task { await store.selectWorkdirFile(file) }
             }
         )
+    }
+}
+
+struct TranscriptArtifactRow: View {
+    let artifact: TranscriptArtifactRecord
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: artifactFileIcon(artifact.mimeType))
+                .foregroundStyle(.secondary)
+                .frame(width: 18)
+            VStack(alignment: .leading, spacing: 2) {
+                Text((artifact.path as NSString).lastPathComponent)
+                    .lineLimit(1)
+                Text("Attachment · \(ByteCountFormatter.string(fromByteCount: Int64(artifact.size), countStyle: .file))")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+        }
+        .accessibilityLabel("\((artifact.path as NSString).lastPathComponent), frozen attachment")
+    }
+}
+
+struct AttachmentFilePreviewView: View {
+    @EnvironmentObject private var store: AppStore
+    let preview: AttachmentFilePreview
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                Text((preview.path as NSString).lastPathComponent)
+                    .font(.subheadline.weight(.semibold))
+                    .lineLimit(1)
+                Spacer()
+                if let artifact = store.selectedTranscriptArtifact {
+                    Button {
+                        store.revealTranscriptArtifact(artifact)
+                    } label: {
+                        Label("Reveal in Finder", systemImage: "folder")
+                    }
+                    .labelStyle(.iconOnly)
+                    .help("Reveal frozen attachment in Finder")
+                }
+            }
+            .padding(.horizontal)
+            .padding(.vertical, 8)
+
+            ScrollView {
+                Group {
+                    if let error = preview.error {
+                        Text(error)
+                            .foregroundStyle(.secondary)
+                            .padding()
+                    } else if let text = preview.text {
+                        attachmentTextPreview(text)
+                    } else if let imageData = preview.imageData, let image = NSImage(data: imageData) {
+                        Image(nsImage: image)
+                            .resizable()
+                            .scaledToFit()
+                            .frame(maxWidth: .infinity)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal)
+                .padding(.bottom, 12)
+            }
+        }
+        .background(Color(nsColor: .textBackgroundColor))
+    }
+
+    @ViewBuilder
+    private func attachmentTextPreview(_ text: String) -> some View {
+        switch preview.mimeType {
+        case "text/html", "image/svg+xml":
+            SandboxedHTMLView(html: text, onBlockedNavigation: { url in
+                store.logBlockedNavigation(url: url.absoluteString)
+            })
+                .frame(minHeight: 280)
+        case "text/csv", "text/tab-separated-values":
+            CSVPreview(text: text, separator: preview.mimeType == "text/tab-separated-values" ? "\t" : ",")
+        case "text/markdown":
+            Text(text)
+                .textSelection(.enabled)
+        default:
+            Text(text)
+                .font(.body.monospaced())
+                .textSelection(.enabled)
+        }
     }
 }
 
@@ -1561,8 +1900,7 @@ struct WorkdirFilePreviewView: View {
         case "text/csv", "text/tab-separated-values":
             CSVPreview(text: text, separator: preview.mimeType == "text/tab-separated-values" ? "\t" : ",")
         case "text/markdown":
-            Text(text)
-                .textSelection(.enabled)
+            MarkdownPreview(content: text)
         default:
             Text(text)
                 .font(.body.monospaced())
@@ -1577,6 +1915,14 @@ struct ComposerView: View {
 
     var body: some View {
         HStack(alignment: .bottom, spacing: 8) {
+            Button {
+                store.showConversationRoots = true
+            } label: {
+                Label("Attach Root", systemImage: "folder.badge.plus")
+            }
+            .labelStyle(.iconOnly)
+            .help("Attach a filesystem root for this conversation")
+            .disabled(store.selectedConversation == nil)
             TextField("Message", text: $store.composerText, axis: .vertical)
                 .textFieldStyle(.roundedBorder)
                 .lineLimit(1...5)

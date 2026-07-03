@@ -123,7 +123,10 @@ struct GatewayServerDraft: Equatable {
             capApps: existing?.capApps ?? "unknown",
             capTasks: existing?.capTasks ?? "unknown",
             capRoots: existing?.capRoots ?? "unknown",
-            capSampling: existing?.capSampling ?? "unknown"
+            capSampling: existing?.capSampling ?? "unknown",
+            connectionStatus: existing?.connectionStatus ?? "unknown",
+            lastError: existing?.lastError ?? "",
+            timeoutSecs: existing?.timeoutSecs
         )
     }
 

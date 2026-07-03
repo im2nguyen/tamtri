@@ -76,6 +76,9 @@ struct GatewayServerRecord: Identifiable, Equatable {
     let capTasks: String
     let capRoots: String
     let capSampling: String
+    let connectionStatus: String
+    let lastError: String
+    let timeoutSecs: UInt64?
 }
 
 struct WorkdirFileRecord: Equatable, Identifiable, Hashable {
@@ -88,6 +91,14 @@ struct WorkdirFileRecord: Equatable, Identifiable, Hashable {
 
 struct WorkdirFilePreview: Equatable {
     let relativePath: String
+    let mimeType: String?
+    let text: String?
+    let imageData: Data?
+    let error: String?
+}
+
+struct AttachmentFilePreview: Equatable {
+    let path: String
     let mimeType: String?
     let text: String?
     let imageData: Data?
@@ -294,7 +305,10 @@ actor MockCoreClient: CoreClient {
                 capApps: "unknown",
                 capTasks: "unknown",
                 capRoots: "unknown",
-                capSampling: "declined"
+                capSampling: "declined",
+                connectionStatus: "unknown",
+                lastError: "",
+                timeoutSecs: nil
             )
         ]
     }

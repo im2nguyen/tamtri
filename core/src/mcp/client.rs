@@ -1011,6 +1011,10 @@ mod tests {
             client.list_tools().await,
             Err(CoreError::Timeout { method }) if method == "tools/list"
         ));
+        assert!(matches!(
+            client.list_tools().await,
+            Err(CoreError::TransportClosed)
+        ));
     }
 
     #[allow(dead_code)]

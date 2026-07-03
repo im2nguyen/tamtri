@@ -74,6 +74,10 @@ fn main() {
                         );
                     }
                     emit_updates(&mut stdout);
+                    if let Some(cwd_path) = cwd.as_deref() {
+                        let _ = call_gateway_echo(&mcp_servers, std::path::Path::new(cwd_path));
+                    }
+                    let _ = call_gateway_elicit_url(&mcp_servers);
                     let req_id = json!("perm-1");
                     permission_id = Some(id);
                     write_msg(
@@ -98,7 +102,6 @@ fn main() {
                             }
                         }),
                     );
-                    let _ = call_gateway_elicit_url(&mcp_servers);
                 }
                 _ => write_msg(
                     &mut stdout,
@@ -156,76 +159,144 @@ fn write_msg(stdout: &mut io::Stdout, value: Value) {
     let _ = stdout.flush();
 }
 
-fn call_gateway_elicit_url(mcp_servers: &[Value]) -> Result<(), String> {
-    let Some(server) = mcp_servers.first() else {
+fn call_gateway_echo(mcp_servers: &[Value], cwd: &std::path::Path) -> Result<(), String> {
+    if mcp_servers.is_empty() {
         return Ok(());
-    };
-    if server.get("type").and_then(Value::as_str) != Some("stdio") {
-        return Ok(());
-    };
-    let command = server
-        .get("command")
-        .and_then(Value::as_str)
-        .ok_or_else(|| "mcp server missing command".to_string())?;
-    let args = server
-        .get("args")
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default()
-        .into_iter()
-        .filter_map(|value| value.as_str().map(str::to_string))
-        .collect::<Vec<_>>();
-
-    let mut child = Command::new(command)
-        .args(args)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .spawn()
-        .map_err(|err| format!("spawn gateway failed: {err}"))?;
-    let mut input = child.stdin.take().ok_or_else(|| "gateway stdin missing".to_string())?;
-    let output = child.stdout.take().ok_or_else(|| "gateway stdout missing".to_string())?;
-    let mut reader = io::BufReader::new(output);
-
-    rpc_request(
-        &mut input,
-        &mut reader,
-        1,
-        "initialize",
-        json!({"protocolVersion":"2025-11-25","clientInfo":{"name":"mock-acp-agent","version":"0.1.0"},"capabilities":{}}),
-    )?;
-
-    let tools = rpc_request(&mut input, &mut reader, 2, "tools/list", json!({}))?;
+    }
+    let tools = list_gateway_tools(mcp_servers)?;
     let tool_name = tools
-        .pointer("/tools")
-        .and_then(Value::as_array)
-        .and_then(|tools| {
-            tools
-                .iter()
-                .find(|tool| tool.get("name").and_then(Value::as_str) == Some("mock__elicit_url"))
-                .or_else(|| {
-                    tools.iter().find(|tool| {
-                        tool.get("name")
-                            .and_then(Value::as_str)
-                            .unwrap_or_default()
-                            .contains("elicit_url")
-                    })
-                })
+        .iter()
+        .find(|tool| tool.get("name").and_then(Value::as_str) == Some("mock__echo"))
+        .and_then(|tool| tool.get("name").and_then(Value::as_str))
+        .ok_or_else(|| "gateway did not expose echo tool".to_string())?
+        .to_string();
+    let result = call_gateway_tool(
+        mcp_servers,
+        &tool_name,
+        json!({"message": "gateway-echo-test"}),
+    )?;
+    let message = result
+        .pointer("/structuredContent/echo/message")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if message == "gateway-echo-test" {
+        std::fs::write(cwd.join(".gateway-echo-ok"), message)
+            .map_err(|err| err.to_string())?;
+    }
+    Ok(())
+}
+
+fn call_gateway_elicit_url(mcp_servers: &[Value]) -> Result<(), String> {
+    if mcp_servers.is_empty() {
+        return Ok(());
+    }
+    let tools = list_gateway_tools(mcp_servers)?;
+    let tool_name = match tools
+        .iter()
+        .find(|tool| tool.get("name").and_then(Value::as_str) == Some("mock__elicit_url"))
+        .or_else(|| {
+            tools.iter().find(|tool| {
+                tool.get("name")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .contains("elicit_url")
+            })
         })
         .and_then(|tool| tool.get("name").and_then(Value::as_str))
-        .ok_or_else(|| "gateway did not expose elicit_url tool".to_string())?
-        .to_string();
+    {
+        Some(name) => name.to_string(),
+        None => return Ok(()),
+    };
+    let _ = call_gateway_tool(mcp_servers, &tool_name, json!({}))?;
+    Ok(())
+}
 
-    let _ = rpc_request(
-        &mut input,
-        &mut reader,
+fn list_gateway_tools(mcp_servers: &[Value]) -> Result<Vec<Value>, String> {
+    let mut session = GatewaySession::connect(mcp_servers)?;
+    let result = session.rpc_request(
+        2,
+        "tools/list",
+        json!({}),
+    )?;
+    Ok(result
+        .pointer("/tools")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default())
+}
+
+fn call_gateway_tool(mcp_servers: &[Value], tool_name: &str, arguments: Value) -> Result<Value, String> {
+    let mut session = GatewaySession::connect(mcp_servers)?;
+    session.rpc_request(
         3,
         "tools/call",
-        json!({"name": tool_name, "arguments": {}, "_meta": {"toolCallId": "acp-tool-1"}}),
-    )?;
+        json!({"name": tool_name, "arguments": arguments, "_meta": {"toolCallId": "acp-tool-1"}}),
+    )
+}
 
-    let _ = child.kill();
-    let _ = child.wait();
-    Ok(())
+struct GatewaySession {
+    child: std::process::Child,
+    input: Box<dyn Write + Send>,
+    reader: io::BufReader<Box<dyn std::io::Read + Send>>,
+}
+
+impl GatewaySession {
+    fn connect(mcp_servers: &[Value]) -> Result<Self, String> {
+        let Some(server) = mcp_servers.first() else {
+            return Err("no gateway server configured".to_string());
+        };
+        if server.get("type").and_then(Value::as_str) != Some("stdio") {
+            return Err("gateway echo test expects stdio transport".to_string());
+        }
+        let command = server
+            .get("command")
+            .and_then(Value::as_str)
+            .ok_or_else(|| "mcp server missing command".to_string())?;
+        let args = server
+            .get("args")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|value| value.as_str().map(str::to_string))
+            .collect::<Vec<_>>();
+
+        let mut child = Command::new(command)
+            .args(args)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .map_err(|err| format!("spawn gateway failed: {err}"))?;
+        let input = child.stdin.take().ok_or_else(|| "gateway stdin missing".to_string())?;
+        let output = child.stdout.take().ok_or_else(|| "gateway stdout missing".to_string())?;
+        let mut session = Self {
+            child,
+            input: Box::new(input),
+            reader: io::BufReader::new(Box::new(output)),
+        };
+        session.rpc_request(
+            1,
+            "initialize",
+            json!({"protocolVersion":"2025-11-25","clientInfo":{"name":"mock-acp-agent","version":"0.1.0"},"capabilities":{}}),
+        )?;
+        Ok(session)
+    }
+
+    fn rpc_request(
+        &mut self,
+        id: i64,
+        method: &str,
+        params: Value,
+    ) -> Result<Value, String> {
+        rpc_request(&mut self.input, &mut self.reader, id, method, params)
+    }
+}
+
+impl Drop for GatewaySession {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
 }
 
 fn rpc_request(

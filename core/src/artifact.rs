@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 
@@ -34,35 +35,21 @@ impl ArtifactSnapshotter {
         self.snapshot_relative_path(Path::new(&diff.path))
     }
 
-    pub fn snapshot_renderable_files(&self) -> Result<Vec<ArtifactSnapshot>> {
+    pub fn snapshot_referenced_paths<'a, I>(&self, paths: I) -> Result<Vec<ArtifactSnapshot>>
+    where
+        I: IntoIterator<Item = &'a str>,
+    {
         let mut snapshots = Vec::new();
-        self.snapshot_renderable_files_in(&self.workdir, &mut snapshots)?;
-        Ok(snapshots)
-    }
-
-    fn snapshot_renderable_files_in(
-        &self,
-        dir: &Path,
-        snapshots: &mut Vec<ArtifactSnapshot>,
-    ) -> Result<()> {
-        if !dir.exists() {
-            return Ok(());
-        }
-        for entry in fs::read_dir(dir)? {
-            let entry = entry?;
-            let path = entry.path();
-            if path.is_dir() {
-                self.snapshot_renderable_files_in(&path, snapshots)?;
-            } else if path.is_file() {
-                let relative = path.strip_prefix(&self.workdir).map_err(|err| {
-                    CoreError::Protocol(format!("workdir scan escaped root: {err}"))
-                })?;
-                if let Some(snapshot) = self.snapshot_relative_path(relative)? {
-                    snapshots.push(snapshot);
-                }
+        let mut seen = HashSet::new();
+        for path in paths {
+            if !seen.insert(path.to_string()) {
+                continue;
+            }
+            if let Some(snapshot) = self.snapshot_relative_path(Path::new(path))? {
+                snapshots.push(snapshot);
             }
         }
-        Ok(())
+        Ok(snapshots)
     }
 
     fn snapshot_relative_path(&self, path: &Path) -> Result<Option<ArtifactSnapshot>> {
@@ -293,7 +280,7 @@ mod tests {
     }
 
     #[test]
-    fn scans_renderable_files_from_workdir() {
+    fn snapshots_only_referenced_paths() {
         let temp = tempfile::tempdir().unwrap();
         let workdir = temp.path().join("workdir");
         let convo = temp.path().join("conversation");
@@ -304,20 +291,28 @@ mod tests {
         fs::write(workdir.join("unknown.bin"), b"\0\0\0").unwrap();
 
         let mut snapshots = ArtifactSnapshotter::new(&workdir, &convo)
-            .snapshot_renderable_files()
+            .snapshot_referenced_paths(["nested/report.html"])
             .unwrap();
         snapshots.sort_by(|a, b| a.attachment_path.cmp(&b.attachment_path));
-        assert_eq!(snapshots.len(), 2);
-        assert!(
-            snapshots
-                .iter()
-                .any(|snapshot| snapshot.mime_type == "text/csv")
-        );
-        assert!(
-            snapshots
-                .iter()
-                .any(|snapshot| snapshot.mime_type == "text/html")
-        );
+        assert_eq!(snapshots.len(), 1);
+        assert_eq!(snapshots[0].mime_type, "text/html");
+    }
+
+    #[test]
+    fn referenced_paths_ignore_unreferenced_workdir_files() {
+        let temp = tempfile::tempdir().unwrap();
+        let workdir = temp.path().join("workdir");
+        let convo = temp.path().join("conversation");
+        fs::create_dir_all(&workdir).unwrap();
+        fs::create_dir_all(convo.join("attachments")).unwrap();
+        fs::write(workdir.join("sales.csv"), "region,revenue\nNorth,10\n").unwrap();
+        fs::write(workdir.join("report.html"), "<h1>ok</h1>").unwrap();
+
+        let snapshots = ArtifactSnapshotter::new(&workdir, &convo)
+            .snapshot_referenced_paths(["report.html"])
+            .unwrap();
+        assert_eq!(snapshots.len(), 1);
+        assert_eq!(snapshots[0].mime_type, "text/html");
     }
 
     #[test]

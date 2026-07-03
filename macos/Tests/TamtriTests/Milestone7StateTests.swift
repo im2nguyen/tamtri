@@ -2,6 +2,53 @@ import Foundation
 @testable import Tamtri
 import XCTest
 
+extension TranscriptContentBlock {
+    static func fixture(
+        type: String,
+        text: String? = nil,
+        name: String? = nil,
+        callId: String? = nil,
+        originToolCallId: String? = nil,
+        path: String? = nil,
+        mimeType: String? = nil,
+        size: UInt64? = nil,
+        sha256: String? = nil,
+        serverId: String? = nil,
+        templateRef: String? = nil,
+        uri: String? = nil
+    ) -> TranscriptContentBlock {
+        TranscriptContentBlock(
+            type: type,
+            text: text,
+            name: name,
+            input: nil,
+            callId: callId,
+            output: nil,
+            path: path,
+            mimeType: mimeType,
+            size: size,
+            sha256: sha256,
+            inline: nil,
+            requestId: nil,
+            serverId: serverId,
+            originToolCallId: originToolCallId,
+            mode: nil,
+            message: nil,
+            schema: nil,
+            url: nil,
+            action: nil,
+            data: nil,
+            uri: uri,
+            templateRef: templateRef,
+            state: nil,
+            taskId: nil,
+            taskStatus: nil,
+            taskTitle: nil,
+            taskResultSummary: nil
+        )
+    }
+}
+
 final class Milestone7StateTests: XCTestCase {
     func testLiveTaskStateParsesRunningAndCompleted() {
         let running = LiveTaskState(payloadJSON: #"{"state":{"task_id":"t-1","server_id":"tasks","status":"running","title":"Import CSV","progress":{"message":"Reading rows"}}}"#)
@@ -52,6 +99,88 @@ final class Milestone7StateTests: XCTestCase {
         XCTAssertEqual(groups.count, 1)
         XCTAssertEqual(groups[0].nested.count, 1)
         XCTAssertEqual(groups[0].nested[0].kind, "app_returned")
+    }
+
+    func testTranscriptContentGroupingNestsAppUnderToolCall() {
+        let blocks = [
+            TranscriptContentBlock.fixture(type: "tool_call", name: "show_app", callId: "tool-9"),
+            TranscriptContentBlock.fixture(
+                type: "app_resource",
+                originToolCallId: "tool-9",
+                serverId: "m7-app",
+                templateRef: "ui://demo",
+                uri: "ui://demo"
+            ),
+        ]
+
+        let groups = TranscriptContentGrouping.build(from: blocks)
+        XCTAssertEqual(groups.count, 1)
+        XCTAssertEqual(groups[0].nested.count, 1)
+        XCTAssertEqual(groups[0].nested[0].type, "app_resource")
+    }
+
+    func testTranscriptContentGroupingNestsArtifactUnderToolCall() {
+        let blocks = [
+            TranscriptContentBlock.fixture(type: "tool_call", name: "write", callId: "tool-1"),
+            TranscriptContentBlock.fixture(
+                type: "artifact",
+                originToolCallId: "tool-1",
+                path: "attachments/report.html"
+            ),
+            TranscriptContentBlock.fixture(type: "text", text: "Done"),
+        ]
+
+        let groups = TranscriptContentGrouping.build(from: blocks)
+        XCTAssertEqual(groups.count, 2)
+        XCTAssertEqual(groups[0].nested.count, 1)
+        XCTAssertEqual(groups[0].nested[0].type, "artifact")
+        XCTAssertEqual(groups[1].standalone?.type, "text")
+    }
+
+    func testTranscriptArtifactsExtractsUniqueFrozenAttachments() {
+        let messages = [
+            ParsedTranscriptMessage(
+                id: "m1",
+                role: "assistant",
+                harnessId: nil,
+                content: [
+                    TranscriptContentBlock.fixture(
+                        type: "artifact",
+                        path: "attachments/a.html",
+                        mimeType: "text/html",
+                        size: 12,
+                        sha256: "abc"
+                    ),
+                    TranscriptContentBlock.fixture(
+                        type: "artifact",
+                        path: "attachments/a.html",
+                        mimeType: "text/html",
+                        size: 12,
+                        sha256: "abc"
+                    ),
+                ],
+                rawJSON: nil
+            ),
+            ParsedTranscriptMessage(
+                id: "m2",
+                role: "assistant",
+                harnessId: nil,
+                content: [
+                    TranscriptContentBlock.fixture(
+                        type: "artifact",
+                        path: "attachments/b.csv",
+                        mimeType: "text/csv",
+                        size: 4,
+                        sha256: "def"
+                    ),
+                ],
+                rawJSON: nil
+            ),
+        ]
+
+        let artifacts = TranscriptArtifacts.extract(from: messages)
+        XCTAssertEqual(artifacts.count, 2)
+        XCTAssertEqual(artifacts.map { $0.path }.sorted(), ["attachments/a.html", "attachments/b.csv"])
     }
 
     func testTranscriptTaskRefParsesTitleAndResultSummary() throws {

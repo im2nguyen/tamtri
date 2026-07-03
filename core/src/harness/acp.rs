@@ -615,6 +615,40 @@ mod tests {
     }
 
     #[test]
+    fn seed_renders_prior_transcript() {
+        use crate::conversation::{ContentBlock, Message, Role};
+        use chrono::Utc;
+        use uuid::Uuid;
+
+        let prior = Message {
+            id: Uuid::now_v7(),
+            role: Role::User,
+            harness_id: None,
+            content: vec![ContentBlock::Text {
+                text: "prior context".to_string(),
+            }],
+            created_at: Utc::now(),
+        };
+        let user = Message {
+            id: Uuid::now_v7(),
+            role: Role::User,
+            harness_id: None,
+            content: vec![ContentBlock::Text {
+                text: "follow up".to_string(),
+            }],
+            created_at: Utc::now(),
+        };
+        let prompt = render_prompt(
+            &ContextSeed::FreshTranscript {
+                messages: vec![prior],
+            },
+            &user,
+        );
+        assert!(prompt.contains("prior context"));
+        assert!(prompt.contains("follow up"));
+    }
+
+    #[test]
     fn format_harness_run_error_adds_gateway_hint_for_internal_error() {
         let err = CoreError::JsonRpc {
             code: -32603,

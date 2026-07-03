@@ -84,11 +84,13 @@ Downstream servers may call `elicitation/create` while a `tools/call` is pending
 - **URL mode** renders a consent card with exact destination origin and path (query stripped in audit logs), then opens the system browser only after explicit approval.
 - Shared URL validation lives in `core/src/mcp/url_handoff.rs`. Non-HTTPS URLs are rejected except loopback OAuth callbacks. Userinfo URLs are rejected.
 
-## OAuth for remote HTTP servers (Milestone 6 scaffold)
+## OAuth for remote HTTP servers (Milestone 6)
 
 `config.json` may attach an `oauth` block to streamable HTTP gateway servers. Core implements authorization code + PKCE in `core/src/mcp/oauth.rs`. Resolved bearer tokens inject into outbound HTTP via `CredentialResolver` using `token_ref` references only in the vault. The macOS shell owns the loopback callback listener and persists token bundles in Keychain.
 
-On macOS, the shell stores OAuth bundles in Keychain (service `tamtri.gateway`, account = `token_ref`). On startup it loads those bundles into core's in-memory credential store. When core silently refreshes an expiring bundle during an HTTP tool call, it emits a `gateway_credential_updated` UI event; the shell responds by exporting the updated bundle from core and persisting it back to Keychain. Token values never appear in `config.json` or `events.jsonl`.
+On macOS, the shell stores OAuth bundles and static gateway secrets in Keychain (service `tamtri.gateway`, account = credential reference). On launch it reloads every configured `credential_ref` and `token_ref` from Keychain into core's in-memory credential store. When core silently refreshes an expiring OAuth bundle during an HTTP tool call, it emits a `gateway_credential_updated` UI event; the shell exports the updated bundle from core and persists it back to Keychain. Token and secret values never appear in `config.json` or `events.jsonl`.
+
+If the app quits while elicitation cards are open, the shell calls `prepare_for_app_quit` so core cancels pending downstream elicitations and writes `elicitation_resolved` receipts with action `cancel`.
 
 The `tamtri-gateway-stdio` helper forwards stdio JSON-RPC frames to that endpoint for agents that require stdio MCP server refs. Development builds discover it via `TAMTRI_GATEWAY_STDIO_HELPER`, next to the current executable, or under `target/debug`; release packaging still needs to bundle it beside the signed app executable.
 

@@ -146,6 +146,113 @@ async fn permission_round_trip_mid_turn() {
 }
 
 #[tokio::test]
+async fn cancel_sends_session_cancel() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut run = adapter()
+        .run(ctx_in(temp.path().to_path_buf()), user_turn())
+        .await
+        .unwrap();
+
+    let _ = tokio::time::timeout(Duration::from_secs(2), run.events.recv()).await;
+    run.control.cancel().await.unwrap();
+
+    let mut saw_cancelled = false;
+    while let Ok(Some(event)) =
+        tokio::time::timeout(Duration::from_secs(2), run.events.recv()).await
+    {
+        if matches!(
+            event,
+            HarnessEvent::TurnEnded {
+                reason: TurnEndReason::Cancelled
+            }
+        ) {
+            saw_cancelled = true;
+            break;
+        }
+    }
+    assert!(saw_cancelled);
+}
+
+#[test]
+fn mock_acp_agent_calls_gateway_tool() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let observer = Arc::new(RecordingObserver::default());
+    let core = TamtriCore::new(temp.path().to_string_lossy().into_owned(), observer)
+        .expect("core");
+
+    let mock_mcp = env!("CARGO_BIN_EXE_mock-mcp-server").to_string();
+    tamtri_core::config::replace_gateway_servers(
+        temp.path(),
+        vec![gateway_mock_server(&mock_mcp)],
+    )
+    .expect("save config");
+
+    core.register_acp_agent(
+        "mock-acp".to_string(),
+        "Mock ACP".to_string(),
+        env!("CARGO_BIN_EXE_mock-acp-agent").to_string(),
+        Vec::new(),
+    )
+    .expect("agent");
+
+    let conversation = core
+        .create_conversation(
+            "Gateway echo".to_string(),
+            "mock-acp".to_string(),
+            "mock".to_string(),
+        )
+        .expect("conversation");
+
+    core.send_message(conversation.id.clone(), "go".to_string())
+        .expect("send");
+
+    let conversation_id = uuid::Uuid::parse_str(&conversation.id).expect("uuid");
+    let workdir = core
+        .conversation_workdir_path(conversation.id.clone())
+        .expect("workdir");
+    let marker = std::path::Path::new(&workdir).join(".gateway-echo-ok");
+
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while std::time::Instant::now() < deadline {
+        if marker.is_file() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+
+    core.cancel_run(conversation.id).ok();
+    assert_eq!(
+        std::fs::read_to_string(&marker).expect("marker"),
+        "gateway-echo-test"
+    );
+    let _ = conversation_id;
+}
+
+#[derive(Default)]
+struct RecordingObserver;
+
+impl ConversationObserver for RecordingObserver {
+    fn on_event(&self, _event: UiEvent) {}
+}
+
+fn gateway_mock_server(command: &str) -> tamtri_core::config::GatewayServerConfig {
+    tamtri_core::config::GatewayServerConfig {
+        id: "mock".to_string(),
+        display_name: "Mock".to_string(),
+        enabled: true,
+        scope: tamtri_core::config::GatewayScope::User,
+        transport: tamtri_core::config::GatewayTransport::Stdio {
+            command: command.to_string(),
+            args: Vec::new(),
+            env: Vec::new(),
+        },
+        timeout_secs: Some(30),
+        credentials: Vec::new(),
+        oauth: None,
+    }
+}
+
+#[tokio::test]
 #[ignore = "requires a locally installed real ACP agent; set TAMTRI_REAL_ACP_COMMAND and optional TAMTRI_REAL_ACP_ARGS"]
 async fn hermes_acp_smoke() {
     let adapter = real_adapter_from_env()

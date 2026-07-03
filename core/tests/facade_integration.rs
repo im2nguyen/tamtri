@@ -106,6 +106,90 @@ fn facade_run_commits_exactly_one_assistant_message() {
         }),
         "expected artifact_snapshotted receipt with tool_call_id"
     );
+    let kinds: Vec<_> = events
+        .iter()
+        .map(|event| event["kind"].as_str().unwrap_or_default())
+        .collect();
+    for expected in [
+        "turn_started",
+        "harness_spawned",
+        "permission_requested",
+        "permission_resolved",
+        "harness_exited",
+        "turn_ended",
+    ] {
+        assert!(
+            kinds.iter().any(|kind| *kind == expected),
+            "missing events.jsonl receipt: {expected}"
+        );
+    }
+}
+
+#[test]
+fn events_jsonl_full_run_receipts() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let observer = Arc::new(RecordingObserver::default());
+    let core = TamtriCore::new(temp.path().to_string_lossy().into_owned(), observer).expect("core");
+    core.register_acp_agent(
+        "mock-acp".to_string(),
+        "Mock ACP".to_string(),
+        env!("CARGO_BIN_EXE_mock-acp-agent").to_string(),
+        Vec::new(),
+    )
+    .expect("agent");
+    let conversation = core
+        .create_conversation(
+            "Receipts".to_string(),
+            "mock-acp".to_string(),
+            "mock".to_string(),
+        )
+        .expect("conversation");
+
+    core.send_message(conversation.id.clone(), "hello".to_string())
+        .expect("send");
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        if core
+            .respond_permission(
+                conversation.id.clone(),
+                "perm-1".to_string(),
+                "allow_once".to_string(),
+            )
+            .is_ok()
+        {
+            break;
+        }
+        if std::time::Instant::now() >= deadline {
+            panic!("permission: run never became ready for consent");
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    std::thread::sleep(Duration::from_millis(500));
+
+    let events_path = find_file(temp.path(), "events.jsonl").expect("events");
+    let events_text = fs::read_to_string(events_path).expect("read events");
+    let events: Vec<serde_json::Value> = events_text
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| serde_json::from_str(line).expect("event line"))
+        .collect();
+    let kinds: Vec<_> = events
+        .iter()
+        .map(|event| event["kind"].as_str().unwrap_or_default())
+        .collect();
+    for expected in [
+        "turn_started",
+        "harness_spawned",
+        "permission_requested",
+        "permission_resolved",
+        "harness_exited",
+        "turn_ended",
+    ] {
+        assert!(
+            kinds.iter().any(|kind| *kind == expected),
+            "missing events.jsonl receipt: {expected}"
+        );
+    }
 }
 
 #[test]

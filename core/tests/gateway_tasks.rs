@@ -228,6 +228,66 @@ async fn task_survives_background_resume() {
 }
 
 #[tokio::test]
+async fn task_subscribe_updates_live_card() {
+    let command = env!("CARGO_BIN_EXE_m7-task-subscribe-mcp");
+    let (tx, _rx) = mpsc::unbounded_channel();
+    let gateway = Arc::new(
+        McpGateway::new(
+            GatewayConfig {
+                default_call_timeout_secs: 300,
+                servers: vec![stdio_server("task-subscribe", command)],
+            },
+            Arc::new(NoCredentials),
+            Some(tx),
+        )
+        .unwrap(),
+    );
+
+    let tools = gateway.list_tools().await.expect("list tools");
+    let exposed = tools
+        .iter()
+        .find(|tool| tool.original_name == "subscribe_task")
+        .map(|tool| tool.exposed_name.clone())
+        .expect("subscribe_task");
+    let mut rx = gateway.subscribe();
+    gateway
+        .call_tool(&exposed, json!({}))
+        .await
+        .expect("call subscribe_task");
+
+    let task_id = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let event = rx.recv().await.expect("event");
+            if let GatewayEvent::TaskStarted { state } = event {
+                return state.task_id;
+            }
+        }
+    })
+    .await
+    .expect("task started");
+
+    let mut saw_subscribe_update = false;
+    let completed = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let event = rx.recv().await.expect("event");
+            match event {
+                GatewayEvent::TaskUpdated { state } if state.task_id == task_id => {
+                    saw_subscribe_update = true;
+                }
+                GatewayEvent::TaskCompleted { state, .. } if state.task_id == task_id => {
+                    return state;
+                }
+                _ => {}
+            }
+        }
+    })
+    .await
+    .expect("task completed via subscribe notifications");
+    assert!(saw_subscribe_update, "expected subscribe-driven task update");
+    assert_eq!(completed.status, TaskStatus::Completed);
+}
+
+#[tokio::test]
 async fn task_mid_input_uses_elicitation_path() {
     let command = env!("CARGO_BIN_EXE_m7-task-mcp");
     let (tx, _rx) = mpsc::unbounded_channel();

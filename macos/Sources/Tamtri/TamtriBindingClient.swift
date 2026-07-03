@@ -300,7 +300,10 @@ private func gatewayServerRecord(from dto: GatewayServerDto) -> GatewayServerRec
         capApps: dto.capApps,
         capTasks: dto.capTasks,
         capRoots: dto.capRoots,
-        capSampling: dto.capSampling
+        capSampling: dto.capSampling,
+        connectionStatus: dto.connectionStatus,
+        lastError: dto.lastError,
+        timeoutSecs: dto.timeoutSecs
     )
 }
 
@@ -330,7 +333,10 @@ private func gatewayServerDto(from record: GatewayServerRecord) -> GatewayServer
         capApps: record.capApps,
         capTasks: record.capTasks,
         capRoots: record.capRoots,
-        capSampling: record.capSampling
+        capSampling: record.capSampling,
+        connectionStatus: record.connectionStatus,
+        lastError: record.lastError,
+        timeoutSecs: record.timeoutSecs
     )
 }
 

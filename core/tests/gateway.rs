@@ -294,3 +294,68 @@ async fn credential_injection_redacts_events() {
     ));
     assert!(!format!("{event:?}").contains("super-secret"));
 }
+
+#[tokio::test]
+async fn gateway_tools_list_aggregates_servers() {
+    let command = env!("CARGO_BIN_EXE_mock-mcp-server");
+    let gateway = McpGateway::new(
+        GatewayConfig {
+            default_call_timeout_secs: 300,
+            servers: vec![
+                stdio_server("alpha", command),
+                stdio_server("beta", command),
+            ],
+        },
+        Arc::new(NoCredentials),
+        None,
+    )
+    .unwrap();
+
+    let tools = gateway.list_tools().await.unwrap();
+    assert!(tools.iter().any(|tool| tool.exposed_name == "alpha__echo"));
+    assert!(tools.iter().any(|tool| tool.exposed_name == "beta__echo"));
+    assert!(tools.iter().any(|tool| tool.exposed_name == "alpha__summarize"));
+    assert!(tools.iter().any(|tool| tool.exposed_name == "beta__summarize"));
+}
+
+#[tokio::test]
+async fn gateway_list_tools_recovers_after_timeout() {
+    let marker = tempfile::NamedTempFile::new().expect("temp marker");
+    let marker_path = marker.path().to_string_lossy().into_owned();
+    let command = env!("CARGO_BIN_EXE_mock-mcp-server");
+    let mut server = stdio_server("mock", command);
+    server.timeout_secs = Some(1);
+    if let GatewayTransport::Stdio { ref mut env, .. } = server.transport {
+        env.push(("MOCK_MCP_LIST_MARKER".to_string(), marker_path));
+    }
+
+    let gateway = McpGateway::new(
+        GatewayConfig {
+            default_call_timeout_secs: 300,
+            servers: vec![server],
+        },
+        Arc::new(NoCredentials),
+        None,
+    )
+    .unwrap();
+
+    let first = gateway.list_tools().await.expect("list after timeout");
+    assert!(
+        first.is_empty(),
+        "expected no tools after timeout, got: {:?}",
+        first
+            .iter()
+            .map(|tool| tool.exposed_name.as_str())
+            .collect::<Vec<_>>()
+    );
+
+    let second = gateway.list_tools().await.expect("list after recovery");
+    assert!(
+        second.iter().any(|tool| tool.exposed_name == "mock__echo"),
+        "expected mock tools after reconnect, got: {:?}",
+        second
+            .iter()
+            .map(|tool| tool.exposed_name.as_str())
+            .collect::<Vec<_>>()
+    );
+}

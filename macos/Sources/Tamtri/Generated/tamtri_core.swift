@@ -797,9 +797,15 @@ public protocol TamtriCoreProtocol: AnyObject, Sendable {
     
     func forkConversation(id: String, harnessId: String, modelId: String) throws  -> ConversationDto
     
+    func getGatewaySettings() throws  -> GatewaySettingsDto
+    
+    func listAcpAgents() throws  -> [AgentRosterEntryDto]
+    
     func listConversations() throws  -> [ConversationSummaryDto]
     
     func listGatewayServers() throws  -> [GatewayServerDto]
+    
+    func listGatewayTools() throws  -> [GatewayToolDto]
     
     func listRoots(conversationId: String) throws  -> [RootDto]
     
@@ -810,6 +816,8 @@ public protocol TamtriCoreProtocol: AnyObject, Sendable {
     func logAppNavigationBlocked(conversationId: String, serverId: String, templateRef: String, url: String) throws 
     
     func logArtifactNavigationBlocked(conversationId: String, url: String) throws 
+    
+    func prepareForAppQuit() throws 
     
     func readAttachmentVerified(conversationId: String, path: String, size: UInt64, sha256: String) throws  -> Data
     
@@ -834,6 +842,8 @@ public protocol TamtriCoreProtocol: AnyObject, Sendable {
     func sendMessage(conversationId: String, text: String) throws 
     
     func setGatewayCredential(credentialRef: String, value: String) throws 
+    
+    func setGatewayDefaultTimeout(defaultCallTimeoutSecs: UInt64) throws 
     
     func startOauthFlow(serverId: String, redirectUri: String) throws  -> OAuthHandoffDto
     
@@ -1025,6 +1035,24 @@ open func forkConversation(id: String, harnessId: String, modelId: String)throws
 })
 }
     
+open func getGatewaySettings()throws  -> GatewaySettingsDto  {
+    return try  FfiConverterTypeGatewaySettingsDto_lift(try rustCallWithError(FfiConverterTypeTamtriError_lift) {
+        uniffiCallStatus in
+    uniffi_tamtri_core_fn_method_tamtricore_get_gateway_settings(
+            self.uniffiCloneHandle(),uniffiCallStatus
+    )
+})
+}
+    
+open func listAcpAgents()throws  -> [AgentRosterEntryDto]  {
+    return try  FfiConverterSequenceTypeAgentRosterEntryDto.lift(try rustCallWithError(FfiConverterTypeTamtriError_lift) {
+        uniffiCallStatus in
+    uniffi_tamtri_core_fn_method_tamtricore_list_acp_agents(
+            self.uniffiCloneHandle(),uniffiCallStatus
+    )
+})
+}
+    
 open func listConversations()throws  -> [ConversationSummaryDto]  {
     return try  FfiConverterSequenceTypeConversationSummaryDto.lift(try rustCallWithError(FfiConverterTypeTamtriError_lift) {
         uniffiCallStatus in
@@ -1038,6 +1066,15 @@ open func listGatewayServers()throws  -> [GatewayServerDto]  {
     return try  FfiConverterSequenceTypeGatewayServerDto.lift(try rustCallWithError(FfiConverterTypeTamtriError_lift) {
         uniffiCallStatus in
     uniffi_tamtri_core_fn_method_tamtricore_list_gateway_servers(
+            self.uniffiCloneHandle(),uniffiCallStatus
+    )
+})
+}
+    
+open func listGatewayTools()throws  -> [GatewayToolDto]  {
+    return try  FfiConverterSequenceTypeGatewayToolDto.lift(try rustCallWithError(FfiConverterTypeTamtriError_lift) {
+        uniffiCallStatus in
+    uniffi_tamtri_core_fn_method_tamtricore_list_gateway_tools(
             self.uniffiCloneHandle(),uniffiCallStatus
     )
 })
@@ -1091,6 +1128,14 @@ open func logArtifactNavigationBlocked(conversationId: String, url: String)throw
             self.uniffiCloneHandle(),
         FfiConverterString.lower(conversationId),
         FfiConverterString.lower(url),uniffiCallStatus
+    )
+}
+}
+    
+open func prepareForAppQuit()throws   {try rustCallWithError(FfiConverterTypeTamtriError_lift) {
+        uniffiCallStatus in
+    uniffi_tamtri_core_fn_method_tamtricore_prepare_for_app_quit(
+            self.uniffiCloneHandle(),uniffiCallStatus
     )
 }
 }
@@ -1225,6 +1270,15 @@ open func setGatewayCredential(credentialRef: String, value: String)throws   {tr
 }
 }
     
+open func setGatewayDefaultTimeout(defaultCallTimeoutSecs: UInt64)throws   {try rustCallWithError(FfiConverterTypeTamtriError_lift) {
+        uniffiCallStatus in
+    uniffi_tamtri_core_fn_method_tamtricore_set_gateway_default_timeout(
+            self.uniffiCloneHandle(),
+        FfiConverterUInt64.lower(defaultCallTimeoutSecs),uniffiCallStatus
+    )
+}
+}
+    
 open func startOauthFlow(serverId: String, redirectUri: String)throws  -> OAuthHandoffDto  {
     return try  FfiConverterTypeOAuthHandoffDto_lift(try rustCallWithError(FfiConverterTypeTamtriError_lift) {
         uniffiCallStatus in
@@ -1330,6 +1384,60 @@ public func FfiConverterTypeTamtriCore_lower(_ value: TamtriCore) -> UInt64 {
 }
 
 
+
+
+public struct AgentRosterEntryDto: Equatable, Hashable {
+    public var id: String
+    public var displayName: String
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(id: String, displayName: String) {
+        self.id = id
+        self.displayName = displayName
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension AgentRosterEntryDto: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeAgentRosterEntryDto: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> AgentRosterEntryDto {
+        return
+            try AgentRosterEntryDto(
+                id: FfiConverterString.read(from: &buf), 
+                displayName: FfiConverterString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: AgentRosterEntryDto, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.id, into: &buf)
+        FfiConverterString.write(value.displayName, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeAgentRosterEntryDto_lift(_ buf: RustBuffer) throws -> AgentRosterEntryDto {
+    return try FfiConverterTypeAgentRosterEntryDto.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeAgentRosterEntryDto_lower(_ value: AgentRosterEntryDto) -> RustBuffer {
+    return FfiConverterTypeAgentRosterEntryDto.lower(value)
+}
 
 
 public struct AppBridgeSubmissionDto: Equatable, Hashable {
@@ -1465,15 +1573,17 @@ public struct ConversationDto: Equatable, Hashable {
     public var title: String
     public var activeHarnessId: String?
     public var modelId: String?
+    public var forkedFrom: String?
     public var transcriptJson: String
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(id: String, title: String, activeHarnessId: String?, modelId: String?, transcriptJson: String) {
+    public init(id: String, title: String, activeHarnessId: String?, modelId: String?, forkedFrom: String?, transcriptJson: String) {
         self.id = id
         self.title = title
         self.activeHarnessId = activeHarnessId
         self.modelId = modelId
+        self.forkedFrom = forkedFrom
         self.transcriptJson = transcriptJson
     }
 
@@ -1497,6 +1607,7 @@ public struct FfiConverterTypeConversationDto: FfiConverterRustBuffer {
                 title: FfiConverterString.read(from: &buf), 
                 activeHarnessId: FfiConverterOptionString.read(from: &buf), 
                 modelId: FfiConverterOptionString.read(from: &buf), 
+                forkedFrom: FfiConverterOptionString.read(from: &buf), 
                 transcriptJson: FfiConverterString.read(from: &buf)
         )
     }
@@ -1506,6 +1617,7 @@ public struct FfiConverterTypeConversationDto: FfiConverterRustBuffer {
         FfiConverterString.write(value.title, into: &buf)
         FfiConverterOptionString.write(value.activeHarnessId, into: &buf)
         FfiConverterOptionString.write(value.modelId, into: &buf)
+        FfiConverterOptionString.write(value.forkedFrom, into: &buf)
         FfiConverterString.write(value.transcriptJson, into: &buf)
     }
 }
@@ -1664,10 +1776,13 @@ public struct GatewayServerDto: Equatable, Hashable {
     public var capTasks: String
     public var capRoots: String
     public var capSampling: String
+    public var connectionStatus: String
+    public var lastError: String
+    public var timeoutSecs: UInt64?
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(id: String, displayName: String, enabled: Bool, scope: String, transport: String, stdioCommand: String, stdioArgs: [String], stdioEnv: [GatewayEnvVarDto], httpEndpoint: String, credentialRefs: [String], missingCredentialRefs: [String], oauthStatus: String, oauthTokenRef: String, oauthClientId: String, oauthAuthorizationEndpoint: String, oauthTokenEndpoint: String, oauthScopes: [String], capTools: String, capResources: String, capPrompts: String, capElicitation: String, capApps: String, capTasks: String, capRoots: String, capSampling: String) {
+    public init(id: String, displayName: String, enabled: Bool, scope: String, transport: String, stdioCommand: String, stdioArgs: [String], stdioEnv: [GatewayEnvVarDto], httpEndpoint: String, credentialRefs: [String], missingCredentialRefs: [String], oauthStatus: String, oauthTokenRef: String, oauthClientId: String, oauthAuthorizationEndpoint: String, oauthTokenEndpoint: String, oauthScopes: [String], capTools: String, capResources: String, capPrompts: String, capElicitation: String, capApps: String, capTasks: String, capRoots: String, capSampling: String, connectionStatus: String, lastError: String, timeoutSecs: UInt64?) {
         self.id = id
         self.displayName = displayName
         self.enabled = enabled
@@ -1693,6 +1808,9 @@ public struct GatewayServerDto: Equatable, Hashable {
         self.capTasks = capTasks
         self.capRoots = capRoots
         self.capSampling = capSampling
+        self.connectionStatus = connectionStatus
+        self.lastError = lastError
+        self.timeoutSecs = timeoutSecs
     }
 
     
@@ -1735,7 +1853,10 @@ public struct FfiConverterTypeGatewayServerDto: FfiConverterRustBuffer {
                 capApps: FfiConverterString.read(from: &buf), 
                 capTasks: FfiConverterString.read(from: &buf), 
                 capRoots: FfiConverterString.read(from: &buf), 
-                capSampling: FfiConverterString.read(from: &buf)
+                capSampling: FfiConverterString.read(from: &buf), 
+                connectionStatus: FfiConverterString.read(from: &buf), 
+                lastError: FfiConverterString.read(from: &buf), 
+                timeoutSecs: FfiConverterOptionUInt64.read(from: &buf)
         )
     }
 
@@ -1765,6 +1886,9 @@ public struct FfiConverterTypeGatewayServerDto: FfiConverterRustBuffer {
         FfiConverterString.write(value.capTasks, into: &buf)
         FfiConverterString.write(value.capRoots, into: &buf)
         FfiConverterString.write(value.capSampling, into: &buf)
+        FfiConverterString.write(value.connectionStatus, into: &buf)
+        FfiConverterString.write(value.lastError, into: &buf)
+        FfiConverterOptionUInt64.write(value.timeoutSecs, into: &buf)
     }
 }
 
@@ -1781,6 +1905,114 @@ public func FfiConverterTypeGatewayServerDto_lift(_ buf: RustBuffer) throws -> G
 #endif
 public func FfiConverterTypeGatewayServerDto_lower(_ value: GatewayServerDto) -> RustBuffer {
     return FfiConverterTypeGatewayServerDto.lower(value)
+}
+
+
+public struct GatewaySettingsDto: Equatable, Hashable {
+    public var defaultCallTimeoutSecs: UInt64
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(defaultCallTimeoutSecs: UInt64) {
+        self.defaultCallTimeoutSecs = defaultCallTimeoutSecs
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension GatewaySettingsDto: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeGatewaySettingsDto: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> GatewaySettingsDto {
+        return
+            try GatewaySettingsDto(
+                defaultCallTimeoutSecs: FfiConverterUInt64.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: GatewaySettingsDto, into buf: inout [UInt8]) {
+        FfiConverterUInt64.write(value.defaultCallTimeoutSecs, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeGatewaySettingsDto_lift(_ buf: RustBuffer) throws -> GatewaySettingsDto {
+    return try FfiConverterTypeGatewaySettingsDto.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeGatewaySettingsDto_lower(_ value: GatewaySettingsDto) -> RustBuffer {
+    return FfiConverterTypeGatewaySettingsDto.lower(value)
+}
+
+
+public struct GatewayToolDto: Equatable, Hashable {
+    public var exposedName: String
+    public var serverId: String
+    public var originalName: String
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(exposedName: String, serverId: String, originalName: String) {
+        self.exposedName = exposedName
+        self.serverId = serverId
+        self.originalName = originalName
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension GatewayToolDto: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeGatewayToolDto: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> GatewayToolDto {
+        return
+            try GatewayToolDto(
+                exposedName: FfiConverterString.read(from: &buf), 
+                serverId: FfiConverterString.read(from: &buf), 
+                originalName: FfiConverterString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: GatewayToolDto, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.exposedName, into: &buf)
+        FfiConverterString.write(value.serverId, into: &buf)
+        FfiConverterString.write(value.originalName, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeGatewayToolDto_lift(_ buf: RustBuffer) throws -> GatewayToolDto {
+    return try FfiConverterTypeGatewayToolDto.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeGatewayToolDto_lower(_ value: GatewayToolDto) -> RustBuffer {
+    return FfiConverterTypeGatewayToolDto.lower(value)
 }
 
 
@@ -2217,6 +2449,30 @@ public func FfiConverterTypeTamtriError_lower(_ value: TamtriError) -> RustBuffe
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterOptionUInt64: FfiConverterRustBuffer {
+    typealias SwiftType = UInt64?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterUInt64.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterUInt64.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterOptionString: FfiConverterRustBuffer {
     typealias SwiftType = String?
 
@@ -2282,6 +2538,31 @@ fileprivate struct FfiConverterSequenceString: FfiConverterRustBuffer {
         seq.reserveCapacity(Int(len))
         for _ in 0 ..< len {
             seq.append(try FfiConverterString.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterSequenceTypeAgentRosterEntryDto: FfiConverterRustBuffer {
+    typealias SwiftType = [AgentRosterEntryDto]
+
+    public static func write(_ value: [AgentRosterEntryDto], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeAgentRosterEntryDto.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [AgentRosterEntryDto] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [AgentRosterEntryDto]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeAgentRosterEntryDto.read(from: &buf))
         }
         return seq
     }
@@ -2357,6 +2638,31 @@ fileprivate struct FfiConverterSequenceTypeGatewayServerDto: FfiConverterRustBuf
         seq.reserveCapacity(Int(len))
         for _ in 0 ..< len {
             seq.append(try FfiConverterTypeGatewayServerDto.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterSequenceTypeGatewayToolDto: FfiConverterRustBuffer {
+    typealias SwiftType = [GatewayToolDto]
+
+    public static func write(_ value: [GatewayToolDto], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeGatewayToolDto.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [GatewayToolDto] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [GatewayToolDto]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeGatewayToolDto.read(from: &buf))
         }
         return seq
     }
@@ -2463,10 +2769,19 @@ private let initializationResult: InitializationResult = {
     if (uniffi_tamtri_core_checksum_method_tamtricore_fork_conversation() != 28321) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_tamtri_core_checksum_method_tamtricore_get_gateway_settings() != 50417) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tamtri_core_checksum_method_tamtricore_list_acp_agents() != 4958) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_tamtri_core_checksum_method_tamtricore_list_conversations() != 38828) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_tamtri_core_checksum_method_tamtricore_list_gateway_servers() != 49649) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tamtri_core_checksum_method_tamtricore_list_gateway_tools() != 7818) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_tamtri_core_checksum_method_tamtricore_list_roots() != 10237) {
@@ -2482,6 +2797,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_tamtri_core_checksum_method_tamtricore_log_artifact_navigation_blocked() != 955) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tamtri_core_checksum_method_tamtricore_prepare_for_app_quit() != 5436) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_tamtri_core_checksum_method_tamtricore_read_attachment_verified() != 60323) {
@@ -2518,6 +2836,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_tamtri_core_checksum_method_tamtricore_set_gateway_credential() != 36422) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tamtri_core_checksum_method_tamtricore_set_gateway_default_timeout() != 10448) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_tamtri_core_checksum_method_tamtricore_start_oauth_flow() != 16366) {

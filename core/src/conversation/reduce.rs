@@ -3,9 +3,7 @@ use serde_json::json;
 
 use crate::Result;
 use crate::conversation::{ContentBlock, Id, Message, Role};
-use crate::harness::{HarnessEvent, ToolContent, ToolStatus};
-
-use crate::harness::Diff;
+use crate::harness::{Diff, FileChange, HarnessEvent, ToolContent, ToolStatus};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct RecordedFileChange {
@@ -17,6 +15,7 @@ pub struct RecordedFileChange {
 pub struct ReducedTurn {
     pub message: Message,
     pub file_changes: Vec<RecordedFileChange>,
+    pub referenced_paths: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -26,6 +25,7 @@ pub struct TurnReducer {
     text_buffer: String,
     thought_buffer: String,
     file_changes: Vec<RecordedFileChange>,
+    referenced_paths: Vec<String>,
 }
 
 impl TurnReducer {
@@ -36,6 +36,7 @@ impl TurnReducer {
             text_buffer: String::new(),
             thought_buffer: String::new(),
             file_changes: Vec::new(),
+            referenced_paths: Vec::new(),
         }
     }
 
@@ -66,6 +67,9 @@ impl TurnReducer {
             } => {
                 self.flush_deltas();
                 if matches!(status, ToolStatus::Completed | ToolStatus::Failed) {
+                    for path in renderable_paths_from_tool_content(content) {
+                        self.push_referenced_path(&path);
+                    }
                     self.blocks.push(ContentBlock::ToolResult {
                         call_id: id.clone(),
                         output: tool_output(content, status),
@@ -77,6 +81,9 @@ impl TurnReducer {
                 diff,
                 ..
             } => {
+                if diff.change != FileChange::Deleted {
+                    self.push_referenced_path(&diff.path);
+                }
                 self.file_changes.push(RecordedFileChange {
                     tool_call_id: tool_call_id.clone(),
                     diff: diff.clone(),
@@ -152,6 +159,13 @@ impl TurnReducer {
                 created_at: Utc::now(),
             },
             file_changes: self.file_changes,
+            referenced_paths: self.referenced_paths,
+        }
+    }
+
+    fn push_referenced_path(&mut self, path: &str) {
+        if !self.referenced_paths.iter().any(|existing| existing == path) {
+            self.referenced_paths.push(path.to_string());
         }
     }
 
@@ -182,6 +196,43 @@ fn tool_output(content: &[ToolContent], status: &ToolStatus) -> serde_json::Valu
         "status": status,
         "content": content,
     })
+}
+
+fn renderable_paths_from_tool_content(content: &[ToolContent]) -> Vec<String> {
+    let mut paths = Vec::new();
+    for item in content {
+        match item {
+            ToolContent::Diff { diff } if diff.change != FileChange::Deleted => {
+                paths.push(diff.path.clone());
+            }
+            ToolContent::ResourceRef { uri } => {
+                if let Some(path) = workdir_path_from_resource_uri(uri) {
+                    paths.push(path);
+                }
+            }
+            _ => {}
+        }
+    }
+    paths
+}
+
+fn workdir_path_from_resource_uri(uri: &str) -> Option<String> {
+    let path = uri.strip_prefix("file://")?;
+    let path = path.strip_prefix("localhost").unwrap_or(path);
+    let path = path.trim_start_matches('/');
+    let parsed = std::path::Path::new(path);
+    if parsed.is_absolute() {
+        return None;
+    }
+    for component in parsed.components() {
+        if !matches!(component, std::path::Component::Normal(_)) {
+            return None;
+        }
+    }
+    if path.is_empty() {
+        return None;
+    }
+    Some(path.to_string())
 }
 
 #[cfg(test)]
@@ -271,6 +322,28 @@ mod tests {
                 diff: diff.clone(),
             }]
         );
+        assert_eq!(reduced.referenced_paths, vec!["report.html".to_string()]);
         assert!(reduced.message.content.is_empty());
+    }
+
+    #[test]
+    fn reducer_collects_renderable_paths_from_completed_tool_output() {
+        let mut reducer = TurnReducer::new("acp:test");
+        reducer
+            .apply(&HarnessEvent::ToolCallProgress {
+                id: "tool-1".into(),
+                status: ToolStatus::Completed,
+                content: vec![ToolContent::Diff {
+                    diff: Diff {
+                        path: "report.html".into(),
+                        change: FileChange::Created,
+                        old_text: None,
+                        new_text: Some("<h1>ok</h1>".into()),
+                    },
+                }],
+            })
+            .unwrap();
+        let reduced = reducer.finish();
+        assert_eq!(reduced.referenced_paths, vec!["report.html".to_string()]);
     }
 }

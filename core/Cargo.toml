@@ -33,6 +33,10 @@ name = "m7-task-mcp"
 path = "../fixtures/m7-task-mcp/src/main.rs"
 
 [[bin]]
+name = "m7-task-subscribe-mcp"
+path = "../fixtures/m7-task-subscribe-mcp/src/main.rs"
+
+[[bin]]
 name = "m7-app-mcp"
 path = "../fixtures/m7-app-mcp/src/main.rs"
 

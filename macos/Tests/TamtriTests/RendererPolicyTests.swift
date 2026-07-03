@@ -30,6 +30,21 @@ final class RendererPolicyTests: XCTestCase {
         XCTAssertTrue(WebNavigationPolicy.allows(URL(string: "https://cdn.example.com/app.js"), policy: policy))
     }
 
+    func testAppPolicyBlocksRedirectToUndeclaredOrigin() {
+        let policy = WebContentPolicy.app(
+            allowedOrigins: [WebOrigin(mcpOrigin: "https://cdn.example.com")],
+            appId: "demo",
+            serverId: "fixture",
+            templateRef: "ui://fixture/demo"
+        )
+        XCTAssertFalse(
+            WebNavigationPolicy.allows(URL(string: "https://evil.example/redirected"), policy: policy)
+        )
+        XCTAssertFalse(
+            WebNavigationPolicy.allows(URL(string: "https://cdn.evil.com/login"), policy: policy)
+        )
+    }
+
     func testAppTemplateDeclaredOriginLoads() {
         let html = appSandboxedHTML(
             html: "<!doctype html><html><head></head><body>App</body></html>",
@@ -55,5 +70,10 @@ final class RendererPolicyTests: XCTestCase {
         XCTAssertTrue(artifactIsImageMime("image/png"))
         XCTAssertTrue(artifactIsImageMime("image/webp"))
         XCTAssertFalse(artifactIsImageMime("image/svg+xml"))
+
+        XCTAssertEqual(artifactMimeLabel("application/pdf"), "PDF")
+        XCTAssertEqual(artifactMimeLabel("application/octet-stream"), "application/octet-stream")
+        XCTAssertEqual(artifactFileIcon("application/pdf"), "doc.fill")
+        XCTAssertEqual(artifactFileIcon(nil), "doc")
     }
 }

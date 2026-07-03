@@ -19,6 +19,7 @@ enum LiveEventGrouping {
         "elicitation_requested",
         "app_returned",
         "app_bridge_consent_requested",
+        "file_changed",
     ]
 
     private static func payloadString(from json: String, key: String) -> String? {

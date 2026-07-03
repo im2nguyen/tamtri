@@ -36,28 +36,35 @@ fn main() {
                     "serverInfo": {"name": "mock-mcp-server", "version": "0.1.0"}
                 }),
             ),
-            Some("tools/list") => response(
-                &message,
-                json!({
-                    "tools": [
-                        {
-                            "name": "echo",
-                            "description": "Echoes its arguments",
-                            "inputSchema": {"type": "object"}
-                        },
-                        {
-                            "name": "elicit",
-                            "description": "Elicits a name then echoes it",
-                            "inputSchema": {"type": "object"}
-                        },
-                        {
-                            "name": "elicit_url",
-                            "description": "Elicits via URL handoff then echoes the action",
-                            "inputSchema": {"type": "object"}
-                        }
-                    ]
-                }),
-            ),
+            Some("tools/list") => {
+                if should_hang_on_list() {
+                    loop {
+                        std::thread::sleep(std::time::Duration::from_secs(3600));
+                    }
+                }
+                response(
+                    &message,
+                    json!({
+                        "tools": [
+                            {
+                                "name": "echo",
+                                "description": "Echoes its arguments",
+                                "inputSchema": {"type": "object"}
+                            },
+                            {
+                                "name": "elicit",
+                                "description": "Elicits a name then echoes it",
+                                "inputSchema": {"type": "object"}
+                            },
+                            {
+                                "name": "elicit_url",
+                                "description": "Elicits via URL handoff then echoes the action",
+                                "inputSchema": {"type": "object"}
+                            }
+                        ]
+                    }),
+                )
+            }
             Some("tools/call") => {
                 let tool_name = message
                     .pointer("/params/name")
@@ -231,6 +238,16 @@ fn elicit_url_then_echo(stdout: &mut io::Stdout, input: &mut impl BufRead) -> Re
         "isError": false,
         "structuredContent": {"elicitation": action}
     }))
+}
+
+fn should_hang_on_list() -> bool {
+    let Some(marker) = std::env::var("MOCK_MCP_LIST_MARKER").ok() else {
+        return false;
+    };
+    if std::path::Path::new(&marker).exists() {
+        return false;
+    }
+    std::fs::write(&marker, "hung").is_ok()
 }
 
 fn response(request: &Value, result: Value) -> Value {
