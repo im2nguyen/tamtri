@@ -91,3 +91,27 @@ Downstream servers may call `elicitation/create` while a `tools/call` is pending
 On macOS, the shell stores OAuth bundles in Keychain (service `tamtri.gateway`, account = `token_ref`). On startup it loads those bundles into core's in-memory credential store. When core silently refreshes an expiring bundle during an HTTP tool call, it emits a `gateway_credential_updated` UI event; the shell responds by exporting the updated bundle from core and persisting it back to Keychain. Token values never appear in `config.json` or `events.jsonl`.
 
 The `tamtri-gateway-stdio` helper forwards stdio JSON-RPC frames to that endpoint for agents that require stdio MCP server refs. Development builds discover it via `TAMTRI_GATEWAY_STDIO_HELPER`, next to the current executable, or under `target/debug`; release packaging still needs to bundle it beside the signed app executable.
+
+## Apps, Tasks, and Roots (Milestone 7)
+
+### Apps
+
+Downstream MCP servers may declare `ui://` templates with `text/html;profile=mcp-app` MIME type and CSP `connectDomains`. The gateway indexes declared templates at `tools/list` and loads HTML on `AppReturned` events.
+
+- **Artifacts** stay no-network with `script-src 'none'` and no host bridge.
+- **Apps** use `WebContentPolicy.app` with declared origins only and a consent-gated JSON-RPC bridge (`tamtriAppBridge`). App-initiated tool calls route through the same audit path as harness tool calls.
+- Persisted `app_resource` blocks carry `server_id`, `template_ref`, `uri`, `state`, and optional `origin_tool_call_id`.
+
+### Tasks
+
+Long-running downstream work surfaces as `task_started`, `task_updated`, and `task_completed` gateway events. The core polls task status (RC subscribe is gated behind capability checks). Live task cards allow cancellation when supported; mid-task input reuses the M6 elicitation path. Final state persists as `task_ref` blocks; detailed updates land in `events.jsonl`.
+
+### Roots
+
+Per-conversation roots live in `meta.json` as portable refs (`id`, `name`, `uri`, `kind`, `scope`). macOS stores security-scoped bookmarks in Application Support (`~/Library/Application Support/tamtri/root-bookmarks/<conversation_id>/<root_id>.bookmark`); bookmark bytes never enter the vault. The gateway answers downstream `roots/list` and enforces path scope for tools that validate paths.
+
+### Capability gates
+
+`TamtriFeatureSupport::current()` enables Apps, Tasks, and Roots end-to-end. RC extension identifiers (`io.modelcontextprotocol/apps`, `/tasks`, `/roots`) parse without breaking 2025-11-25 servers. Settings shows per-server capability badges after **Probe capabilities**. **Sampling is always declined** — tamtri is not the model.
+
+See `docs/testing-m7.md` for a manual demo script and fixture wiring.

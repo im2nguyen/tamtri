@@ -226,7 +226,7 @@ async fn task_survives_background_resume() {
 #[tokio::test]
 async fn task_mid_input_uses_elicitation_path() {
     let command = env!("CARGO_BIN_EXE_m7-task-mcp");
-    let (tx, mut rx) = mpsc::unbounded_channel();
+    let (tx, _rx) = mpsc::unbounded_channel();
     let gateway = Arc::new(
         McpGateway::new(
             GatewayConfig {

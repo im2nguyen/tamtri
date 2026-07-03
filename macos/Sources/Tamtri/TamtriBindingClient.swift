@@ -122,7 +122,7 @@ actor TamtriBindingClient: CoreClient {
         )
     }
 
-    nonisolated     nonisolated func appBridgeBootstrapScript() -> String {
+    nonisolated func appBridgeBootstrapScript() -> String {
         core.appBridgeBootstrapScript()
     }
 

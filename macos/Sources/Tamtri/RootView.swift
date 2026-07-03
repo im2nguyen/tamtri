@@ -281,13 +281,6 @@ struct ConversationHeader: View {
                 }
                 .labelStyle(.iconOnly)
                 .help("Fork into another harness or model")
-                Button {
-                    store.showConversationRoots = true
-                } label: {
-                    Label("Roots", systemImage: "folder.badge.gearshape")
-                }
-                .labelStyle(.iconOnly)
-                .help("Manage conversation roots")
             }
             HStack {
                 Text(conversation.harnessId ?? "No harness")

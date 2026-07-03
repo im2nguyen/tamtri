@@ -138,8 +138,8 @@ fn main() {
 
 fn handle_tools_call(
     message: &Value,
-    stdout: &mut io::Stdout,
-    input: &mut impl BufRead,
+    _stdout: &mut io::Stdout,
+    _input: &mut impl BufRead,
 ) -> Option<Value> {
     let tool_name = message
         .pointer("/params/name")
