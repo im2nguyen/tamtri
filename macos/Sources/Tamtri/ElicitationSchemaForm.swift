@@ -165,9 +165,31 @@ enum ElicitationSchemaFormBuilder {
             case "boolean":
                 continue
             case "integer", "number":
-                let raw = values[field.id, default: ""]
+                let raw = values[field.id, default: ""].trimmingCharacters(in: .whitespacesAndNewlines)
                 if raw.isEmpty, field.required {
                     return nil
+                }
+                if !raw.isEmpty {
+                    if field.type == "integer" {
+                        guard let number = Int(raw) else {
+                            return ([:], "\(field.title) must be a whole number.")
+                        }
+                        if let minimum = field.minimum, Double(number) < minimum {
+                            return ([:], "\(field.title) must be at least \(formatBound(minimum)).")
+                        }
+                        if let maximum = field.maximum, Double(number) > maximum {
+                            return ([:], "\(field.title) must be at most \(formatBound(maximum)).")
+                        }
+                    } else if let number = Double(raw) {
+                        if let minimum = field.minimum, number < minimum {
+                            return ([:], "\(field.title) must be at least \(formatBound(minimum)).")
+                        }
+                        if let maximum = field.maximum, number > maximum {
+                            return ([:], "\(field.title) must be at most \(formatBound(maximum)).")
+                        }
+                    } else {
+                        return ([:], "\(field.title) must be a number.")
+                    }
                 }
             case "array":
                 let raw = values[field.id, default: ""]
@@ -228,6 +250,13 @@ enum ElicitationSchemaFormBuilder {
             }
         }
         return (payload, nil)
+    }
+
+    private static func formatBound(_ value: Double) -> String {
+        if value.rounded() == value {
+            return String(Int(value))
+        }
+        return String(value)
     }
 }
 

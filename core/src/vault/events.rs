@@ -47,6 +47,7 @@ pub enum EventKind {
     TaskStarted,
     TaskUpdated,
     TaskCompleted,
+    RootsListed,
     OAuthHandoffStarted,
     OAuthHandoffCompleted,
     OAuthRefreshFailed,

@@ -34,7 +34,7 @@ use crate::mcp::oauth::{
 use crate::mcp::url_handoff::validate_handoff_url;
 use crate::mcp::app_bridge::{
     execute_action, finish_execution, parse_app_bridge_rpc, shared_app_bridge_coordinator,
-    AppBridgeResolution, SharedAppBridgeCoordinator,
+    AppBridgeBeginResult, AppBridgeResolution, SharedAppBridgeCoordinator,
 };
 use crate::mcp::app::{app_bridge_bootstrap_script, app_sandbox_csp, AppTemplate};
 use crate::mcp::endpoint::{GatewayEndpoint, start_loopback_gateway};
@@ -1075,37 +1075,70 @@ impl TamtriCore {
             return Err(CoreError::NotFound(id));
         }
         let request = parse_app_bridge_rpc(request_json)?;
-        let (consent, _response_rx) = self.app_bridge.begin_request(
+        let gateway = self
+            .active_runs
+            .lock()
+            .map_err(|_| CoreError::Protocol("run registry lock poisoned".to_string()))?
+            .get(&id)
+            .map(|run| Arc::clone(&run.gateway))
+            .ok_or(CoreError::NotFound(id))?;
+        match self.app_bridge.begin_request(
             id,
             server_id,
             app_id,
             template_ref,
             &request,
-        )?;
-        self.vault.append_event(
-            id,
-            &Event::new(
-                EventKind::AppBridgeConsentRequested,
-                json!({
-                    "request_id": consent.request_id,
-                    "server_id": consent.server_id,
-                    "app_id": consent.app_id,
-                    "template_ref": consent.template_ref,
-                    "action": consent.action,
-                    "summary": consent.summary,
-                    "options": consent.options,
-                }),
-            ),
-        )?;
-        self.observer.on_event(UiEvent {
-            conversation_id: id.to_string(),
-            kind: "app_bridge_consent_requested".to_string(),
-            payload_json: serde_json::to_string(&consent).unwrap_or_else(|_| "{}".to_string()),
-        });
-        Ok(AppBridgeSubmissionDto {
-            request_id: consent.request_id,
-            needs_consent: true,
-        })
+        )? {
+            AppBridgeBeginResult::AlreadyGranted(pending) => {
+                let execution = self.runtime.block_on(execute_action(
+                    gateway.as_ref(),
+                    &pending.server_id,
+                    &pending.action,
+                ));
+                let response = finish_execution(pending, execution);
+                self.observer.on_event(UiEvent {
+                    conversation_id: id.to_string(),
+                    kind: "app_bridge_resolved".to_string(),
+                    payload_json: json!({
+                        "request_id": null,
+                        "response_json": response,
+                        "auto_granted": true,
+                    })
+                    .to_string(),
+                });
+                Ok(AppBridgeSubmissionDto {
+                    request_id: String::new(),
+                    needs_consent: false,
+                })
+            }
+            AppBridgeBeginResult::NeedsConsent(consent, _response_rx) => {
+                self.vault.append_event(
+                    id,
+                    &Event::new(
+                        EventKind::AppBridgeConsentRequested,
+                        json!({
+                            "request_id": consent.request_id,
+                            "server_id": consent.server_id,
+                            "app_id": consent.app_id,
+                            "template_ref": consent.template_ref,
+                            "action": consent.action,
+                            "summary": consent.summary,
+                            "options": consent.options,
+                        }),
+                    ),
+                )?;
+                self.observer.on_event(UiEvent {
+                    conversation_id: id.to_string(),
+                    kind: "app_bridge_consent_requested".to_string(),
+                    payload_json: serde_json::to_string(&consent)
+                        .unwrap_or_else(|_| "{}".to_string()),
+                });
+                Ok(AppBridgeSubmissionDto {
+                    request_id: consent.request_id,
+                    needs_consent: true,
+                })
+            }
+        }
     }
 
     pub fn respond_app_bridge_consent_inner(

@@ -121,6 +121,84 @@ fn acp_gateway_elicitation_writes_events_and_redacts_url_query() {
     assert_eq!(resolved["payload"]["action"], "accept");
 }
 
+#[test]
+fn prepare_for_app_quit_writes_elicitation_cancel_receipts() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let observer = Arc::new(RecordingObserver::default());
+    let core = TamtriCore::new(temp.path().to_string_lossy().into_owned(), observer.clone())
+        .expect("core");
+
+    let mock_mcp = env!("CARGO_BIN_EXE_mock-mcp-server").to_string();
+    tamtri_core::config::replace_gateway_servers(
+        temp.path(),
+        vec![gateway_mock_server(&mock_mcp)],
+    )
+    .expect("save config");
+
+    core.register_acp_agent(
+        "mock-acp".to_string(),
+        "Mock ACP".to_string(),
+        env!("CARGO_BIN_EXE_mock-acp-agent").to_string(),
+        Vec::new(),
+    )
+    .expect("agent");
+
+    let conversation = core
+        .create_conversation(
+            "Quit elicit".to_string(),
+            "mock-acp".to_string(),
+            "mock".to_string(),
+        )
+        .expect("conversation");
+
+    core.send_message(conversation.id.clone(), "go".to_string())
+        .expect("send");
+
+    let (request_id, events_path) = wait_for_elicitation_requested(&observer, temp.path());
+    wait_for_harness_spawned(&events_path);
+
+    core.prepare_for_app_quit_inner().expect("prepare for quit");
+    let _events = wait_for_elicitation_cancel_receipt(&events_path, &request_id);
+}
+
+fn wait_for_harness_spawned(events_path: &Path) {
+    let started = std::time::Instant::now();
+    loop {
+        if started.elapsed() > Duration::from_secs(5) {
+            panic!("timed out waiting for harness_spawned");
+        }
+        let text = fs::read_to_string(events_path).expect("read events.jsonl");
+        if text.contains("\"kind\":\"harness_spawned\"") {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    }
+}
+
+fn wait_for_elicitation_cancel_receipt(events_path: &Path, request_id: &str) -> Vec<Value> {
+    let started = std::time::Instant::now();
+    loop {
+        if started.elapsed() > Duration::from_secs(5) {
+            panic!("timed out waiting for elicitation_resolved cancel receipt");
+        }
+        let text = fs::read_to_string(events_path).expect("read events.jsonl");
+        let events: Vec<Value> = text
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .map(|line| serde_json::from_str(line).expect("event line"))
+            .collect();
+        if let Some(resolved) = events
+            .iter()
+            .find(|event| event["kind"] == "elicitation_resolved")
+        {
+            assert_eq!(resolved["payload"]["request_id"], request_id);
+            assert_eq!(resolved["payload"]["action"], "cancel");
+            return events;
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    }
+}
+
 fn wait_for_elicitation_requested(
     observer: &RecordingObserver,
     vault_root: &Path,

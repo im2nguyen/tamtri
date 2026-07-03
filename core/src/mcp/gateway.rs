@@ -188,6 +188,10 @@ pub enum GatewayEvent {
         state: crate::mcp::tasks::TaskState,
         result: Option<Value>,
     },
+    RootsListed {
+        server_id: String,
+        count: usize,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -852,7 +856,10 @@ impl McpGateway {
             service: Arc::clone(&self.elicitation),
         });
         let roots_handler = Arc::new(GatewayRootsHandler {
+            server_id: server.id.clone(),
             roots: Arc::clone(&self.roots),
+            events: self.events.clone(),
+            event_broadcast: self.event_broadcast.clone(),
         });
         match &server.transport {
             GatewayTransport::Stdio { command, args, env } => {
@@ -1119,13 +1126,25 @@ struct GatewayElicitationHandler {
 }
 
 struct GatewayRootsHandler {
+    server_id: String,
     roots: Arc<tokio::sync::RwLock<Vec<Root>>>,
+    events: Option<mpsc::UnboundedSender<GatewayEvent>>,
+    event_broadcast: broadcast::Sender<GatewayEvent>,
 }
 
 #[async_trait]
 impl RootsHandler for GatewayRootsHandler {
     async fn handle_list(&self) -> std::result::Result<Value, JsonRpcError> {
         let roots = self.roots.read().await;
+        let count = roots.len();
+        let event = GatewayEvent::RootsListed {
+            server_id: self.server_id.clone(),
+            count,
+        };
+        let _ = self.event_broadcast.send(event.clone());
+        if let Some(tx) = &self.events {
+            let _ = tx.send(event);
+        }
         Ok(roots_list_result(&roots))
     }
 }
