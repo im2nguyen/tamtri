@@ -1998,7 +1998,7 @@ struct NewConversationView: View {
             Text("New Conversation")
                 .font(.title2.bold())
             TextField("Title", text: $title)
-            TextField("Harness", text: $harnessId)
+            HarnessPicker(harnessId: $harnessId, agents: store.harnessAgents)
             TextField("Model", text: $modelId)
             HStack {
                 Spacer()
@@ -2014,6 +2014,30 @@ struct NewConversationView: View {
         }
         .padding()
         .frame(width: 360)
+        .task {
+            await store.refreshHarnessAgents()
+            if !store.harnessAgents.contains(where: { $0.id == harnessId }),
+               let first = store.harnessAgents.first {
+                harnessId = first.id
+            }
+        }
+    }
+}
+
+struct HarnessPicker: View {
+    @Binding var harnessId: String
+    let agents: [HarnessAgentRecord]
+
+    var body: some View {
+        if agents.isEmpty {
+            TextField("Harness", text: $harnessId)
+        } else {
+            Picker("Harness", selection: $harnessId) {
+                ForEach(agents) { agent in
+                    Text(agent.displayName).tag(agent.id)
+                }
+            }
+        }
     }
 }
 
@@ -2030,8 +2054,13 @@ struct ForkConversationView: View {
             if let conversation = store.selectedConversation {
                 Text(conversation.title)
                     .foregroundStyle(.secondary)
+                if let forkedFrom = conversation.forkedFrom {
+                    Text("Fork lineage: branched from \(forkedFrom)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             }
-            TextField("Harness", text: $harnessId)
+            HarnessPicker(harnessId: $harnessId, agents: store.harnessAgents)
             TextField("Model", text: $modelId)
             HStack {
                 Spacer()
@@ -2047,6 +2076,13 @@ struct ForkConversationView: View {
         }
         .padding()
         .frame(width: 360)
+        .task {
+            await store.refreshHarnessAgents()
+            if !store.harnessAgents.contains(where: { $0.id == harnessId }),
+               let first = store.harnessAgents.first {
+                harnessId = first.id
+            }
+        }
     }
 }
 
@@ -2057,6 +2093,7 @@ struct SettingsView: View {
     @State private var serverToEdit: GatewayServerRecord?
     @State private var serverToRemove: GatewayServerRecord?
     @State private var pendingRemoveServerId: String?
+    @State private var timeoutDraft = ""
 
     private var vaultConfigPath: String {
         FileManager.default.homeDirectoryForCurrentUser
@@ -2087,6 +2124,32 @@ struct SettingsView: View {
 
             Text("Tamtri gateway tools")
                 .font(.headline)
+
+            HStack {
+                Text("Default call timeout (seconds)")
+                TextField("300", text: $timeoutDraft)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 80)
+                Button("Save") {
+                    if let seconds = UInt64(timeoutDraft.trimmingCharacters(in: .whitespacesAndNewlines)) {
+                        store.saveGatewayDefaultTimeout(seconds)
+                    }
+                }
+            }
+            .font(.caption)
+
+            if store.gatewayTools.isEmpty {
+                Text("No gateway tools loaded. Add servers and tap Refresh.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else {
+                VStack(alignment: .leading, spacing: 4) {
+                    ForEach(store.gatewayTools) { tool in
+                        Text("\(tool.exposedName) ← \(tool.serverId)/\(tool.originalName)")
+                            .font(.caption.monospaced())
+                    }
+                }
+            }
 
             Text("Servers are stored in \(vaultConfigPath). Edits here and in an external editor both update the same file; use Refresh after external changes.")
                 .font(.caption)
@@ -2139,8 +2202,9 @@ struct SettingsView: View {
                 .font(.caption)
         }
         .padding()
-        .frame(width: 560, height: 480)
+        .frame(width: 560, height: 560)
         .onAppear {
+            timeoutDraft = String(store.defaultCallTimeoutSecs)
             Task { await store.refreshGatewayServers() }
         }
         .sheet(isPresented: $showAddServer) {
@@ -2329,6 +2393,20 @@ struct GatewayServerRow: View {
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
+            HStack(spacing: 8) {
+                connectionStatusIcon(for: server.connectionStatus)
+                Text("Connection: \(server.connectionStatus.replacingOccurrences(of: "_", with: " "))")
+                if let timeout = server.timeoutSecs {
+                    Text("Timeout: \(timeout)s")
+                }
+            }
+            .font(.caption)
+            if !server.lastError.isEmpty {
+                Text(server.lastError)
+                    .font(.caption2)
+                    .foregroundStyle(.red)
+                    .lineLimit(2)
+            }
             GatewayCapabilityBadges(server: server)
             if server.credentialRefs.isEmpty && server.oauthTokenRef.isEmpty {
                 Text("No credentials required")
@@ -2377,6 +2455,20 @@ struct GatewayServerRow: View {
             get: { credentialValues[credentialRef, default: ""] },
             set: { credentialValues[credentialRef] = $0 }
         )
+    }
+
+    @ViewBuilder
+    private func connectionStatusIcon(for status: String) -> some View {
+        switch status {
+        case "connected":
+            Image(systemName: "circle.fill").foregroundStyle(.green)
+        case "error":
+            Image(systemName: "exclamationmark.circle.fill").foregroundStyle(.red)
+        case "disabled":
+            Image(systemName: "minus.circle").foregroundStyle(.secondary)
+        default:
+            Image(systemName: "questionmark.circle").foregroundStyle(.secondary)
+        }
     }
 
     @ViewBuilder

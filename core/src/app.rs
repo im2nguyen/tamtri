@@ -752,6 +752,7 @@ impl TamtriCore {
             .clone()
             .unwrap_or_else(|| "default".to_string());
         let adapter = self.adapter(&harness_id)?;
+        let harness_display_name = adapter.display_name().to_string();
         let conversation_dir = self.vault.conversation_folder(id)?;
         let workdir_path = self
             .vault
@@ -808,6 +809,8 @@ impl TamtriCore {
         let gateway_blocks = Arc::new(Mutex::new(Vec::<ContentBlock>::new()));
         let gateway_for_run = Arc::clone(&gateway);
         let runtime_roots = Arc::clone(&self.runtime_roots);
+        let harness_id_for_run = harness_id.clone();
+        let harness_display_for_run = harness_display_name.clone();
         self.runtime.spawn(async move {
             let gateway_vault = Arc::clone(&vault);
             let gateway_observer = Arc::clone(&observer);
@@ -826,6 +829,16 @@ impl TamtriCore {
             let run = adapter.run(ctx, TurnInput { user_message }).await;
             match run {
                 Ok(mut run) => {
+                    let _ = vault.append_event(
+                        id,
+                        &Event::new(
+                            EventKind::HarnessSpawned,
+                            json!({
+                                "harness_id": harness_id_for_run,
+                                "display_name": harness_display_for_run,
+                            }),
+                        ),
+                    );
                     if let Ok(mut runs) = active_runs.lock() {
                         runs.insert(
                             id,
@@ -836,7 +849,7 @@ impl TamtriCore {
                             },
                         );
                     }
-                    let mut reducer = TurnReducer::new(harness_id.clone());
+                    let mut reducer = TurnReducer::new(harness_id_for_run.clone());
                     while let Some(event) = run.events.recv().await {
                         emit(&observer, id, &event);
                         let _ = append_event_for_harness_event(&vault, id, &event);
@@ -926,6 +939,13 @@ impl TamtriCore {
                             break;
                         }
                     }
+                    let _ = vault.append_event(
+                        id,
+                        &Event::new(
+                            EventKind::HarnessExited,
+                            json!({ "harness_id": harness_id_for_run }),
+                        ),
+                    );
                     if let Ok(mut runs) = active_runs.lock() {
                         runs.remove(&id);
                     }

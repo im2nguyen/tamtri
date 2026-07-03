@@ -20,6 +20,9 @@ final class AppStore: ObservableObject {
     @Published var showSettings = false
     @Published var showForkConversation = false
     @Published var gatewayServers: [GatewayServerRecord] = []
+    @Published var gatewayTools: [GatewayToolRecord] = []
+    @Published var defaultCallTimeoutSecs: UInt64 = 300
+    @Published var harnessAgents: [HarnessAgentRecord] = []
     @Published var errorMessage: String?
     @Published var isLoadingConversation = false
     @Published var bridgeDelivery: BridgeDelivery?
@@ -586,6 +589,26 @@ final class AppStore: ObservableObject {
         Task {
             do {
                 gatewayServers = try await core.refreshGatewayCapabilities()
+                gatewayTools = try await core.listGatewayTools()
+            } catch {
+                errorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    func refreshHarnessAgents() async {
+        do {
+            harnessAgents = try await core.listAcpAgents()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    func saveGatewayDefaultTimeout(_ seconds: UInt64) {
+        Task {
+            do {
+                try await core.setGatewayDefaultTimeout(seconds)
+                defaultCallTimeoutSecs = seconds
             } catch {
                 errorMessage = error.localizedDescription
             }
@@ -595,6 +618,8 @@ final class AppStore: ObservableObject {
     private func reloadGatewayServers() async {
         do {
             gatewayServers = try await core.listGatewayServers()
+            gatewayTools = try await core.listGatewayTools()
+            defaultCallTimeoutSecs = try await core.getGatewaySettings()
             for server in gatewayServers {
                 for credentialRef in server.credentialRefs {
                     if let stored = KeychainCredentialStore.load(for: credentialRef) {

@@ -33,6 +33,12 @@ actor TamtriBindingClient: CoreClient {
         try record(from: core.forkConversation(id: id, harnessId: harnessId, modelId: modelId))
     }
 
+    func listAcpAgents() async throws -> [HarnessAgentRecord] {
+        try core.listAcpAgents().map {
+            HarnessAgentRecord(id: $0.id, displayName: $0.displayName)
+        }
+    }
+
     func sendMessage(conversationId: String, text: String) async throws {
         try core.sendMessage(conversationId: conversationId, text: text)
     }
@@ -185,6 +191,24 @@ actor TamtriBindingClient: CoreClient {
         try core.refreshGatewayCapabilities().map(gatewayServerRecord(from:))
     }
 
+    func listGatewayTools() async throws -> [GatewayToolRecord] {
+        try core.listGatewayTools().map {
+            GatewayToolRecord(
+                exposedName: $0.exposedName,
+                serverId: $0.serverId,
+                originalName: $0.originalName
+            )
+        }
+    }
+
+    func getGatewaySettings() async throws -> UInt64 {
+        try core.getGatewaySettings().defaultCallTimeoutSecs
+    }
+
+    func setGatewayDefaultTimeout(_ seconds: UInt64) async throws {
+        try core.setGatewayDefaultTimeout(defaultCallTimeoutSecs: seconds)
+    }
+
     func saveGatewayServers(_ servers: [GatewayServerRecord]) async throws {
         try core.saveGatewayServers(servers: servers.map(gatewayServerDto(from:)))
     }
@@ -263,6 +287,7 @@ private func record(from dto: ConversationDto) -> ConversationRecord {
         title: dto.title,
         harnessId: dto.activeHarnessId,
         modelId: dto.modelId,
+        forkedFrom: dto.forkedFrom,
         transcriptJSON: dto.transcriptJson
     )
 }

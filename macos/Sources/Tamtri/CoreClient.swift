@@ -20,6 +20,7 @@ struct ConversationRecord: Equatable {
     let title: String
     let harnessId: String?
     let modelId: String?
+    let forkedFrom: String?
     let transcriptJSON: String
     let parsedMessages: [ParsedTranscriptMessage]
 
@@ -28,12 +29,14 @@ struct ConversationRecord: Equatable {
         title: String,
         harnessId: String?,
         modelId: String?,
+        forkedFrom: String? = nil,
         transcriptJSON: String
     ) {
         self.id = id
         self.title = title
         self.harnessId = harnessId
         self.modelId = modelId
+        self.forkedFrom = forkedFrom
         self.transcriptJSON = transcriptJSON
         self.parsedMessages = TranscriptParsing.parseTranscript(transcriptJSON)
     }
@@ -105,6 +108,18 @@ struct AttachmentFilePreview: Equatable {
     let error: String?
 }
 
+struct HarnessAgentRecord: Identifiable, Equatable {
+    let id: String
+    let displayName: String
+}
+
+struct GatewayToolRecord: Identifiable, Equatable {
+    var id: String { exposedName }
+    let exposedName: String
+    let serverId: String
+    let originalName: String
+}
+
 protocol CoreClient: Sendable {
     var events: AsyncStream<CoreEvent> { get }
 
@@ -112,6 +127,7 @@ protocol CoreClient: Sendable {
     func loadConversation(id: String) async throws -> ConversationRecord
     func createConversation(title: String, harnessId: String, modelId: String) async throws -> ConversationRecord
     func forkConversation(id: String, harnessId: String, modelId: String) async throws -> ConversationRecord
+    func listAcpAgents() async throws -> [HarnessAgentRecord]
     func sendMessage(conversationId: String, text: String) async throws
     func syncRuntimeRoots(conversationId: String, roots: [RootDto]) async throws
     func copyFileToWorkdir(conversationId: String, sourcePath: String) async throws -> String
@@ -137,6 +153,9 @@ protocol CoreClient: Sendable {
     func removeRoot(conversationId: String, rootId: String) async throws
     func listGatewayServers() async throws -> [GatewayServerRecord]
     func refreshGatewayCapabilities() async throws -> [GatewayServerRecord]
+    func listGatewayTools() async throws -> [GatewayToolRecord]
+    func getGatewaySettings() async throws -> UInt64
+    func setGatewayDefaultTimeout(_ seconds: UInt64) async throws
     func saveGatewayServers(_ servers: [GatewayServerRecord]) async throws
     func setGatewayCredential(credentialRef: String, value: String) async throws
     func exportGatewayCredential(credentialRef: String) async throws -> String?
@@ -202,6 +221,10 @@ actor MockCoreClient: CoreClient {
         )
         conversations.insert(record, at: 0)
         return record
+    }
+
+    func listAcpAgents() async throws -> [HarnessAgentRecord] {
+        [HarnessAgentRecord(id: "mock-acp", displayName: "Mock ACP")]
     }
 
     func sendMessage(conversationId: String, text: String) async throws {
@@ -319,6 +342,14 @@ actor MockCoreClient: CoreClient {
     func refreshGatewayCapabilities() async throws -> [GatewayServerRecord] {
         try await listGatewayServers()
     }
+
+    func listGatewayTools() async throws -> [GatewayToolRecord] {
+        [GatewayToolRecord(exposedName: "mock__echo", serverId: "mock", originalName: "echo")]
+    }
+
+    func getGatewaySettings() async throws -> UInt64 { 300 }
+
+    func setGatewayDefaultTimeout(_ seconds: UInt64) async throws {}
 
     func saveGatewayServers(_ servers: [GatewayServerRecord]) async throws {}
 
