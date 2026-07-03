@@ -7,6 +7,9 @@ final class AppStore: ObservableObject {
     @Published var liveEvents: [CoreEvent] = []
     @Published var composerText = ""
     @Published var showNewConversation = false
+    @Published var showSettings = false
+    @Published var showForkConversation = false
+    @Published var gatewayServers: [GatewayServerRecord] = []
     @Published var errorMessage: String?
 
     private let core: CoreClient
@@ -54,6 +57,18 @@ final class AppStore: ObservableObject {
         }
     }
 
+    func forkSelectedConversation(harnessId: String, modelId: String) {
+        guard let conversation = selectedConversation else { return }
+        Task {
+            do {
+                selectedConversation = try await core.forkConversation(id: conversation.id, harnessId: harnessId, modelId: modelId)
+                await refresh()
+            } catch {
+                errorMessage = error.localizedDescription
+            }
+        }
+    }
+
     func send() {
         guard let conversation = selectedConversation else { return }
         let text = composerText.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -78,5 +93,25 @@ final class AppStore: ObservableObject {
             }
         }
     }
-}
 
+    func refreshGatewayServers() {
+        Task {
+            do {
+                gatewayServers = try await core.listGatewayServers()
+            } catch {
+                errorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    func setGatewayCredential(credentialRef: String, value: String) {
+        Task {
+            do {
+                try await core.setGatewayCredential(credentialRef: credentialRef, value: value)
+                refreshGatewayServers()
+            } catch {
+                errorMessage = error.localizedDescription
+            }
+        }
+    }
+}

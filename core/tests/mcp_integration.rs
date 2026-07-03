@@ -13,7 +13,7 @@ async fn integration_echo_tool() {
     assert_eq!(tools[0].name, "echo");
 
     let result = client
-        .call_tool("echo", json!({"message": "hello"}))
+        .call_tool("echo", json!({"message": "hello"}), None)
         .await
         .unwrap();
     assert_eq!(result.is_error, Some(false));
@@ -21,6 +21,19 @@ async fn integration_echo_tool() {
         result.structured_content.unwrap()["echo"]["message"],
         "hello"
     );
+
+    let resources = client.list_resources().await.unwrap();
+    assert_eq!(resources[0].uri, "mock://report");
+    let resource = client.read_resource("mock://report").await.unwrap();
+    assert_eq!(resource.contents[0]["text"], "mock resource");
+
+    let prompts = client.list_prompts().await.unwrap();
+    assert_eq!(prompts[0].name, "summarize");
+    let prompt = client
+        .get_prompt("summarize", json!({"topic": "tamtri"}))
+        .await
+        .unwrap();
+    assert_eq!(prompt.messages[0]["role"], "user");
 
     client.close().await.unwrap();
 }

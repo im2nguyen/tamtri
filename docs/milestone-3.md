@@ -27,8 +27,7 @@ Current repo status:
 - The Swift shell compiles against generated UniFFI bindings and falls back to `MockCoreClient` only if the native core cannot initialize.
 - The UniFFI export source is the Rust facade in `core/src/app.rs`; `core/src/ffi/tamtri.udl` is a readable contract mirror. The Rust crate builds as `rlib`, `staticlib`, and `cdylib`.
 - Generated Swift bindings live under `macos/Sources/Tamtri/Generated`, with the generated C shim exposed through `macos/Sources/tamtri_coreFFI/module.modulemap`.
-
-Remaining gap for literal "real app with real agent" completion: manually verify an installed real ACP agent. The hermetic mock ACP fixture covers the app/core path; a real-agent compatibility matrix belongs with the M4/M8 health-screen work.
+- A real-agent smoke test has been manually verified against Hermes ACP (`/Users/dos/.local/bin/hermes acp`) with `hermes_acp_smoke`. A broader real-agent compatibility matrix belongs with the M4/M8 health-screen work.
 
 ## Task 1: Shared RPC layer (`rpc/`)
 

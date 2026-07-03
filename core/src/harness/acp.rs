@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::sync::{mpsc, oneshot};
 
-use crate::conversation::{ContentBlock, Message};
+use crate::conversation::{ContentBlock, McpServerRef, Message};
 use crate::harness::{
     ContextSeed, ConversationContext, Diff, FileChange, HarnessAdapter, HarnessCapabilities,
     HarnessEvent, HarnessRun, ModelInfo, PermissionDetail, PermissionOption, RunCommand,
@@ -81,7 +81,7 @@ impl HarnessAdapter for AcpAdapter {
                 "session/new",
                 Some(json!({
                     "cwd": cwd,
-                    "mcpServers": []
+                    "mcpServers": acp_mcp_servers(&ctx.mcp_servers)
                 })),
                 ACP_REQUEST_TIMEOUT,
             )
@@ -504,6 +504,40 @@ fn absolute_cwd(path: &std::path::Path) -> Result<String> {
     Ok(absolute.to_string_lossy().to_string())
 }
 
+fn acp_mcp_servers(servers: &[McpServerRef]) -> Vec<serde_json::Value> {
+    servers
+        .iter()
+        .map(|server| match server.transport.as_str() {
+            "stdio" => {
+                let (command, args) = split_stdio_endpoint(&server.endpoint);
+                json!({
+                    "type": "stdio",
+                    "name": server.name,
+                    "command": command,
+                    "args": args
+                })
+            }
+            "http" | "streamable_http" => json!({
+                "type": "http",
+                "name": server.name,
+                "url": server.endpoint
+            }),
+            other => json!({
+                "type": other,
+                "name": server.name,
+                "url": server.endpoint
+            }),
+        })
+        .collect()
+}
+
+fn split_stdio_endpoint(endpoint: &str) -> (String, Vec<String>) {
+    let mut parts = endpoint.split_whitespace();
+    let command = parts.next().unwrap_or_default().to_string();
+    let args = parts.map(str::to_string).collect();
+    (command, args)
+}
+
 fn session_id_from(value: &Value) -> Result<String> {
     let session_id = string_field(value, &["sessionId", "session_id"]);
     if session_id.is_empty() {
@@ -518,5 +552,38 @@ fn request_id_to_string(id: &RequestId) -> String {
     match id {
         RequestId::Number(id) => id.to_string(),
         RequestId::String(id) => id.clone(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn acp_mcp_servers_serializes_gateway_refs() {
+        let servers = vec![McpServerRef {
+            id: "tamtri-gateway".to_string(),
+            name: "Tamtri Gateway".to_string(),
+            transport: "http".to_string(),
+            endpoint: "http://127.0.0.1:8765/mcp".to_string(),
+        }];
+        let value = acp_mcp_servers(&servers);
+        assert_eq!(value[0]["name"], "Tamtri Gateway");
+        assert_eq!(value[0]["type"], "http");
+        assert_eq!(value[0]["url"], "http://127.0.0.1:8765/mcp");
+    }
+
+    #[test]
+    fn acp_mcp_servers_serializes_stdio_helper_args() {
+        let servers = vec![McpServerRef {
+            id: "tamtri-gateway".to_string(),
+            name: "Tamtri Gateway".to_string(),
+            transport: "stdio".to_string(),
+            endpoint: "/tmp/tamtri-gateway-stdio http://127.0.0.1:1234/mcp".to_string(),
+        }];
+        let value = acp_mcp_servers(&servers);
+        assert_eq!(value[0]["type"], "stdio");
+        assert_eq!(value[0]["command"], "/tmp/tamtri-gateway-stdio");
+        assert_eq!(value[0]["args"][0], "http://127.0.0.1:1234/mcp");
     }
 }

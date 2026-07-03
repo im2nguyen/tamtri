@@ -7,12 +7,17 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tokio::runtime::{Builder, Runtime};
 
+use crate::config::load_app_config;
 use crate::conversation::reduce::TurnReducer;
-use crate::conversation::{ContentBlock, Conversation, Id, Message, Role, WorkingDir};
+use crate::conversation::{
+    ContentBlock, Conversation, Id, McpServerRef, Message, Role, WorkingDir,
+};
 use crate::harness::acp::{AcpAdapter, AgentLaunchSpec};
 use crate::harness::{
     ContextSeed, ConversationContext, HarnessAdapter, HarnessEvent, RunControl, TurnInput,
 };
+use crate::mcp::endpoint::{GatewayEndpoint, start_loopback_gateway};
+use crate::mcp::gateway::{GatewayEvent, McpGateway, MemoryCredentials};
 use crate::vault::events::{Event, EventKind};
 use crate::vault::fs::FilesystemVault;
 use crate::vault::{ConversationSummary, ConversationVault};
@@ -46,6 +51,17 @@ pub struct ConversationDto {
     pub messages_json: Vec<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, uniffi::Record)]
+pub struct GatewayServerDto {
+    pub id: String,
+    pub display_name: String,
+    pub enabled: bool,
+    pub scope: String,
+    pub transport: String,
+    pub credential_refs: Vec<String>,
+    pub missing_credential_refs: Vec<String>,
+}
+
 type FfiResult<T> = std::result::Result<T, TamtriError>;
 
 #[derive(Debug, thiserror::Error, uniffi::Error)]
@@ -67,6 +83,7 @@ pub struct TamtriCore {
     runtime: Runtime,
     adapters: Arc<Mutex<HashMap<String, Arc<dyn HarnessAdapter>>>>,
     active_runs: Arc<Mutex<HashMap<Id, RunControl>>>,
+    credentials: Arc<MemoryCredentials>,
     observer: Arc<dyn ConversationObserver>,
 }
 
@@ -86,6 +103,7 @@ impl TamtriCore {
             runtime,
             adapters: Arc::new(Mutex::new(HashMap::new())),
             active_runs: Arc::new(Mutex::new(HashMap::new())),
+            credentials: Arc::new(MemoryCredentials::default()),
             observer,
         })
     }
@@ -174,6 +192,14 @@ impl TamtriCore {
     pub fn cancel_run(&self, conversation_id: String) -> FfiResult<()> {
         self.cancel_run_inner(&conversation_id).map_err(ffi_err)
     }
+
+    pub fn list_gateway_servers(&self) -> FfiResult<Vec<GatewayServerDto>> {
+        self.list_gateway_servers_inner().map_err(ffi_err)
+    }
+
+    pub fn set_gateway_credential(&self, credential_ref: String, value: String) -> FfiResult<()> {
+        self.credentials.set(credential_ref, value).map_err(ffi_err)
+    }
 }
 
 impl TamtriCore {
@@ -230,6 +256,16 @@ impl TamtriCore {
             .clone()
             .unwrap_or_else(|| "default".to_string());
         let adapter = self.adapter(&harness_id)?;
+        let app_config = load_app_config(self.vault.root())?;
+        let (gateway_event_tx, gateway_event_rx) = tokio::sync::mpsc::unbounded_channel();
+        let gateway = Arc::new(McpGateway::new(
+            app_config.gateway,
+            self.credentials.clone(),
+            Some(gateway_event_tx),
+        )?);
+        let gateway_endpoint = self
+            .runtime
+            .block_on(start_loopback_gateway(Arc::clone(&gateway)))?;
         let user_message = Message {
             id: Id::now_v7(),
             role: Role::User,
@@ -251,7 +287,7 @@ impl TamtriCore {
                 .conversation_workdir(id)?
                 .unwrap_or_else(|| self.vault.root().join("conversations")),
             roots: conversation.roots.clone(),
-            mcp_servers: conversation.mcp_servers.clone(),
+            mcp_servers: vec![gateway_mcp_ref(&gateway_endpoint)],
             model_id,
         };
 
@@ -264,6 +300,15 @@ impl TamtriCore {
         let active_runs = Arc::clone(&self.active_runs);
         let observer = Arc::clone(&self.observer);
         self.runtime.spawn(async move {
+            let gateway_vault = Arc::clone(&vault);
+            let gateway_observer = Arc::clone(&observer);
+            let mut gateway_event_rx = gateway_event_rx;
+            let gateway_event_task = tokio::spawn(async move {
+                while let Some(event) = gateway_event_rx.recv().await {
+                    let _ = append_event_for_gateway_event(&gateway_vault, id, &event);
+                    observer_emit_gateway(&gateway_observer, id, &event);
+                }
+            });
             let run = adapter.run(ctx, TurnInput { user_message }).await;
             match run {
                 Ok(mut run) => {
@@ -305,6 +350,8 @@ impl TamtriCore {
                     });
                 }
             }
+            gateway_endpoint.shutdown().await;
+            gateway_event_task.abort();
         });
         Ok(())
     }
@@ -337,6 +384,47 @@ impl TamtriCore {
             .cloned()
             .ok_or(CoreError::NotFound(id))?;
         self.runtime.block_on(control.cancel())
+    }
+
+    pub fn list_gateway_servers_inner(&self) -> Result<Vec<GatewayServerDto>> {
+        let config = load_app_config(self.vault.root())?;
+        config
+            .gateway
+            .servers
+            .into_iter()
+            .map(|server| {
+                let credential_refs = server
+                    .credentials
+                    .iter()
+                    .map(|credential| credential.credential_ref.clone())
+                    .collect::<Vec<_>>();
+                let missing_credential_refs = credential_refs
+                    .iter()
+                    .filter_map(
+                        |credential_ref| match self.credentials.contains(credential_ref) {
+                            Ok(true) => None,
+                            Ok(false) | Err(_) => Some(credential_ref.clone()),
+                        },
+                    )
+                    .collect::<Vec<_>>();
+                Ok(GatewayServerDto {
+                    id: server.id,
+                    display_name: server.display_name,
+                    enabled: server.enabled,
+                    scope: serde_json::to_string(&server.scope)?
+                        .trim_matches('"')
+                        .to_string(),
+                    transport: match server.transport {
+                        crate::config::GatewayTransport::Stdio { .. } => "stdio".to_string(),
+                        crate::config::GatewayTransport::StreamableHttp { .. } => {
+                            "streamable_http".to_string()
+                        }
+                    },
+                    credential_refs,
+                    missing_credential_refs,
+                })
+            })
+            .collect()
     }
 
     fn adapter(&self, harness_id: &str) -> Result<Arc<dyn HarnessAdapter>> {
@@ -400,6 +488,102 @@ fn append_event_for_harness_event(
     vault.append_event(id, &Event::new(kind, payload))
 }
 
+fn append_event_for_gateway_event(
+    vault: &FilesystemVault,
+    id: Id,
+    event: &GatewayEvent,
+) -> Result<()> {
+    let (kind, payload) = match event {
+        GatewayEvent::ServerConnected { server_id } => (
+            EventKind::GatewayServerConnected,
+            json!({ "server_id": server_id }),
+        ),
+        GatewayEvent::ToolRouted {
+            server_id,
+            exposed_name,
+            original_name,
+        } => (
+            EventKind::GatewayToolRouted,
+            json!({
+                "server_id": server_id,
+                "exposed_name": exposed_name,
+                "original_name": original_name
+            }),
+        ),
+        GatewayEvent::CredentialInjected {
+            server_id,
+            credential_ref,
+            target_kind,
+        } => (
+            EventKind::GatewayCredentialInjected,
+            json!({
+                "server_id": server_id,
+                "credential_ref": credential_ref,
+                "target_kind": target_kind
+            }),
+        ),
+        GatewayEvent::Progress { server_id, params } => (
+            EventKind::GatewayProgress,
+            json!({ "server_id": server_id, "params": sanitize_gateway_params(params) }),
+        ),
+        GatewayEvent::Log { server_id, params } => (
+            EventKind::GatewayLog,
+            json!({ "server_id": server_id, "params": sanitize_gateway_params(params) }),
+        ),
+        GatewayEvent::Cancellation { server_id, params } => (
+            EventKind::GatewayCancellation,
+            json!({ "server_id": server_id, "params": sanitize_gateway_params(params) }),
+        ),
+        GatewayEvent::DownstreamError { server_id, message } => (
+            EventKind::GatewayDownstreamError,
+            json!({ "server_id": server_id, "message": message }),
+        ),
+    };
+    vault.append_event(id, &Event::new(kind, payload))
+}
+
+fn sanitize_gateway_params(value: &serde_json::Value) -> serde_json::Value {
+    match value {
+        serde_json::Value::Object(map) => {
+            let mut clean = serde_json::Map::new();
+            for (key, value) in map {
+                let normalized = key.to_ascii_lowercase();
+                if normalized == "progresstoken" || normalized == "progress_token" {
+                    clean.insert("progress_ref".to_string(), sanitize_gateway_params(value));
+                } else if normalized.contains("secret")
+                    || normalized.contains("token")
+                    || normalized.contains("password")
+                    || normalized.contains("api_key")
+                {
+                    clean.insert(
+                        "redacted_field".to_string(),
+                        serde_json::Value::String("[redacted]".to_string()),
+                    );
+                } else {
+                    clean.insert(key.clone(), sanitize_gateway_params(value));
+                }
+            }
+            serde_json::Value::Object(clean)
+        }
+        serde_json::Value::Array(items) => {
+            serde_json::Value::Array(items.iter().map(sanitize_gateway_params).collect())
+        }
+        _ => value.clone(),
+    }
+}
+
+fn observer_emit_gateway(
+    observer: &Arc<dyn ConversationObserver>,
+    conversation_id: Id,
+    event: &GatewayEvent,
+) {
+    observer.on_event(UiEvent {
+        conversation_id: conversation_id.to_string(),
+        kind: gateway_event_kind(event).to_string(),
+        payload_json: serde_json::to_string(event).unwrap_or_else(|_| "{}".to_string()),
+    });
+}
+
 fn event_kind(event: &HarnessEvent) -> &'static str {
     match event {
         HarnessEvent::TextDelta { .. } => "text_delta",
@@ -415,6 +599,52 @@ fn event_kind(event: &HarnessEvent) -> &'static str {
         HarnessEvent::Error { .. } => "error",
         HarnessEvent::TurnEnded { .. } => "turn_ended",
     }
+}
+
+fn gateway_event_kind(event: &GatewayEvent) -> &'static str {
+    match event {
+        GatewayEvent::ServerConnected { .. } => "gateway_server_connected",
+        GatewayEvent::ToolRouted { .. } => "gateway_tool_routed",
+        GatewayEvent::CredentialInjected { .. } => "gateway_credential_injected",
+        GatewayEvent::Progress { .. } => "gateway_progress",
+        GatewayEvent::Log { .. } => "gateway_log",
+        GatewayEvent::Cancellation { .. } => "gateway_cancellation",
+        GatewayEvent::DownstreamError { .. } => "gateway_downstream_error",
+    }
+}
+
+fn gateway_mcp_ref(endpoint: &GatewayEndpoint) -> McpServerRef {
+    match gateway_stdio_helper_path() {
+        Some(helper) => endpoint.stdio_mcp_ref(helper),
+        None => endpoint.mcp_ref(),
+    }
+}
+
+fn gateway_stdio_helper_path() -> Option<String> {
+    if let Ok(path) = std::env::var("TAMTRI_GATEWAY_STDIO_HELPER")
+        && std::path::Path::new(&path).is_file()
+    {
+        return Some(path);
+    }
+    let exe = std::env::current_exe().ok()?;
+    let exe_dir = exe.parent()?;
+    let binary_name = if cfg!(windows) {
+        "tamtri-gateway-stdio.exe"
+    } else {
+        "tamtri-gateway-stdio"
+    };
+    let candidates = [
+        exe_dir.join(binary_name),
+        exe_dir.join("..").join(binary_name),
+        std::env::current_dir()
+            .ok()?
+            .join("target/debug")
+            .join(binary_name),
+    ];
+    candidates
+        .into_iter()
+        .find(|path| path.is_file())
+        .map(|path| path.to_string_lossy().to_string())
 }
 
 fn parse_id(id: &str) -> Result<Id> {

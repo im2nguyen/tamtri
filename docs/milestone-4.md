@@ -17,6 +17,25 @@ Two boundaries shape the work. First, the gateway owns the capability plane. Ric
 - Hermetic tests cover the gateway, registry, credential redaction, HTTP transport framing, and concurrent MCP calls. `cargo test` and `cargo clippy` are clean.
 - `/docs/mcp-client.md`, `/docs/events-format.md`, and `/docs/vault-format.md` are updated for the new gateway, registry, and transport behavior.
 
+## Implementation checkpoints and gaps
+
+Current repo status:
+
+- `McpClient` now uses the shared `rpc::dispatch::RpcConnection` internally while preserving the public `&self` API shape.
+- The MCP client supports tools, resources, prompts, pagination, stdio, and streamable HTTP. HTTP JSON and SSE behavior is covered by a local loopback fixture.
+- A vault-level `config.json` registry exists in `core/src/config.rs` with atomic writes, duplicate-id validation, enabled-server filtering, and strict credential-reference-only deserialization.
+- `McpGateway` connects to enabled downstream servers, injects credentials by reference, aggregates tools/resources/prompts, exposes stable gateway names and resource URIs, routes calls/reads/gets, and emits in-memory gateway events.
+- An in-process agent-facing gateway server surface exists in `core/src/mcp/server.rs` for `initialize`, `ping`, `tools/list`, `tools/call`, `resources/list`, `resources/read`, `prompts/list`, and `prompts/get`.
+- `core/src/mcp/endpoint.rs` starts a run-scoped loopback HTTP MCP endpoint. It supports request/response POSTs plus an SSE GET stream for upstream progress/logging/cancellation notifications. `TamtriCore` creates one endpoint per run, passes exactly that single Tamtri gateway server to `AcpAdapter` in `session/new`, and shuts the endpoint down when the run ends.
+- Gateway server connection, tool routing, credential-injection, progress, logging, cancellation, and downstream-error events write local receipts to `events.jsonl` and emit UI events.
+- The Swift shell has a minimal settings panel that separates Tamtri gateway servers from agent-native tools, shows server status/scope/transport, shows credential-reference presence, and saves entered values to Keychain before feeding the in-memory core resolver.
+- The Swift shell has a "Fork Into" affordance that forks the current conversation into a selected harness/model.
+- `tamtri-gateway-stdio` is a small stdio forwarding helper binary that can bridge ACP agents requiring stdio MCP server refs to the same run-scoped loopback endpoint. `TamtriCore` discovers it next to the app/test binary, through `TAMTRI_GATEWAY_STDIO_HELPER`, or under `target/debug`, and uses it as the default ACP-facing MCP ref when available.
+
+Remaining packaging follow-up:
+
+- Bundle `tamtri-gateway-stdio` beside the signed macOS executable in release packaging. Development and tests discover `target/debug/tamtri-gateway-stdio`; release packaging still has to copy it into the app bundle.
+
 ## Architecture note: gateway topology
 
 Implement gateway logic once, independent of how the agent connects to it:
@@ -273,7 +292,7 @@ Enumerated tests:
 12. `gateway_tool_name_collision_is_stable` - two same-named tools route to the correct server.
 13. `gateway_tools_call_routes_to_downstream` - agent call reaches the right downstream server and returns result unchanged.
 14. `gateway_resources_and_prompts_paginate` - gateway follows downstream `nextCursor` and exposes aggregated results.
-15. `gateway_cancellation_passthrough` - upstream cancellation reaches the downstream pending call.
+15. `gateway_cancellation_receipt` - upstream cancellation is recorded and surfaced; downstream abort forwarding waits for the push-capable gateway transport.
 16. `acp_session_new_includes_gateway` - ACP launch params contain tamtri gateway and no raw credentials.
 17. `mock_acp_agent_calls_gateway_tool` - full hermetic agent -> gateway -> downstream tool path.
 18. `events_jsonl_gateway_receipts` - routing, progress, credential injection, and downstream error receipts are written without secrets.
