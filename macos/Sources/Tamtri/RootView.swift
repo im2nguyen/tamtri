@@ -767,7 +767,15 @@ struct ArtifactCard: View {
                 }
             }
         }
+        .accessibilityElement(children: .contain)
         .accessibilityLabel(artifactAccessibilityLabel)
+        .accessibilityValue(artifactAccessibilityValue)
+        .accessibilityAction(named: "Reveal in Finder") {
+            revealAttachment()
+        }
+        .accessibilityAction(named: "Open Artifact") {
+            openAttachment()
+        }
         .task(id: artifactVerificationKey) {
             await loadVerifiedContent()
         }
@@ -778,13 +786,34 @@ struct ArtifactCard: View {
     }
 
     private var artifactAccessibilityLabel: String {
-        let title = block.path ?? "Artifact"
-        let type = block.mimeType ?? "unknown type"
-        let size = block.size.map { "\($0) bytes" } ?? "unknown size"
+        let title = (block.path as NSString?)?.lastPathComponent ?? "Artifact"
+        let type = artifactMimeLabel(block.mimeType)
         if loadError != nil {
             return "\(title), integrity check failed"
         }
-        return "\(title), \(type), \(size)"
+        return "\(title), \(type)"
+    }
+
+    private var artifactAccessibilityValue: String {
+        if loadError != nil {
+            return "integrity check failed"
+        }
+        let sizeText = block.size.map {
+            ByteCountFormatter.string(fromByteCount: Int64($0), countStyle: .file)
+        } ?? "unknown size"
+        if verifiedInline != nil || verifiedText != nil {
+            return "preview loaded, \(sizeText)"
+        }
+        if verifiedImage != nil {
+            return "image preview loaded, \(sizeText)"
+        }
+        if verifiedNonPreviewable {
+            return "file attachment, \(sizeText)"
+        }
+        if block.inline != nil || hasVerifiedAttachmentMetadata {
+            return "loading preview, \(sizeText)"
+        }
+        return sizeText
     }
 
     @ViewBuilder
@@ -793,6 +822,7 @@ struct ArtifactCard: View {
         case "text/html", "image/svg+xml":
             SandboxedHTMLView(html: content, onBlockedNavigation: logBlockedNavigation)
                 .frame(minHeight: 260)
+                .accessibilityHidden(true)
         case "text/csv", "text/tab-separated-values":
             CSVPreview(text: content, separator: block.mimeType == "text/tab-separated-values" ? "\t" : ",")
         case "text/markdown":
@@ -800,7 +830,7 @@ struct ArtifactCard: View {
         default:
             Text(content)
                 .font(.body.monospaced())
-                .lineLimit(24)
+                .lineLimit(artifactPlainTextPreviewLineLimit)
                 .textSelection(.enabled)
         }
     }
@@ -868,6 +898,8 @@ struct ArtifactCard: View {
         store.openAttachment(conversationId: conversationId, path: path, size: size, sha256: sha256)
     }
 }
+
+let artifactPlainTextPreviewLineLimit = 24
 
 func artifactIsTextLikeMime(_ mimeType: String?) -> Bool {
     guard let mimeType else { return false }

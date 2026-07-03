@@ -4,14 +4,14 @@ use crate::conversation::Conversation;
 
 pub fn folder_name(c: &Conversation) -> String {
     let date = c.created_at.date_naive();
-    let shortid = c.id.simple().to_string();
+    let id_suffix = c.id.simple().to_string();
     format!(
         "{:04}-{:02}-{:02}-{}--{}",
         date.year(),
         date.month(),
         date.day(),
         slug(&c.title),
-        shortid
+        id_suffix
     )
 }
 

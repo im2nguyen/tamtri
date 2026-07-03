@@ -202,6 +202,8 @@ Keeping `content` as raw `Value`s is intentional. The tool-content shape is stil
 
 ## Task 4: McpClient (`mcp/client.rs`)
 
+> **Implementation note (post–M3/M4).** The sequential read-until-my-reply loop and poison-on-timeout policy described here live in the shared `rpc::dispatch::RpcConnection` today, not in a `Mutex<ClientInner>` inside `mcp/client.rs`. `McpClient` holds an `RpcHandle` to that loop; the public `&self` API shape is unchanged. Milestone 4 promoted concurrent fan-out on the same reader task.
+
 ```rust
 pub struct McpClientConfig {
     pub init_timeout: Duration,      // default 30s: initialize, notifications/initialized, tools/list
@@ -213,7 +215,9 @@ Timeouts are user-configurable, not compile-time constants. `McpClientConfig::de
 
 ```rust
 pub struct McpClient {
-    inner: tokio::sync::Mutex<ClientInner>,   // transport + next_id; see API-shape note below
+    // M2 design: Mutex<ClientInner> serialized the transport. Shipped as RpcHandle + background
+    // dispatch loop (M3 for ACP, M4 for gateway). Post-init methods still take &self.
+    handle: RpcHandle,
     config: McpClientConfig,
     server_info: Option<Implementation>,
     server_capabilities: Option<ServerCapabilities>,
@@ -231,7 +235,7 @@ impl McpClient {
 }
 ```
 
-**API shape matters more than the internals.** Post-init methods take `&self`, not `&mut self`, with the transport behind a `tokio::sync::Mutex` this milestone. The mutex serializes calls (correct for M2's sequential design), and in milestone 4 the internals swap to a background reader task + pending-request map + request channel without changing a single public signature. If the surface were `&mut self`, every M4 caller would break.
+**API shape matters more than the internals.** Post-init methods take `&self`, not `&mut self`. M2 serialized calls through one reader (mutex-backed in the original sketch; `RpcConnection` in the repo). Milestone 4 promoted that reader to a background task + pending-request map + request channel without changing a single public signature. If the surface were `&mut self`, every M4 caller would break.
 
 Behavior:
 - `connect_stdio` builds a `StdioTransport`, then calls `initialize`, then sends the `notifications/initialized` notification.

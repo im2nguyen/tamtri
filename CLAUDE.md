@@ -81,7 +81,7 @@ Keep the core free of platform assumptions so Linux (GTK) and Windows (WinUI) sh
 
 Storage layout (the vault): one folder per conversation.
 ```
-<vault>/conversations/<date>-<slug>--<shortid>/
+<vault>/conversations/<date>-<slug>--<id-suffix>/
   meta.json        mutable, tiny: schema_version, id, title, timestamps, active_harness_id, model_id, working_dir, mcp_servers, roots, forked_from
   messages.jsonl   append-only, exactly one Message object per line (the transcript)
   events.jsonl     append-only local audit log (receipts); written from milestone 3

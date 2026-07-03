@@ -102,4 +102,10 @@ final class RendererPolicyTests: XCTestCase {
         XCTAssertTrue(safe.contains("# Title"))
         XCTAssertTrue(safe.contains("**bold**"))
     }
+
+    func testLargePlainTextArtifactPreviewUsesLineLimit() {
+        XCTAssertEqual(artifactPlainTextPreviewLineLimit, 24)
+        let largeText = (0..<100).map { "line \($0)" }.joined(separator: "\n")
+        XCTAssertGreaterThan(largeText.components(separatedBy: "\n").count, artifactPlainTextPreviewLineLimit)
+    }
 }

@@ -56,7 +56,7 @@ Milestone 6 writes `elicitation_requested` and `elicitation_resolved` when a dow
 
 Milestone 4 writes gateway receipts for server connection, tool routing, credential injection, progress, logging, cancellation, and downstream errors.
 
-Milestone 5 writes `artifact_snapshotted` when a renderable file is copied from `workdir/` into `attachments/`. The payload records original path, attachment path, MIME type, size, and SHA-256, never file contents. When the snapshot came from an explicit harness `FileChanged`, the payload also includes `tool_call_id`. End-of-turn scan snapshots omit `tool_call_id`.
+Milestone 5 writes `artifact_snapshotted` when a renderable file is copied from `workdir/` into `attachments/`. The payload records original path, attachment path, MIME type, size, and SHA-256, never file contents. When the snapshot came from an explicit harness `FileChanged`, the payload also includes `tool_call_id`. Snapshots from `referenced_paths` without an explicit `FileChanged` omit `tool_call_id`.
 
 Blocked artifact or workdir HTML navigation (external `http`, `https`, `file`, or custom schemes) is logged as `artifact_navigation_blocked` with `{ "url": "<blocked-url>" }`.
 

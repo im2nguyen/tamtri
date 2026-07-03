@@ -11,6 +11,10 @@ Milestone 2 shipped a sequential stdio MCP client before the shared `rpc::dispat
 - **Message classification.** `IncomingMessage::from_line` classifies by field presence. Serde untagged fallthrough is not used on the read path.
 - **Layout.** JSON-RPC types live in `core/src/rpc/jsonrpc.rs` (re-exported from `core/src/mcp/jsonrpc.rs`). Stdio framing is in `core/src/rpc/transport/stdio.rs`. The M2 client loop lived in `core/src/mcp/client.rs` until Milestone 4 moved it onto `rpc::dispatch::RpcConnection`.
 
+**Poison vs multiplex (do not conflate).** Poison-on-timeout is a connection-lifecycle rule: after `CoreError::Timeout`, the handle is poisoned, late wire responses are ignored, and the next call returns `CoreError::TransportClosed`. Callers reconnect; there is no in-band resync. Multiplexed dispatch (M4) is a concurrency upgrade on the same loop: multiple in-flight requests correlate by `RequestId` through a background reader. Multiplexing does not relax poison-on-timeout. A timed-out request still poisons the handle even though other calls could theoretically share the transport.
+
+**Gateway eviction.** `McpGateway` evicts cached downstream `McpClient`s on `CoreError::Timeout` or `CoreError::TransportClosed` (`evict_client` in `core/src/mcp/gateway.rs`), then reconnects on the next `list_tools` / `call_tool`. See `gateway_list_tools_recovers_after_timeout` and `gateway_evicts_client_on_transport_closed` in `core/tests/gateway.rs`.
+
 Milestone 4 promotes the M2 MCP client onto the shared JSON-RPC dispatch loop introduced for ACP in M3. The public client surface stays `&self`, but requests now correlate through a background reader and pending-request map, so unrelated calls can be in flight concurrently.
 
 ## Client Surface

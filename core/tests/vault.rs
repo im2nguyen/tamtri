@@ -197,6 +197,38 @@ fn fork_is_deep_copy() {
 }
 
 #[test]
+fn fork_creates_unique_folder_names() {
+    let (dir, vault) = vault();
+    let parent = Conversation::new("Rapid fork");
+    vault.create(&parent).unwrap();
+
+    let mut folder_names = std::collections::HashSet::new();
+    folder_names.insert(
+        conversation_dir(dir.path(), parent.id)
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned(),
+    );
+
+    let mut current = parent;
+    for _ in 0..20 {
+        let fork = current.fork();
+        vault.create(&fork).unwrap();
+        let name = conversation_dir(dir.path(), fork.id)
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        assert!(
+            folder_names.insert(name.clone()),
+            "duplicate folder name: {name}"
+        );
+        current = fork;
+    }
+}
+
+#[test]
 fn import_folder_as_new_assigns_new_id() {
     let (dir, source) = vault();
     let mut c = Conversation::new("Import me");

@@ -4,7 +4,7 @@ tamtri stores conversations as a legible vault, not an opaque app database. The 
 
 ```text
 <vault>/config.json
-<vault>/conversations/<yyyy-mm-dd>-<slug>--<shortid>/
+<vault>/conversations/<yyyy-mm-dd>-<slug>--<id-suffix>/
   meta.json
   messages.jsonl
   events.jsonl
@@ -38,7 +38,7 @@ Reads are lock-free and read-only. A torn final `messages.jsonl` line is ignored
 
 Writes take an exclusive advisory lock on that conversation's `messages.jsonl`, then repair any torn final line on disk before appending. There is no vault-wide lock, so different conversations can be written concurrently and external tools can browse the vault at any time.
 
-Folder names are cosmetic. The id in `meta.json` is the truth, so Finder renames do not break load or list. The `<shortid>` suffix is the first 8 hex characters of the conversation id's simple form (no hyphens), not the full 32-character id. Duplicate ids from Finder copies or sync conflicts resolve deterministically to the newest `updated_at`, with path-name ordering as the tie breaker. tamtri never auto-deletes the losing folders; it reports them through `VaultIssue::DuplicateId`.
+Folder names are cosmetic. The id in `meta.json` is the truth, so Finder renames do not break load or list. The `<id-suffix>` is the conversation id in simple form: 32 lowercase hex characters with no hyphens. An earlier design truncated this to 8 hex chars for shorter Finder names; that was superseded because UUID v7 ids generated in rapid succession (multiple forks in one session) made 8-char suffix collisions plausible, especially on APFS case-insensitive volumes. The full simple form guarantees folder uniqueness without relying on slug and date alone. Duplicate ids from Finder copies or sync conflicts resolve deterministically to the newest `updated_at`, with path-name ordering as the tie breaker. tamtri never auto-deletes the losing folders; it reports them through `VaultIssue::DuplicateId`.
 
 ## Sync Stance
 

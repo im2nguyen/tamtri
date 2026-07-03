@@ -257,7 +257,7 @@ actor MockCoreClient: CoreClient {
     func resolveAppTemplate(conversationId: String, serverId: String, templateRef: String) async throws -> AppTemplateRecord? { nil }
 
     func submitAppBridgeRequest(conversationId: String, serverId: String, appId: String, templateRef: String, requestJSON: String) async throws -> AppBridgeSubmission {
-        continuation.yield(CoreEvent(conversationId: conversationId, kind: "app_bridge_consent_requested", payloadJSON: #"{"request_id":"mock-bridge","server_id":"mock","app_id":"demo","template_ref":"ui://demo","summary":"Mock app wants to call echo","options":[{"id":"deny","label":"Deny"},{"id":"allow_once","label":"Allow once"}]}"#))
+        continuation.yield(CoreEvent(conversationId: conversationId, kind: "app_bridge_consent_requested", payloadJSON: #"{"request_id":"mock-bridge","server_id":"mock","app_id":"demo","template_ref":"ui://demo","summary":"Mock app wants to call echo","options":[{"id":"deny","label":"Deny"},{"id":"allow_once","label":"Allow once"},{"id":"allow_for_conversation","label":"Allow for this conversation"}]}"#))
         return AppBridgeSubmission(requestId: "mock-bridge", needsConsent: true)
     }
 

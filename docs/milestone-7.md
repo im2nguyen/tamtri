@@ -199,6 +199,11 @@ Enumerated tests:
 15. `sampling_declined_cleanly`.
 16. `rc_extension_capability_gate`.
 
+## V1 notes (reconciliation)
+
+- **Knowledge-base roots are model-only in V1.** The core `Root` type supports `KnowledgeBase` alongside `Filesystem`, but the shell roots picker attaches folders only. KB URI roots can be stored in `meta.json` for forward compatibility; there is no KB picker or bookmark flow until a later milestone.
+- **App distribution packaging is deferred to M9.** Milestone 7 wires App sandbox, bridge consent, and offline transcript rendering; signing, notarization, and update packaging stay in the ship milestone.
+
 ## Out of scope this milestone
 
 Do not build product onboarding/search/share polish (M8). Do not add cloud sync or team roots. Do not add sampling. Do not build a general browser. Do not allow Apps to use undeclared network origins or bypass consent for host actions.

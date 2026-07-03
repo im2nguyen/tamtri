@@ -479,6 +479,38 @@ mod tests {
     }
 
     #[test]
+    fn reducer_collects_paths_from_write_tool_input_file_path_key() {
+        let mut reducer = TurnReducer::new("acp:test");
+        reducer
+            .apply(&HarnessEvent::ToolCallStarted {
+                id: "tool-1".into(),
+                name: "Write".into(),
+                kind: ToolKind::Write,
+                title: "Write report".into(),
+                input: json!({"file_path": "report.html"}),
+            })
+            .unwrap();
+        let reduced = reducer.finish();
+        assert_eq!(reduced.referenced_paths, vec!["report.html".to_string()]);
+    }
+
+    #[test]
+    fn reducer_collects_paths_from_write_tool_input_file_path_camel_case_key() {
+        let mut reducer = TurnReducer::new("acp:test");
+        reducer
+            .apply(&HarnessEvent::ToolCallStarted {
+                id: "tool-1".into(),
+                name: "Write".into(),
+                kind: ToolKind::Write,
+                title: "Write report".into(),
+                input: json!({"filePath": "report.html"}),
+            })
+            .unwrap();
+        let reduced = reducer.finish();
+        assert_eq!(reduced.referenced_paths, vec!["report.html".to_string()]);
+    }
+
+    #[test]
     fn reducer_collects_renderable_paths_from_completed_tool_output() {
         let mut reducer = TurnReducer::new("acp:test");
         reducer
