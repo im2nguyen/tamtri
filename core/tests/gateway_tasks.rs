@@ -521,3 +521,131 @@ async fn task_mid_input_uses_elicitation_path() {
     .expect("task completed after elicitation");
     assert_eq!(completed.status, TaskStatus::Completed);
 }
+
+#[tokio::test]
+async fn task_failed_persists_task_ref() {
+    use chrono::Utc;
+    use std::fs;
+    use tamtri_core::conversation::{Conversation, Id, Message, Role};
+    use tamtri_core::vault::ConversationVault;
+    use tamtri_core::vault::fs::FilesystemVault;
+
+    let command = env!("CARGO_BIN_EXE_m7-task-mcp");
+    let (tx, _rx) = mpsc::unbounded_channel();
+    let gateway = Arc::new(
+        McpGateway::new(
+            GatewayConfig {
+                default_call_timeout_secs: 300,
+                servers: vec![stdio_server("tasks", command)],
+            },
+            Arc::new(NoCredentials),
+            Some(tx),
+        )
+        .unwrap(),
+    );
+
+    let tools = gateway.list_tools().await.unwrap();
+    let exposed = tools
+        .iter()
+        .find(|tool| tool.original_name == "cancelable_task")
+        .map(|tool| tool.exposed_name.clone())
+        .unwrap();
+    let mut rx = gateway.subscribe();
+    gateway
+        .call_tool_with_meta(
+            &exposed,
+            json!({}),
+            Some(json!({"toolCallId": "tool-task-cancel"})),
+        )
+        .await
+        .unwrap();
+
+    let task_id = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let event = rx.recv().await.expect("event");
+            if let GatewayEvent::TaskStarted { state } = event {
+                return state.task_id;
+            }
+        }
+    })
+    .await
+    .expect("task started");
+
+    gateway.cancel_task(&task_id).await.expect("cancel task");
+    let failed = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let event = rx.recv().await.expect("event");
+            if let GatewayEvent::TaskCompleted { state, .. } = event
+                && state.task_id == task_id
+            {
+                return state;
+            }
+        }
+    })
+    .await
+    .expect("failed task event");
+    assert_eq!(failed.status, TaskStatus::Failed);
+    assert_eq!(
+        failed.origin_tool_call_id.as_deref(),
+        Some("tool-task-cancel")
+    );
+
+    let block = ContentBlock::TaskRef {
+        task_id: failed.task_id.clone(),
+        status: failed.status.clone(),
+        title: failed.title.clone(),
+        result_summary: failed.result.as_ref().map(|value| value.to_string()),
+        origin_tool_call_id: failed.origin_tool_call_id.clone(),
+    };
+
+    let dir = tempfile::tempdir().unwrap();
+    let vault = FilesystemVault::new(dir.path().to_path_buf()).unwrap();
+    let mut conversation = Conversation::new("Task failed replay");
+    conversation.push_message(Message {
+        id: Id::now_v7(),
+        role: Role::Assistant,
+        harness_id: None,
+        content: vec![
+            ContentBlock::ToolCall {
+                id: "tool-task-cancel".into(),
+                name: "tasks__cancelable_task".into(),
+                input: json!({}),
+            },
+            block.clone(),
+        ],
+        created_at: Utc::now(),
+    });
+    vault.create(&conversation).unwrap();
+
+    let messages_path = dir
+        .path()
+        .join("conversations")
+        .read_dir()
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path()
+        .join("messages.jsonl");
+    let messages_text = fs::read_to_string(&messages_path).unwrap();
+    assert!(
+        messages_text.contains("task_ref"),
+        "messages.jsonl should include task_ref: {messages_text}"
+    );
+    assert!(messages_text.contains("\"failed\""));
+    assert!(messages_text.contains("tool-task-cancel"));
+
+    let loaded = vault.load(conversation.id).unwrap();
+    match &loaded.messages[0].content[1] {
+        ContentBlock::TaskRef {
+            status,
+            origin_tool_call_id,
+            ..
+        } => {
+            assert_eq!(*status, TaskStatus::Failed);
+            assert_eq!(origin_tool_call_id.as_deref(), Some("tool-task-cancel"));
+        }
+        other => panic!("expected task_ref block, got {other:?}"),
+    }
+    assert_eq!(loaded.messages[0].content[1], block);
+}

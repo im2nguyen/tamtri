@@ -179,3 +179,65 @@ async fn app_resource_persists_and_reloads() {
     );
 }
 
+#[tokio::test]
+async fn app_template_undeclared_origin_blocked() {
+    let command = env!("CARGO_BIN_EXE_m7-app-mcp");
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    let gateway = Arc::new(
+        McpGateway::new(
+            GatewayConfig {
+                default_call_timeout_secs: 300,
+                servers: vec![stdio_server("m7-app", command)],
+            },
+            Arc::new(NoCredentials),
+            Some(tx),
+        )
+        .unwrap(),
+    );
+
+    let tools = gateway.list_tools().await.unwrap();
+    let exposed = tools
+        .iter()
+        .find(|tool| tool.original_name == "show_bad_origin_app")
+        .map(|tool| tool.exposed_name.clone())
+        .expect("show_bad_origin_app tool");
+
+    let call = tokio::spawn({
+        let gateway = Arc::clone(&gateway);
+        let exposed = exposed.clone();
+        async move { gateway.call_tool(&exposed, json!({})).await }
+    });
+
+    let downstream_message = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let event = rx.recv().await.expect("gateway event");
+            match event {
+                GatewayEvent::DownstreamError { message, .. }
+                    if message.contains("origin") =>
+                {
+                    return message;
+                }
+                GatewayEvent::AppReturned { .. } => {
+                    panic!("app returned despite invalid declared origin");
+                }
+                _ => {}
+            }
+        }
+    })
+    .await
+    .expect("downstream error for invalid declared origin");
+    assert!(
+        downstream_message.contains("whitespace"),
+        "expected invalid origin parse error, got: {downstream_message}"
+    );
+
+    call.await.unwrap().expect("tool call completes");
+    assert!(
+        gateway
+            .cached_app_template("m7-app", "ui://m7-app/bad-origin")
+            .await
+            .is_none(),
+        "invalid template must not be cached"
+    );
+}
+

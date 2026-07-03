@@ -123,6 +123,13 @@ final class RendererPolicyTests: XCTestCase {
         XCTAssertEqual(preview[19], (0..<8).map { "r18c\($0)" })
     }
 
+    func testCSVPreviewStylesFirstRowAsHeader() {
+        let csv = "name,value\nalpha,1\nbeta,2"
+        let preview = csvPreviewRows(text: csv, separator: ",")
+        XCTAssertEqual(preview.first, ["name", "value"])
+        XCTAssertEqual(preview[1], ["alpha", "1"])
+    }
+
     func testArtifactNavigationPolicyBlocksExternalSchemes() {
         XCTAssertFalse(ArtifactNavigationPolicy.allows(URL(string: "https://example.com")))
         XCTAssertFalse(ArtifactNavigationPolicy.allows(URL(string: "http://example.com")))
