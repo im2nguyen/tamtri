@@ -340,7 +340,9 @@ impl ConversationVault for FilesystemVault {
         new.created_at = Utc::now();
         new.updated_at = new.created_at;
         new.forked_from = None;
+        let dir = self.conversation_dir(&new);
         self.create(&new)?;
+        copy_attachments_dir(&src.join("attachments"), &dir.join("attachments"))?;
         Ok(new)
     }
 
@@ -449,6 +451,24 @@ fn repair_torn_tail_named(lock_file: &mut File, target: &Path) -> Result<()> {
     }
     let mut file = OpenOptions::new().read(true).write(true).open(target)?;
     repair_torn_tail(&mut file)
+}
+
+fn copy_attachments_dir(src: &Path, dst: &Path) -> Result<()> {
+    if !src.is_dir() {
+        return Ok(());
+    }
+    fs::create_dir_all(dst)?;
+    for entry in fs::read_dir(src)? {
+        let entry = entry?;
+        let path = entry.path();
+        let target = dst.join(entry.file_name());
+        if entry.file_type()?.is_dir() {
+            copy_attachments_dir(&path, &target)?;
+        } else {
+            fs::copy(path, target)?;
+        }
+    }
+    Ok(())
 }
 
 fn parse_events_with_torn_tail(text: &str) -> Result<(Vec<Event>, bool)> {

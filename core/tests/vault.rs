@@ -213,6 +213,57 @@ fn import_folder_as_new_assigns_new_id() {
 }
 
 #[test]
+fn import_folder_as_new_copies_attachments() {
+    let (dir, source) = vault();
+    let c = Conversation::new("Import attachments");
+    source.create(&c).unwrap();
+    let src = conversation_dir(dir.path(), c.id);
+    fs::write(
+        src.join("attachments/report.html"),
+        b"<h1>report</h1>",
+    )
+    .unwrap();
+
+    let (target_dir, target) = vault();
+    let imported = target.import_folder_as_new(&src).unwrap();
+    let dst = conversation_dir(target_dir.path(), imported.id);
+
+    assert_eq!(
+        fs::read(dst.join("attachments/report.html")).unwrap(),
+        b"<h1>report</h1>"
+    );
+}
+
+#[test]
+fn save_meta_round_trip() {
+    let (_dir, vault) = vault();
+    let mut c = Conversation::new("Save meta");
+    vault.create(&c).unwrap();
+    c.title = "Updated title".into();
+    c.updated_at = Utc::now();
+    vault.save_meta(&c).unwrap();
+
+    let loaded = vault.load(c.id).unwrap();
+    assert_eq!(loaded.title, "Updated title");
+    assert_eq!(loaded.updated_at, c.updated_at);
+}
+
+#[test]
+fn issues_reports_torn_tail() {
+    let (dir, vault) = vault();
+    let c = Conversation::new("Torn issue");
+    vault.create(&c).unwrap();
+    vault.append_message(c.id, &message("first")).unwrap();
+    let path = conversation_dir(dir.path(), c.id).join("messages.jsonl");
+    let mut file = OpenOptions::new().append(true).open(&path).unwrap();
+    write!(file, "{{\"id\":\"not done\"").unwrap();
+
+    assert!(vault.issues().unwrap().iter().any(|issue| {
+        matches!(issue, VaultIssue::TornTailDetected { id } if *id == c.id)
+    }));
+}
+
+#[test]
 fn vault_list_newest_first() {
     let (_dir, vault) = vault();
     let mut older = Conversation::new("Older");
@@ -347,6 +398,42 @@ fn renamed_folder_still_loads() {
 
     assert_eq!(vault.load(c.id).unwrap().id, c.id);
     assert_eq!(vault.list().unwrap()[0].id, c.id);
+}
+
+#[test]
+fn duplicate_id_tiebreaks_by_folder_name() {
+    let (dir, vault) = vault();
+    let mut c = Conversation::new("Tiebreak");
+    let ts = Utc::now();
+    c.updated_at = ts;
+    c.created_at = ts;
+    vault.create(&c).unwrap();
+    let original = conversation_dir(dir.path(), c.id);
+    let copy_a = original.parent().unwrap().join("aaa-duplicate");
+    let copy_b = original.parent().unwrap().join("zzz-duplicate");
+    copy_dir_all(&original, &copy_a);
+    copy_dir_all(&original, &copy_b);
+
+    let expected_winner = [original.as_path(), copy_a.as_path(), copy_b.as_path()]
+        .into_iter()
+        .min()
+        .unwrap()
+        .file_name()
+        .unwrap()
+        .to_string_lossy()
+        .to_string();
+
+    assert_eq!(vault.list().unwrap().len(), 1);
+    assert_eq!(vault.load(c.id).unwrap().title, "Tiebreak");
+    assert!(vault.issues().unwrap().iter().any(|issue| {
+        matches!(
+            issue,
+            VaultIssue::DuplicateId { id, winner, losers }
+                if *id == c.id
+                    && winner.file_name().unwrap().to_string_lossy() == expected_winner
+                    && losers.len() == 2
+        )
+    }));
 }
 
 #[test]

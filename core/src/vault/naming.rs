@@ -49,3 +49,23 @@ pub fn slug(input: &str) -> String {
         trimmed
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn slug_truncates_to_forty_chars() {
+        let long = "a".repeat(100);
+        assert_eq!(slug(&long).len(), 40);
+        assert_eq!(slug(&long), "a".repeat(40));
+    }
+
+    #[test]
+    fn slug_untitled_for_empty_input() {
+        assert_eq!(slug(""), "untitled");
+        assert_eq!(slug("   "), "untitled");
+        assert_eq!(slug("!!!"), "untitled");
+        assert_eq!(slug("---"), "untitled");
+    }
+}
