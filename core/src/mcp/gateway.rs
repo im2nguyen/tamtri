@@ -296,7 +296,16 @@ impl McpGateway {
     pub async fn list_tools(&self) -> Result<Vec<GatewayTool>> {
         let mut tools = Vec::new();
         for server in self.config.enabled_servers() {
-            let client = self.client_for(server).await?;
+            let client = match self.client_for(server).await {
+                Ok(client) => client,
+                Err(err) => {
+                    self.emit(GatewayEvent::DownstreamError {
+                        server_id: server.id.clone(),
+                        message: err.to_string(),
+                    });
+                    continue;
+                }
+            };
             match client.list_tools().await {
                 Ok(server_tools) => {
                     for tool in server_tools {
@@ -321,7 +330,6 @@ impl McpGateway {
                         server_id: server.id.clone(),
                         message: err.to_string(),
                     });
-                    return Err(err);
                 }
             }
         }
