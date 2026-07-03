@@ -63,11 +63,12 @@ struct WebTranscriptView: NSViewRepresentable {
     }
 
     fileprivate static func javascriptStringLiteral(_ value: String) -> String {
-        let data = try? JSONSerialization.data(withJSONObject: value, options: [])
-        if let data, let encoded = String(data: data, encoding: .utf8) {
-            return encoded
+        guard let data = try? JSONEncoder().encode(value),
+              let encoded = String(data: data, encoding: .utf8)
+        else {
+            return "\"\""
         }
-        return "\"\""
+        return encoded
     }
 
     private static let shellHTML = """
