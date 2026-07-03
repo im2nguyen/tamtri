@@ -15,6 +15,9 @@ pub trait HarnessAdapter: Send + Sync {
     fn id(&self) -> &str;
     fn display_name(&self) -> &str;
     fn capabilities(&self) -> HarnessCapabilities;
+    fn agent_launch_spec(&self) -> Option<crate::harness::acp::AgentLaunchSpec> {
+        None
+    }
     async fn run(&self, ctx: ConversationContext, turn: TurnInput) -> Result<HarnessRun>;
     async fn available_models(&self) -> Result<Vec<ModelInfo>>;
 }

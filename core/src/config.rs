@@ -118,6 +118,22 @@ pub enum CredentialTarget {
     },
 }
 
+pub fn seed_agent_roster_if_empty(vault_path: &Path) -> Result<()> {
+    let mut config = load_app_config(vault_path)?;
+    if !config.agent_roster.is_empty() {
+        return Ok(());
+    }
+    let discovered = crate::harness::health::discover_known_agents();
+    if discovered.is_empty() {
+        return Ok(());
+    }
+    config.agent_roster = discovered;
+    if config.default_harness_id.is_none() {
+        config.default_harness_id = config.agent_roster.first().map(|spec| spec.id.clone());
+    }
+    save_app_config(vault_path, &config)
+}
+
 pub fn load_app_config(vault_path: &Path) -> Result<AppConfig> {
     let path = vault_path.join(CONFIG_FILE);
     if !path.exists() {
@@ -249,6 +265,8 @@ fn reject_inline_secret(server_id: &str, location: &str, name: &str, value: &str
 mod tests {
     use serde_json::json;
 
+    use crate::harness::acp::AgentLaunchSpec;
+
     use super::*;
 
     fn server(id: &str, enabled: bool) -> GatewayServerConfig {
@@ -292,6 +310,64 @@ mod tests {
         assert_eq!(loaded.gateway.servers.len(), 1);
         assert_eq!(loaded.gateway.servers[0].id, "new");
         assert!(!loaded.gateway.servers[0].enabled);
+    }
+
+    #[test]
+    fn seed_agent_roster_if_empty_discovers_hermes() {
+        let dir = tempfile::tempdir().unwrap();
+        let hermes_path = dir.path().join("hermes");
+        std::fs::write(&hermes_path, b"#!/bin/sh\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&hermes_path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let home = dir.path().join("home");
+        std::fs::create_dir_all(home.join(".local/bin")).unwrap();
+        std::fs::copy(&hermes_path, home.join(".local/bin/hermes")).unwrap();
+        let previous_home = std::env::var_os("HOME");
+        unsafe {
+            std::env::set_var("HOME", &home);
+        }
+        seed_agent_roster_if_empty(dir.path()).unwrap();
+        if let Some(value) = previous_home {
+            unsafe {
+                std::env::set_var("HOME", value);
+            }
+        } else {
+            unsafe {
+                std::env::remove_var("HOME");
+            }
+        }
+        let loaded = load_app_config(dir.path()).unwrap();
+        assert!(
+            loaded
+                .agent_roster
+                .iter()
+                .any(|spec| spec.id == "hermes-acp"),
+            "expected hermes-acp in {:?}",
+            loaded.agent_roster
+        );
+        assert_eq!(loaded.default_harness_id.as_deref(), Some("hermes-acp"));
+    }
+
+    #[test]
+    fn seed_agent_roster_if_empty_preserves_existing_roster() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = AppConfig {
+            default_harness_id: Some("mock-acp".to_string()),
+            agent_roster: vec![AgentLaunchSpec {
+                id: "mock-acp".into(),
+                display_name: "Mock".into(),
+                command: "/tmp/mock".into(),
+                args: Vec::new(),
+                env: Vec::new(),
+            }],
+            gateway: GatewayConfig::default(),
+        };
+        save_app_config(dir.path(), &config).unwrap();
+        seed_agent_roster_if_empty(dir.path()).unwrap();
+        assert_eq!(load_app_config(dir.path()).unwrap(), config);
     }
 
     #[test]

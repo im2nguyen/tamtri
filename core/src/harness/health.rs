@@ -68,6 +68,53 @@ pub fn it_admin_checklist(entries: &[HarnessHealthEntry]) -> String {
     lines.join("\n")
 }
 
+pub fn discover_known_agents() -> Vec<AgentLaunchSpec> {
+    let mut found = Vec::new();
+    if let Some(command) = resolve_hermes_command() {
+        found.push(AgentLaunchSpec {
+            id: "hermes-acp".into(),
+            display_name: "Hermes".into(),
+            command,
+            args: vec!["acp".into()],
+            env: Vec::new(),
+        });
+    }
+    if which_command("claude").is_some() {
+        found.push(AgentLaunchSpec {
+            id: "claude-code-acp".into(),
+            display_name: "Claude Code".into(),
+            command: "claude".into(),
+            args: vec!["acp".into()],
+            env: Vec::new(),
+        });
+    }
+    if which_command("goose").is_some() {
+        found.push(AgentLaunchSpec {
+            id: "goose-acp".into(),
+            display_name: "Goose".into(),
+            command: "goose".into(),
+            args: Vec::new(),
+            env: Vec::new(),
+        });
+    }
+    found
+}
+
+fn resolve_hermes_command() -> Option<String> {
+    let mut candidates = Vec::new();
+    if let Some(home) = std::env::var_os("HOME") {
+        candidates.push(Path::new(&home).join(".local/bin/hermes"));
+    }
+    candidates.push(Path::new("/opt/homebrew/bin/hermes").to_path_buf());
+    candidates.push(Path::new("/usr/local/bin/hermes").to_path_buf());
+    for path in candidates {
+        if path.is_file() && is_executable(&path) {
+            return Some(path.to_string_lossy().into_owned());
+        }
+    }
+    which_command("hermes").map(|path| path.to_string_lossy().into_owned())
+}
+
 pub fn health_entries_from_roster(roster: &[AgentLaunchSpec]) -> Vec<HarnessHealthEntry> {
     roster
         .iter()
@@ -155,5 +202,39 @@ mod tests {
         assert!(checklist.contains("tamtri harness setup checklist"));
         assert!(checklist.contains("Mock"));
         assert!(checklist.contains("Install docs:"));
+    }
+
+    #[test]
+    fn discover_known_agents_finds_hermes_at_known_path() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let hermes_path = temp.path().join("hermes");
+        std::fs::write(&hermes_path, b"#!/bin/sh\n").expect("write");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&hermes_path, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+        }
+        let home = temp.path().join("home");
+        std::fs::create_dir_all(home.join(".local/bin")).expect("mkdir");
+        std::fs::copy(&hermes_path, home.join(".local/bin/hermes")).expect("copy");
+        let previous_home = std::env::var_os("HOME");
+        unsafe {
+            std::env::set_var("HOME", &home);
+        }
+        let discovered = discover_known_agents();
+        if let Some(value) = previous_home {
+            unsafe {
+                std::env::set_var("HOME", value);
+            }
+        } else {
+            unsafe {
+                std::env::remove_var("HOME");
+            }
+        }
+        assert!(
+            discovered
+                .iter()
+                .any(|spec| spec.id == "hermes-acp" && spec.args == vec!["acp".to_string()])
+        );
     }
 }

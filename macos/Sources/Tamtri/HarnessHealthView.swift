@@ -29,7 +29,7 @@ struct HarnessHealthView: View {
                 .foregroundStyle(.secondary)
 
             if store.harnessHealthEntries.isEmpty {
-                Text("No agents configured in the vault roster yet. Add entries to ~/.tamtri/vault/config.json or use development registration.")
+                Text("No agents configured yet. tamtri looks for Hermes, Claude Code, and Goose on your PATH and in common install locations. You can also add entries to ~/.tamtri/vault/config.json.")
                     .foregroundStyle(.secondary)
             } else {
                 List(store.harnessHealthEntries) { entry in

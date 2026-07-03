@@ -60,6 +60,10 @@ impl HarnessAdapter for AcpAdapter {
         &self.launch.display_name
     }
 
+    fn agent_launch_spec(&self) -> Option<AgentLaunchSpec> {
+        Some(self.launch.clone())
+    }
+
     fn capabilities(&self) -> HarnessCapabilities {
         HarnessCapabilities {
             streaming: true,
