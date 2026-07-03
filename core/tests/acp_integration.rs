@@ -229,6 +229,66 @@ fn mock_acp_agent_calls_gateway_tool() {
     let _ = conversation_id;
 }
 
+#[test]
+fn acp_session_new_includes_gateway() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let observer = Arc::new(RecordingObserver);
+    let core = TamtriCore::new(temp.path().to_string_lossy().into_owned(), observer)
+        .expect("core");
+
+    let mock_mcp = env!("CARGO_BIN_EXE_mock-mcp-server").to_string();
+    tamtri_core::config::replace_gateway_servers(
+        temp.path(),
+        vec![gateway_mock_server(&mock_mcp)],
+    )
+    .expect("save config");
+
+    core.register_acp_agent(
+        "mock-acp".to_string(),
+        "Mock ACP".to_string(),
+        env!("CARGO_BIN_EXE_mock-acp-agent").to_string(),
+        Vec::new(),
+    )
+    .expect("agent");
+
+    let conversation = core
+        .create_conversation(
+            "Gateway session".to_string(),
+            "mock-acp".to_string(),
+            "mock".to_string(),
+        )
+        .expect("conversation");
+
+    core.send_message(conversation.id.clone(), "go".to_string())
+        .expect("send");
+
+    let workdir = core
+        .conversation_workdir_path(conversation.id.clone())
+        .expect("workdir");
+    let marker = std::path::Path::new(&workdir).join(".session-mcp-servers.json");
+
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while std::time::Instant::now() < deadline {
+        if marker.is_file() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+
+    let raw = std::fs::read_to_string(&marker).expect("session/new mcpServers marker");
+    let servers: Vec<serde_json::Value> = serde_json::from_str(&raw).expect("mcpServers json");
+    assert_eq!(servers.len(), 1, "expected one tamtri gateway entry");
+    assert_eq!(servers[0]["name"], "Tamtri Gateway");
+    assert!(
+        servers[0].get("command").is_some() || servers[0].get("url").is_some(),
+        "gateway entry should expose transport endpoint only"
+    );
+    assert!(!raw.contains("super-secret"));
+    assert!(!raw.contains("keychain://"));
+
+    core.cancel_run(conversation.id).ok();
+}
+
 #[derive(Default)]
 struct RecordingObserver;
 

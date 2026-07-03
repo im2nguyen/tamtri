@@ -317,6 +317,117 @@ async fn gateway_tools_list_aggregates_servers() {
 }
 
 #[tokio::test]
+async fn gateway_resources_and_prompts_paginate() {
+    let command = env!("CARGO_BIN_EXE_mock-mcp-server");
+    let gateway = McpGateway::new(
+        GatewayConfig {
+            default_call_timeout_secs: 300,
+            servers: vec![stdio_server("mock", command)],
+        },
+        Arc::new(NoCredentials),
+        None,
+    )
+    .unwrap();
+
+    let resources = gateway.list_resources().await.unwrap();
+    assert_eq!(resources.len(), 2);
+    assert!(
+        resources
+            .iter()
+            .any(|resource| resource.exposed_uri == "tamtri://gateway/mock/mock_report")
+    );
+    assert!(
+        resources
+            .iter()
+            .any(|resource| resource.exposed_uri == "tamtri://gateway/mock/mock_appendix")
+    );
+
+    let prompts = gateway.list_prompts().await.unwrap();
+    assert_eq!(prompts.len(), 2);
+    assert!(
+        prompts
+            .iter()
+            .any(|prompt| prompt.exposed_name == "mock__summarize")
+    );
+    assert!(
+        prompts
+            .iter()
+            .any(|prompt| prompt.exposed_name == "mock__outline")
+    );
+}
+
+#[tokio::test]
+async fn gateway_cancellation_receipt() {
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    let gateway = McpGateway::new(
+        GatewayConfig {
+            default_call_timeout_secs: 300,
+            servers: Vec::new(),
+        },
+        Arc::new(NoCredentials),
+        Some(tx),
+    )
+    .unwrap();
+
+    gateway.agent_cancelled(json!({"requestId": "req-1"}));
+    let event = tokio::time::timeout(Duration::from_secs(1), rx.recv())
+        .await
+        .expect("cancellation event")
+        .expect("cancellation event");
+    assert!(matches!(
+        event,
+        GatewayEvent::Cancellation {
+            server_id,
+            params,
+        } if server_id == "tamtri-gateway" && params["requestId"] == "req-1"
+    ));
+}
+
+#[tokio::test]
+async fn gateway_tool_call_emits_progress_and_log() {
+    let command = env!("CARGO_BIN_EXE_mock-mcp-server");
+    let mut server = stdio_server("mock", command);
+    if let GatewayTransport::Stdio { ref mut env, .. } = server.transport {
+        env.push(("MOCK_MCP_EMIT_PROGRESS".to_string(), "1".to_string()));
+    }
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    let gateway = McpGateway::new(
+        GatewayConfig {
+            default_call_timeout_secs: 300,
+            servers: vec![server],
+        },
+        Arc::new(NoCredentials),
+        Some(tx),
+    )
+    .unwrap();
+
+    gateway
+        .call_tool("mock__echo", json!({"message": "hello"}))
+        .await
+        .unwrap();
+
+    let mut saw_progress = false;
+    let mut saw_log = false;
+    while let Ok(event) = tokio::time::timeout(Duration::from_secs(1), rx.recv()).await {
+        let Some(event) = event else { break };
+        match event {
+            GatewayEvent::Progress { params, .. } if params["message"] == "halfway" => {
+                saw_progress = true;
+            }
+            GatewayEvent::Log { params, .. } if params["data"] == "working" => {
+                saw_log = true;
+            }
+            _ => {}
+        }
+        if saw_progress && saw_log {
+            break;
+        }
+    }
+    assert!(saw_progress);
+    assert!(saw_log);
+}
+
+#[tokio::test]
 async fn gateway_list_tools_recovers_after_timeout() {
     let dir = tempfile::tempdir().expect("temp dir");
     let marker_path = dir

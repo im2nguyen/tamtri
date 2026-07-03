@@ -82,7 +82,7 @@ fn app_bridge_denied_action_not_executed() {
         r#"{"jsonrpc":"2.0","id":"9","method":"tools/call","params":{"name":"echo","arguments":{}}}"#,
     )
     .expect("rpc");
-    let (consent, mut rx) = coordinator
+    let result = coordinator
         .begin_request(
             conversation_id,
             "m7-app",
@@ -91,6 +91,14 @@ fn app_bridge_denied_action_not_executed() {
             &request,
         )
         .expect("begin");
+    let (consent, mut rx) = match result {
+        tamtri_core::mcp::app_bridge::AppBridgeBeginResult::NeedsConsent(consent, rx) => {
+            (consent, rx)
+        }
+        tamtri_core::mcp::app_bridge::AppBridgeBeginResult::AlreadyGranted(_) => {
+            panic!("expected consent prompt")
+        }
+    };
     match coordinator
         .resolve_consent(conversation_id, &consent.request_id, APP_BRIDGE_DENY)
         .expect("resolve")

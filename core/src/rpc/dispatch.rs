@@ -446,10 +446,11 @@ mod tests {
             let handle = handle.clone();
             async move {
                 handle
-                    .request("slow", None, Duration::from_millis(50))
+                    .request("slow", None, Duration::from_millis(100))
                     .await
             }
         });
+        tokio::time::sleep(Duration::from_millis(150)).await;
         assert!(matches!(
             first.await.unwrap(),
             Err(CoreError::Timeout { method }) if method == "slow"

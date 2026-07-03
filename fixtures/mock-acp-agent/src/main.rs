@@ -56,6 +56,16 @@ fn main() {
                         .and_then(Value::as_array)
                         .cloned()
                         .unwrap_or_default();
+                    if let Some(cwd_path) = cwd.as_deref() {
+                        let _ = std::fs::create_dir_all(cwd_path);
+                        let marker =
+                            std::path::Path::new(cwd_path).join(".session-mcp-servers.json");
+                        let _ = std::fs::write(
+                            marker,
+                            serde_json::to_string(&mcp_servers)
+                                .unwrap_or_else(|_| "[]".to_string()),
+                        );
+                    }
                     write_msg(
                         &mut stdout,
                         json!({

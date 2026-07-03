@@ -85,6 +85,9 @@ fn main() {
                         .pointer("/params/arguments")
                         .cloned()
                         .unwrap_or_else(|| json!({}));
+                    if should_emit_progress() {
+                        emit_progress_and_log(&mut stdout);
+                    }
                     response(
                         &message,
                         json!({
@@ -95,17 +98,37 @@ fn main() {
                     )
                 }
             }
-            Some("resources/list") => response(
-                &message,
-                json!({
-                    "resources": [{
-                        "uri": "mock://report",
-                        "name": "Report",
-                        "description": "A mock resource",
-                        "mimeType": "text/plain"
-                    }]
-                }),
-            ),
+            Some("resources/list") => {
+                let cursor = message
+                    .pointer("/params/cursor")
+                    .and_then(Value::as_str);
+                if cursor == Some("page2") {
+                    response(
+                        &message,
+                        json!({
+                            "resources": [{
+                                "uri": "mock://appendix",
+                                "name": "Appendix",
+                                "description": "Second page resource",
+                                "mimeType": "text/plain"
+                            }]
+                        }),
+                    )
+                } else {
+                    response(
+                        &message,
+                        json!({
+                            "resources": [{
+                                "uri": "mock://report",
+                                "name": "Report",
+                                "description": "A mock resource",
+                                "mimeType": "text/plain"
+                            }],
+                            "nextCursor": "page2"
+                        }),
+                    )
+                }
+            }
             Some("resources/read") => response(
                 &message,
                 json!({
@@ -116,16 +139,35 @@ fn main() {
                     }]
                 }),
             ),
-            Some("prompts/list") => response(
-                &message,
-                json!({
-                    "prompts": [{
-                        "name": "summarize",
-                        "description": "Summarize something",
-                        "arguments": [{"name": "topic", "required": true}]
-                    }]
-                }),
-            ),
+            Some("prompts/list") => {
+                let cursor = message
+                    .pointer("/params/cursor")
+                    .and_then(Value::as_str);
+                if cursor == Some("page2") {
+                    response(
+                        &message,
+                        json!({
+                            "prompts": [{
+                                "name": "outline",
+                                "description": "Outline something",
+                                "arguments": [{"name": "topic", "required": true}]
+                            }]
+                        }),
+                    )
+                } else {
+                    response(
+                        &message,
+                        json!({
+                            "prompts": [{
+                                "name": "summarize",
+                                "description": "Summarize something",
+                                "arguments": [{"name": "topic", "required": true}]
+                            }],
+                            "nextCursor": "page2"
+                        }),
+                    )
+                }
+            }
             Some("prompts/get") => response(
                 &message,
                 json!({
@@ -238,6 +280,31 @@ fn elicit_url_then_echo(stdout: &mut io::Stdout, input: &mut impl BufRead) -> Re
         "isError": false,
         "structuredContent": {"elicitation": action}
     }))
+}
+
+fn should_emit_progress() -> bool {
+    std::env::var("MOCK_MCP_EMIT_PROGRESS")
+        .ok()
+        .is_some_and(|value| value == "1")
+}
+
+fn emit_progress_and_log(stdout: &mut io::Stdout) {
+    for notification in [
+        json!({
+            "jsonrpc": "2.0",
+            "method": "notifications/progress",
+            "params": {"progress": 0.5, "message": "halfway"}
+        }),
+        json!({
+            "jsonrpc": "2.0",
+            "method": "notifications/message",
+            "params": {"level": "info", "data": "working"}
+        }),
+    ] {
+        let _ = serde_json::to_writer(&mut *stdout, &notification);
+        let _ = writeln!(stdout);
+        let _ = stdout.flush();
+    }
 }
 
 fn should_hang_on_list() -> bool {

@@ -78,6 +78,32 @@ final class Milestone7StateTests: XCTestCase {
         XCTAssertTrue(root.bookmarkMissing)
     }
 
+    func testLiveEventGroupingNestsTaskUnderToolCall() {
+        let events = [
+            IdentifiedCoreEvent(
+                id: 0,
+                event: CoreEvent(
+                    conversationId: "c1",
+                    kind: "tool_call_started",
+                    payloadJSON: #"{"id":"tool-2","name":"run_task"}"#
+                )
+            ),
+            IdentifiedCoreEvent(
+                id: 1,
+                event: CoreEvent(
+                    conversationId: "c1",
+                    kind: "task_started",
+                    payloadJSON: #"{"type":"task_started","state":{"taskId":"task-1","serverId":"tasks","status":"running","originToolCallId":"tool-2"}}"#
+                )
+            ),
+        ]
+
+        let groups = LiveEventGrouping.build(from: events)
+        XCTAssertEqual(groups.count, 1)
+        XCTAssertEqual(groups[0].nested.count, 1)
+        XCTAssertEqual(groups[0].nested[0].kind, "task_started")
+    }
+
     func testLiveEventGroupingNestsAppUnderToolCall() {
         let events = [
             IdentifiedCoreEvent(
