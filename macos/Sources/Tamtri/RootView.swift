@@ -21,6 +21,12 @@ struct RootView: View {
         .sheet(isPresented: $store.showForkConversation) {
             ForkConversationView()
         }
+        .sheet(isPresented: $store.showHarnessHealth) {
+            HarnessHealthView()
+        }
+        .sheet(isPresented: $store.showSearch) {
+            SearchView()
+        }
         .sheet(isPresented: $store.showConversationRoots) {
             if let conversation = store.displayedConversation {
                 NavigationStack {
@@ -40,9 +46,34 @@ struct RootView: View {
             Button("OK") {
                 store.errorMessage = nil
             }
+            if store.errorMessage?.localizedCaseInsensitiveContains("unknown harness") == true
+                || store.errorMessage?.localizedCaseInsensitiveContains("unknown acp agent") == true {
+                Button("Open Harness Health") {
+                    store.errorMessage = nil
+                    store.showHarnessHealth = true
+                }
+            }
         } message: {
             Text(store.errorMessage ?? "")
         }
+        .alert("Import complete", isPresented: importSummaryPresented) {
+            Button("OK") {
+                store.importSummaryMessage = nil
+            }
+        } message: {
+            Text(store.importSummaryMessage ?? "")
+        }
+    }
+
+    private var importSummaryPresented: Binding<Bool> {
+        Binding(
+            get: { store.importSummaryMessage != nil },
+            set: { isPresented in
+                if !isPresented {
+                    store.importSummaryMessage = nil
+                }
+            }
+        )
     }
 
     private var errorPresented: Binding<Bool> {
@@ -86,6 +117,12 @@ struct SidebarView: View {
             } label: {
                 Label("Settings", systemImage: "gearshape")
             }
+            Button {
+                store.showSearch = true
+            } label: {
+                Label("Search", systemImage: "magnifyingglass")
+            }
+            .keyboardShortcut("f", modifiers: [.command])
             Button {
                 store.showNewConversation = true
             } label: {
@@ -243,6 +280,20 @@ struct ConversationHeader: View {
                 }
                 .labelStyle(.iconOnly)
                 .help("Fork into another harness or model")
+                Button {
+                    store.exportSelectedConversation()
+                } label: {
+                    Label("Export", systemImage: "square.and.arrow.up")
+                }
+                .labelStyle(.iconOnly)
+                .help("Export .tamtri bundle")
+                Button {
+                    store.importConversationBundle()
+                } label: {
+                    Label("Import", systemImage: "square.and.arrow.down")
+                }
+                .labelStyle(.iconOnly)
+                .help("Import conversation bundle or folder")
             }
             HStack {
                 Text(conversation.harnessId ?? "No harness")
@@ -712,6 +763,10 @@ struct ArtifactCard: View {
     @State private var verifiedNonPreviewable = false
     @State private var loadError: String?
 
+    private var integrityFailed: Bool {
+        block.integrityFailed == true || loadError != nil
+    }
+
     var body: some View {
         CompactCard(title: block.path ?? "Artifact", systemImage: "doc.richtext") {
             VStack(alignment: .leading, spacing: 8) {
@@ -754,7 +809,7 @@ struct ArtifactCard: View {
                     preview(for: verifiedText)
                 } else if verifiedNonPreviewable {
                     TypedFileCard(path: block.path, mimeType: block.mimeType, size: block.size)
-                } else if loadError != nil {
+                } else if integrityFailed {
                     integrityFailedCard
                 } else if block.inline != nil || hasVerifiedAttachmentMetadata {
                     ProgressView()
@@ -786,13 +841,13 @@ struct ArtifactCard: View {
         artifactCardAccessibilityLabel(
             path: block.path,
             mimeType: block.mimeType,
-            integrityFailed: loadError != nil
+            integrityFailed: integrityFailed
         )
     }
 
     private var artifactAccessibilityValue: String {
         artifactCardAccessibilityValue(
-            integrityFailed: loadError != nil,
+            integrityFailed: integrityFailed,
             size: block.size,
             previewLoaded: verifiedInline != nil || verifiedText != nil,
             imageLoaded: verifiedImage != nil,
@@ -805,7 +860,7 @@ struct ArtifactCard: View {
     private func preview(for content: String) -> some View {
         if artifactShouldUseWebViewPreview(
             mimeType: block.mimeType,
-            integrityFailed: loadError != nil,
+            integrityFailed: integrityFailed,
             hasVerifiedContent: true
         ) {
             SandboxedHTMLView(html: content, onBlockedNavigation: logBlockedNavigation)
@@ -838,6 +893,10 @@ struct ArtifactCard: View {
     }
 
     private func loadVerifiedContent() async {
+        if block.integrityFailed == true {
+            loadError = "Integrity check failed"
+            return
+        }
         guard verifiedInline == nil,
               verifiedText == nil,
               verifiedImage == nil,
@@ -2038,6 +2097,11 @@ struct SettingsView: View {
                 Text("Settings")
                     .font(.title2.bold())
                 Spacer()
+                Button {
+                    store.showHarnessHealth = true
+                } label: {
+                    Label("Harness health", systemImage: "heart.text.square")
+                }
                 Button {
                     store.refreshGatewayCapabilities()
                 } label: {

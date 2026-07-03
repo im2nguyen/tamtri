@@ -248,6 +248,51 @@ actor TamtriBindingClient: CoreClient {
         return OAuthCompletion(serverId: dto.serverId, oauthStatus: dto.oauthStatus)
     }
 
+    func exportConversationBundle(conversationId: String, destPath: String) async throws {
+        try core.exportConversationBundle(conversationId: conversationId, destPath: destPath)
+    }
+
+    func importBundleOrFolder(sourcePath: String) async throws -> ImportResultRecord {
+        let result = try core.importBundleOrFolderAsNew(sourcePath: sourcePath)
+        return ImportResultRecord(
+            conversation: record(from: result.conversation),
+            warnings: result.warnings.map {
+                ImportWarningRecord(kind: $0.kind, detail: $0.detail)
+            }
+        )
+    }
+
+    func searchConversations(query: String) async throws -> [SearchHitRecord] {
+        try core.searchConversations(query: query).map {
+            SearchHitRecord(
+                conversationId: $0.conversationId,
+                title: $0.title,
+                snippet: $0.snippet,
+                matchField: $0.matchField
+            )
+        }
+    }
+
+    func searchScopeMessage() async -> String {
+        core.searchScopeMessage()
+    }
+
+    func listHarnessHealth() async throws -> [HarnessHealthRecord] {
+        try core.listHarnessHealth().map {
+            HarnessHealthRecord(
+                id: $0.id,
+                displayName: $0.displayName,
+                command: $0.command,
+                status: $0.status,
+                installDocURL: $0.installDocUrl
+            )
+        }
+    }
+
+    func harnessHealthChecklist() async throws -> String {
+        try core.harnessHealthChecklist()
+    }
+
     nonisolated private func registerDevelopmentAgentsIfPresent() throws {
         if let command = mockAgentPath() {
             try core.registerAcpAgent(

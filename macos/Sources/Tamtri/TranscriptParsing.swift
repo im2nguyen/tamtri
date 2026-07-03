@@ -50,6 +50,7 @@ struct TranscriptContentBlock: Decodable, Equatable {
     let size: UInt64?
     let sha256: String?
     let inline: String?
+    let integrityFailed: Bool?
 
     let requestId: String?
     let serverId: String?
@@ -82,6 +83,7 @@ struct TranscriptContentBlock: Decodable, Equatable {
         case size
         case sha256
         case inline
+        case integrityFailed = "integrity_failed"
         case requestId = "request_id"
         case serverId = "server_id"
         case originToolCallId = "origin_tool_call_id"

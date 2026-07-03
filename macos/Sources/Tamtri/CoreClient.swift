@@ -113,6 +113,32 @@ struct HarnessAgentRecord: Identifiable, Equatable {
     let displayName: String
 }
 
+struct HarnessHealthRecord: Identifiable, Equatable {
+    let id: String
+    let displayName: String
+    let command: String
+    let status: String
+    let installDocURL: String
+}
+
+struct SearchHitRecord: Identifiable, Equatable {
+    var id: String { "\(conversationId)-\(matchField)-\(snippet.hashValue)" }
+    let conversationId: String
+    let title: String
+    let snippet: String
+    let matchField: String
+}
+
+struct ImportWarningRecord: Equatable {
+    let kind: String
+    let detail: String
+}
+
+struct ImportResultRecord: Equatable {
+    let conversation: ConversationRecord
+    let warnings: [ImportWarningRecord]
+}
+
 struct ModelInfoRecord: Identifiable, Equatable {
     let id: String
     let displayName: String
@@ -167,6 +193,12 @@ protocol CoreClient: Sendable {
     func exportGatewayCredential(credentialRef: String) async throws -> String?
     func startOAuthFlow(serverId: String, redirectURI: String) async throws -> OAuthHandoff
     func completeOAuthCallback(callbackURL: String) async throws -> OAuthCompletion
+    func exportConversationBundle(conversationId: String, destPath: String) async throws
+    func importBundleOrFolder(sourcePath: String) async throws -> ImportResultRecord
+    func searchConversations(query: String) async throws -> [SearchHitRecord]
+    func searchScopeMessage() async -> String
+    func listHarnessHealth() async throws -> [HarnessHealthRecord]
+    func harnessHealthChecklist() async throws -> String
 }
 
 struct OAuthHandoff: Equatable {
@@ -371,5 +403,47 @@ actor MockCoreClient: CoreClient {
     }
     func completeOAuthCallback(callbackURL: String) async throws -> OAuthCompletion {
         OAuthCompletion(serverId: "mock", oauthStatus: "connected")
+    }
+
+    func exportConversationBundle(conversationId: String, destPath: String) async throws {}
+
+    func importBundleOrFolder(sourcePath: String) async throws -> ImportResultRecord {
+        ImportResultRecord(
+            conversation: conversations[0],
+            warnings: []
+        )
+    }
+
+    func searchConversations(query: String) async throws -> [SearchHitRecord] {
+        conversations
+            .filter { $0.title.localizedCaseInsensitiveContains(query) }
+            .map {
+                SearchHitRecord(
+                    conversationId: $0.id,
+                    title: $0.title,
+                    snippet: $0.title,
+                    matchField: "title"
+                )
+            }
+    }
+
+    func searchScopeMessage() async -> String {
+        "Search covers conversation titles plus Text and Thinking blocks only."
+    }
+
+    func listHarnessHealth() async throws -> [HarnessHealthRecord] {
+        [
+            HarnessHealthRecord(
+                id: "mock-acp",
+                displayName: "Mock ACP",
+                command: "mock-acp-agent",
+                status: "ready",
+                installDocURL: "https://github.com/tamtri/tamtri"
+            )
+        ]
+    }
+
+    func harnessHealthChecklist() async throws -> String {
+        "tamtri harness setup checklist\n\n- Mock ACP (mock-acp) — status: ready"
     }
 }

@@ -32,6 +32,7 @@ extension TranscriptContentBlock {
             size: size,
             sha256: sha256,
             inline: nil,
+            integrityFailed: nil,
             requestId: nil,
             serverId: serverId,
             originToolCallId: originToolCallId,

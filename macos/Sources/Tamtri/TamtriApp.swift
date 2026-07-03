@@ -19,6 +19,7 @@ struct TamtriApp: App {
                     await store.refresh()
                     await store.refreshGatewayServers()
                     await store.refreshHarnessAgents()
+                    await store.evaluateFirstRunHarnessHealth()
                 }
                 .onAppear {
                     appDelegate.onTerminate = {
@@ -32,6 +33,15 @@ struct TamtriApp: App {
                     store.showNewConversation = true
                 }
                 .keyboardShortcut("n", modifiers: [.command])
+            }
+            CommandGroup(after: .toolbar) {
+                Button("Search Conversations") {
+                    store.showSearch = true
+                }
+                .keyboardShortcut("f", modifiers: [.command])
+                Button("Harness Health") {
+                    store.showHarnessHealth = true
+                }
             }
         }
     }

@@ -793,11 +793,17 @@ public protocol TamtriCoreProtocol: AnyObject, Sendable {
     
     func deleteConversation(id: String) throws 
     
+    func exportConversationBundle(conversationId: String, destPath: String) throws 
+    
     func exportGatewayCredential(credentialRef: String) throws  -> String?
     
     func forkConversation(id: String, harnessId: String, modelId: String) throws  -> ConversationDto
     
     func getGatewaySettings() throws  -> GatewaySettingsDto
+    
+    func harnessHealthChecklist() throws  -> String
+    
+    func importBundleOrFolderAsNew(sourcePath: String) throws  -> ImportResultDto
     
     func listAcpAgentModels(agentId: String) throws  -> [ModelInfoDto]
     
@@ -808,6 +814,8 @@ public protocol TamtriCoreProtocol: AnyObject, Sendable {
     func listGatewayServers() throws  -> [GatewayServerDto]
     
     func listGatewayTools() throws  -> [GatewayToolDto]
+    
+    func listHarnessHealth() throws  -> [HarnessHealthEntryDto]
     
     func listRoots(conversationId: String) throws  -> [RootDto]
     
@@ -842,6 +850,10 @@ public protocol TamtriCoreProtocol: AnyObject, Sendable {
     func respondPermission(conversationId: String, requestId: String, optionId: String) throws 
     
     func saveGatewayServers(servers: [GatewayServerDto]) throws 
+    
+    func searchConversations(query: String) throws  -> [SearchHitDto]
+    
+    func searchScopeMessage()  -> String
     
     func sendMessage(conversationId: String, text: String) throws 
     
@@ -1017,6 +1029,16 @@ open func deleteConversation(id: String)throws   {try rustCallWithError(FfiConve
 }
 }
     
+open func exportConversationBundle(conversationId: String, destPath: String)throws   {try rustCallWithError(FfiConverterTypeTamtriError_lift) {
+        uniffiCallStatus in
+    uniffi_tamtri_core_fn_method_tamtricore_export_conversation_bundle(
+            self.uniffiCloneHandle(),
+        FfiConverterString.lower(conversationId),
+        FfiConverterString.lower(destPath),uniffiCallStatus
+    )
+}
+}
+    
 open func exportGatewayCredential(credentialRef: String)throws  -> String?  {
     return try  FfiConverterOptionString.lift(try rustCallWithError(FfiConverterTypeTamtriError_lift) {
         uniffiCallStatus in
@@ -1044,6 +1066,25 @@ open func getGatewaySettings()throws  -> GatewaySettingsDto  {
         uniffiCallStatus in
     uniffi_tamtri_core_fn_method_tamtricore_get_gateway_settings(
             self.uniffiCloneHandle(),uniffiCallStatus
+    )
+})
+}
+    
+open func harnessHealthChecklist()throws  -> String  {
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeTamtriError_lift) {
+        uniffiCallStatus in
+    uniffi_tamtri_core_fn_method_tamtricore_harness_health_checklist(
+            self.uniffiCloneHandle(),uniffiCallStatus
+    )
+})
+}
+    
+open func importBundleOrFolderAsNew(sourcePath: String)throws  -> ImportResultDto  {
+    return try  FfiConverterTypeImportResultDto_lift(try rustCallWithError(FfiConverterTypeTamtriError_lift) {
+        uniffiCallStatus in
+    uniffi_tamtri_core_fn_method_tamtricore_import_bundle_or_folder_as_new(
+            self.uniffiCloneHandle(),
+        FfiConverterString.lower(sourcePath),uniffiCallStatus
     )
 })
 }
@@ -1089,6 +1130,15 @@ open func listGatewayTools()throws  -> [GatewayToolDto]  {
     return try  FfiConverterSequenceTypeGatewayToolDto.lift(try rustCallWithError(FfiConverterTypeTamtriError_lift) {
         uniffiCallStatus in
     uniffi_tamtri_core_fn_method_tamtricore_list_gateway_tools(
+            self.uniffiCloneHandle(),uniffiCallStatus
+    )
+})
+}
+    
+open func listHarnessHealth()throws  -> [HarnessHealthEntryDto]  {
+    return try  FfiConverterSequenceTypeHarnessHealthEntryDto.lift(try rustCallWithError(FfiConverterTypeTamtriError_lift) {
+        uniffiCallStatus in
+    uniffi_tamtri_core_fn_method_tamtricore_list_harness_health(
             self.uniffiCloneHandle(),uniffiCallStatus
     )
 })
@@ -1275,6 +1325,25 @@ open func saveGatewayServers(servers: [GatewayServerDto])throws   {try rustCallW
         FfiConverterSequenceTypeGatewayServerDto.lower(servers),uniffiCallStatus
     )
 }
+}
+    
+open func searchConversations(query: String)throws  -> [SearchHitDto]  {
+    return try  FfiConverterSequenceTypeSearchHitDto.lift(try rustCallWithError(FfiConverterTypeTamtriError_lift) {
+        uniffiCallStatus in
+    uniffi_tamtri_core_fn_method_tamtricore_search_conversations(
+            self.uniffiCloneHandle(),
+        FfiConverterString.lower(query),uniffiCallStatus
+    )
+})
+}
+    
+open func searchScopeMessage() -> String  {
+    return try!  FfiConverterString.lift(try! rustCall() {
+        uniffiCallStatus in
+    uniffi_tamtri_core_fn_method_tamtricore_search_scope_message(
+            self.uniffiCloneHandle(),uniffiCallStatus
+    )
+})
 }
     
 open func sendMessage(conversationId: String, text: String)throws   {try rustCallWithError(FfiConverterTypeTamtriError_lift) {
@@ -2043,6 +2112,180 @@ public func FfiConverterTypeGatewayToolDto_lower(_ value: GatewayToolDto) -> Rus
 }
 
 
+public struct HarnessHealthEntryDto: Equatable, Hashable {
+    public var id: String
+    public var displayName: String
+    public var command: String
+    public var status: String
+    public var installDocUrl: String
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(id: String, displayName: String, command: String, status: String, installDocUrl: String) {
+        self.id = id
+        self.displayName = displayName
+        self.command = command
+        self.status = status
+        self.installDocUrl = installDocUrl
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension HarnessHealthEntryDto: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeHarnessHealthEntryDto: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> HarnessHealthEntryDto {
+        return
+            try HarnessHealthEntryDto(
+                id: FfiConverterString.read(from: &buf), 
+                displayName: FfiConverterString.read(from: &buf), 
+                command: FfiConverterString.read(from: &buf), 
+                status: FfiConverterString.read(from: &buf), 
+                installDocUrl: FfiConverterString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: HarnessHealthEntryDto, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.id, into: &buf)
+        FfiConverterString.write(value.displayName, into: &buf)
+        FfiConverterString.write(value.command, into: &buf)
+        FfiConverterString.write(value.status, into: &buf)
+        FfiConverterString.write(value.installDocUrl, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeHarnessHealthEntryDto_lift(_ buf: RustBuffer) throws -> HarnessHealthEntryDto {
+    return try FfiConverterTypeHarnessHealthEntryDto.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeHarnessHealthEntryDto_lower(_ value: HarnessHealthEntryDto) -> RustBuffer {
+    return FfiConverterTypeHarnessHealthEntryDto.lower(value)
+}
+
+
+public struct ImportResultDto: Equatable, Hashable {
+    public var conversation: ConversationDto
+    public var warnings: [ImportWarningDto]
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(conversation: ConversationDto, warnings: [ImportWarningDto]) {
+        self.conversation = conversation
+        self.warnings = warnings
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension ImportResultDto: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeImportResultDto: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ImportResultDto {
+        return
+            try ImportResultDto(
+                conversation: FfiConverterTypeConversationDto.read(from: &buf), 
+                warnings: FfiConverterSequenceTypeImportWarningDto.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: ImportResultDto, into buf: inout [UInt8]) {
+        FfiConverterTypeConversationDto.write(value.conversation, into: &buf)
+        FfiConverterSequenceTypeImportWarningDto.write(value.warnings, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeImportResultDto_lift(_ buf: RustBuffer) throws -> ImportResultDto {
+    return try FfiConverterTypeImportResultDto.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeImportResultDto_lower(_ value: ImportResultDto) -> RustBuffer {
+    return FfiConverterTypeImportResultDto.lower(value)
+}
+
+
+public struct ImportWarningDto: Equatable, Hashable {
+    public var kind: String
+    public var detail: String
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(kind: String, detail: String) {
+        self.kind = kind
+        self.detail = detail
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension ImportWarningDto: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeImportWarningDto: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ImportWarningDto {
+        return
+            try ImportWarningDto(
+                kind: FfiConverterString.read(from: &buf), 
+                detail: FfiConverterString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: ImportWarningDto, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.kind, into: &buf)
+        FfiConverterString.write(value.detail, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeImportWarningDto_lift(_ buf: RustBuffer) throws -> ImportWarningDto {
+    return try FfiConverterTypeImportWarningDto.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeImportWarningDto_lower(_ value: ImportWarningDto) -> RustBuffer {
+    return FfiConverterTypeImportWarningDto.lower(value)
+}
+
+
 public struct ModelInfoDto: Equatable, Hashable {
     public var id: String
     public var displayName: String
@@ -2276,6 +2519,68 @@ public func FfiConverterTypeRootDto_lift(_ buf: RustBuffer) throws -> RootDto {
 #endif
 public func FfiConverterTypeRootDto_lower(_ value: RootDto) -> RustBuffer {
     return FfiConverterTypeRootDto.lower(value)
+}
+
+
+public struct SearchHitDto: Equatable, Hashable {
+    public var conversationId: String
+    public var title: String
+    public var snippet: String
+    public var matchField: String
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(conversationId: String, title: String, snippet: String, matchField: String) {
+        self.conversationId = conversationId
+        self.title = title
+        self.snippet = snippet
+        self.matchField = matchField
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension SearchHitDto: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeSearchHitDto: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SearchHitDto {
+        return
+            try SearchHitDto(
+                conversationId: FfiConverterString.read(from: &buf), 
+                title: FfiConverterString.read(from: &buf), 
+                snippet: FfiConverterString.read(from: &buf), 
+                matchField: FfiConverterString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: SearchHitDto, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.conversationId, into: &buf)
+        FfiConverterString.write(value.title, into: &buf)
+        FfiConverterString.write(value.snippet, into: &buf)
+        FfiConverterString.write(value.matchField, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeSearchHitDto_lift(_ buf: RustBuffer) throws -> SearchHitDto {
+    return try FfiConverterTypeSearchHitDto.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeSearchHitDto_lower(_ value: SearchHitDto) -> RustBuffer {
+    return FfiConverterTypeSearchHitDto.lower(value)
 }
 
 
@@ -2752,6 +3057,56 @@ fileprivate struct FfiConverterSequenceTypeGatewayToolDto: FfiConverterRustBuffe
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterSequenceTypeHarnessHealthEntryDto: FfiConverterRustBuffer {
+    typealias SwiftType = [HarnessHealthEntryDto]
+
+    public static func write(_ value: [HarnessHealthEntryDto], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeHarnessHealthEntryDto.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [HarnessHealthEntryDto] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [HarnessHealthEntryDto]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeHarnessHealthEntryDto.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterSequenceTypeImportWarningDto: FfiConverterRustBuffer {
+    typealias SwiftType = [ImportWarningDto]
+
+    public static func write(_ value: [ImportWarningDto], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeImportWarningDto.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [ImportWarningDto] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [ImportWarningDto]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeImportWarningDto.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterSequenceTypeModelInfoDto: FfiConverterRustBuffer {
     typealias SwiftType = [ModelInfoDto]
 
@@ -2794,6 +3149,31 @@ fileprivate struct FfiConverterSequenceTypeRootDto: FfiConverterRustBuffer {
         seq.reserveCapacity(Int(len))
         for _ in 0 ..< len {
             seq.append(try FfiConverterTypeRootDto.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterSequenceTypeSearchHitDto: FfiConverterRustBuffer {
+    typealias SwiftType = [SearchHitDto]
+
+    public static func write(_ value: [SearchHitDto], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeSearchHitDto.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [SearchHitDto] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [SearchHitDto]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeSearchHitDto.read(from: &buf))
         }
         return seq
     }
@@ -2869,6 +3249,9 @@ private let initializationResult: InitializationResult = {
     if (uniffi_tamtri_core_checksum_method_tamtricore_delete_conversation() != 29140) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_tamtri_core_checksum_method_tamtricore_export_conversation_bundle() != 45604) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_tamtri_core_checksum_method_tamtricore_export_gateway_credential() != 22588) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -2876,6 +3259,12 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_tamtri_core_checksum_method_tamtricore_get_gateway_settings() != 50417) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tamtri_core_checksum_method_tamtricore_harness_health_checklist() != 10812) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tamtri_core_checksum_method_tamtricore_import_bundle_or_folder_as_new() != 30909) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_tamtri_core_checksum_method_tamtricore_list_acp_agent_models() != 46806) {
@@ -2891,6 +3280,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_tamtri_core_checksum_method_tamtricore_list_gateway_tools() != 7818) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tamtri_core_checksum_method_tamtricore_list_harness_health() != 31195) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_tamtri_core_checksum_method_tamtricore_list_roots() != 10237) {
@@ -2942,6 +3334,12 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_tamtri_core_checksum_method_tamtricore_save_gateway_servers() != 37491) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tamtri_core_checksum_method_tamtricore_search_conversations() != 32768) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tamtri_core_checksum_method_tamtricore_search_scope_message() != 56178) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_tamtri_core_checksum_method_tamtricore_send_message() != 22856) {

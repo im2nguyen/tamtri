@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import UniformTypeIdentifiers
 
 @MainActor
 final class AppStore: ObservableObject {
@@ -27,7 +28,18 @@ final class AppStore: ObservableObject {
     @Published var bridgeDelivery: BridgeDelivery?
     @Published var liveTaskStates: [String: LiveTaskState] = [:]
     @Published var showConversationRoots = false
+    @Published var showHarnessHealth = false
+    @Published var showSearch = false
+    @Published var harnessHealthEntries: [HarnessHealthRecord] = []
+    @Published var searchQuery = ""
+    @Published var searchResults: [SearchHitRecord] = []
+    @Published var searchScopeMessage = ""
+    @Published var importSummaryMessage: String?
     @Published private(set) var isRunActive = false
+
+    var hasReadyHarness: Bool {
+        harnessHealthEntries.contains { $0.status == "ready" }
+    }
 
     private let core: CoreClient
     private var conversationCache: [String: ConversationRecord] = [:]
@@ -635,8 +647,121 @@ final class AppStore: ObservableObject {
     func refreshHarnessAgents() async {
         do {
             harnessAgents = try await core.listAcpAgents()
+            await refreshHarnessHealth()
         } catch {
-            errorMessage = error.localizedDescription
+            presentError(error)
+        }
+    }
+
+    func refreshHarnessHealth() async {
+        do {
+            harnessHealthEntries = try await core.listHarnessHealth()
+        } catch {
+            presentError(error)
+        }
+    }
+
+    func harnessHealthChecklist() async -> String {
+        do {
+            return try await core.harnessHealthChecklist()
+        } catch {
+            presentError(error)
+            return ""
+        }
+    }
+
+    func evaluateFirstRunHarnessHealth() async {
+        await refreshHarnessHealth()
+        if !hasReadyHarness {
+            showHarnessHealth = true
+        }
+    }
+
+    func loadSearchScopeMessage() async {
+        searchScopeMessage = await core.searchScopeMessage()
+    }
+
+    func runSearch() {
+        Task {
+            do {
+                searchResults = try await core.searchConversations(query: searchQuery)
+                if searchScopeMessage.isEmpty {
+                    await loadSearchScopeMessage()
+                }
+            } catch {
+                presentError(error)
+            }
+        }
+    }
+
+    func selectSearchHit(_ hit: SearchHitRecord) {
+        if let summary = conversations.first(where: { $0.id == hit.conversationId }) {
+            selectConversation(summary)
+        } else {
+            selectedConversationId = hit.conversationId
+            Task { await refresh() }
+        }
+    }
+
+    func exportSelectedConversation() {
+        guard let conversationId = selectedConversationId else { return }
+        let panel = NSSavePanel()
+        if let tamtriType = UTType(filenameExtension: "tamtri") {
+            panel.allowedContentTypes = [tamtriType]
+        }
+        panel.nameFieldStringValue = "\(displayedConversation?.title ?? "conversation").tamtri"
+        panel.begin { response in
+            guard response == .OK, let url = panel.url else { return }
+            Task {
+                do {
+                    try await self.core.exportConversationBundle(
+                        conversationId: conversationId,
+                        destPath: url.path
+                    )
+                } catch {
+                    await MainActor.run { self.presentError(error) }
+                }
+            }
+        }
+    }
+
+    func importConversationBundle() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        if let tamtriType = UTType(filenameExtension: "tamtri") {
+            panel.allowedContentTypes = [tamtriType, .folder]
+        }
+        panel.begin { response in
+            guard response == .OK, let url = panel.url else { return }
+            Task {
+                do {
+                    let result = try await self.core.importBundleOrFolder(sourcePath: url.path)
+                    await self.refresh()
+                    self.selectedConversationId = result.conversation.id
+                    self.selectedConversation = result.conversation
+                    self.conversationCache[result.conversation.id] = result.conversation
+                    if result.warnings.isEmpty {
+                        self.importSummaryMessage = "Imported \"\(result.conversation.title)\" with no warnings."
+                    } else {
+                        let lines = result.warnings.map { "• \($0.detail)" }.joined(separator: "\n")
+                        self.importSummaryMessage =
+                            "Imported \"\(result.conversation.title)\" with \(result.warnings.count) warning(s):\n\(lines)"
+                    }
+                } catch {
+                    await MainActor.run { self.presentError(error) }
+                }
+            }
+        }
+    }
+
+    private func presentError(_ error: Error) {
+        let message = error.localizedDescription
+        errorMessage = message
+        if message.localizedCaseInsensitiveContains("unknown harness")
+            || message.localizedCaseInsensitiveContains("unknown acp agent") {
+            showHarnessHealth = true
         }
     }
 
