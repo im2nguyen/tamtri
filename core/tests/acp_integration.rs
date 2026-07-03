@@ -421,7 +421,7 @@ fn gateway_mock_server(command: &str) -> tamtri_core::config::GatewayServerConfi
 
 #[tokio::test]
 #[ignore = "requires a locally installed real ACP agent; set TAMTRI_REAL_ACP_COMMAND and optional TAMTRI_REAL_ACP_ARGS"]
-async fn hermes_acp_smoke() {
+async fn integration_real_agent() {
     let adapter = real_adapter_from_env()
         .expect("set TAMTRI_REAL_ACP_COMMAND, for example /Users/dos/.local/bin/hermes");
     let mut turn = user_turn();

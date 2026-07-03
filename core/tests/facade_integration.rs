@@ -57,15 +57,11 @@ fn turn_commits_exactly_one_message() {
     let observer = Arc::new(RecordingObserver::default());
     let core = TamtriCore::new(temp.path().to_string_lossy().into_owned(), Arc::clone(&observer) as Arc<dyn ConversationObserver>)
         .expect("core");
-    core.register_acp_agent_with_env(
+    core.register_acp_agent(
         "mock-acp".to_string(),
         "Mock ACP".to_string(),
         env!("CARGO_BIN_EXE_mock-acp-agent").to_string(),
         Vec::new(),
-        vec![tamtri_core::app::GatewayEnvVarDto {
-            name: "MOCK_ACP_SKIP_FILE_CHANGED".to_string(),
-            value: "1".to_string(),
-        }],
     )
     .expect("agent");
     let conversation = core
@@ -113,10 +109,6 @@ fn turn_commits_exactly_one_message() {
             "missing committed block type: {expected}; got {block_types:?}"
         );
     }
-    assert!(
-        !block_types.iter().any(|kind| *kind == "artifact"),
-        "M3 turn commit should not assert artifact snapshotting"
-    );
     assert!(Path::new(temp.path()).join("conversations").exists());
 }
 
@@ -481,7 +473,7 @@ fn events_jsonl_gateway_receipts() {
     }];
     if let tamtri_core::config::GatewayTransport::Stdio { ref mut env, .. } = server.transport {
         env.push(("MOCK_MCP_EMIT_PROGRESS".to_string(), "1".to_string()));
-        env.push(("MOCK_MCP_EXIT_AFTER_FIRST_LIST".to_string(), "1".to_string()));
+        env.push(("MOCK_MCP_EXIT_AFTER_LIST_COUNT".to_string(), "3".to_string()));
     }
     tamtri_core::config::replace_gateway_servers(temp.path(), vec![server]).expect("save config");
     core.set_gateway_credential("keychain://mock".to_string(), "super-secret".to_string())
@@ -495,6 +487,10 @@ fn events_jsonl_gateway_receipts() {
         vec![
             tamtri_core::app::GatewayEnvVarDto {
                 name: "MOCK_ACP_CALL_FAIL_TOOL".to_string(),
+                value: "1".to_string(),
+            },
+            tamtri_core::app::GatewayEnvVarDto {
+                name: "MOCK_ACP_GATEWAY_RELIST".to_string(),
                 value: "1".to_string(),
             },
         ],
