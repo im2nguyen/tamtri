@@ -3,6 +3,7 @@ import SwiftUI
 
 @main
 struct TamtriApp: App {
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @StateObject private var store = AppStore(core: makeDefaultCoreClient())
 
     init() {
@@ -16,6 +17,12 @@ struct TamtriApp: App {
                 .environmentObject(store)
                 .task {
                     await store.refresh()
+                    await store.refreshGatewayServers()
+                }
+                .onAppear {
+                    appDelegate.onTerminate = {
+                        store.prepareForAppQuitSync()
+                    }
                 }
         }
         .commands {

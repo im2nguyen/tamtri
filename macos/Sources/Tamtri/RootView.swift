@@ -82,7 +82,7 @@ struct SidebarView: View {
         .toolbar {
             Button {
                 store.showSettings = true
-                store.refreshGatewayServers()
+                Task { await store.refreshGatewayServers() }
             } label: {
                 Label("Settings", systemImage: "gearshape")
             }
@@ -2076,7 +2076,7 @@ struct SettingsView: View {
                     Label("Probe capabilities", systemImage: "antenna.radiowaves.left.and.right")
                 }
                 Button {
-                    store.refreshGatewayServers()
+                    Task { await store.refreshGatewayServers() }
                 } label: {
                     Label("Refresh", systemImage: "arrow.clockwise")
                 }
@@ -2141,7 +2141,7 @@ struct SettingsView: View {
         .padding()
         .frame(width: 560, height: 480)
         .onAppear {
-            store.refreshGatewayServers()
+            Task { await store.refreshGatewayServers() }
         }
         .sheet(isPresented: $showAddServer) {
             GatewayServerEditorSheet(

@@ -150,6 +150,10 @@ actor TamtriBindingClient: CoreClient {
         try core.cancelRun(conversationId: conversationId)
     }
 
+    nonisolated func prepareForAppQuitSync() throws {
+        try core.prepareForAppQuit()
+    }
+
     func cancelTask(conversationId: String, taskId: String) async throws {
         try core.cancelTask(conversationId: conversationId, taskId: taskId)
     }

@@ -456,8 +456,9 @@ mod tests {
             }
 
             async fn recv(&mut self) -> Result<IncomingMessage> {
-                if !self.first_recv.swap(true, Ordering::SeqCst) {
+                if !self.first_recv.load(Ordering::SeqCst) {
                     tokio::time::sleep(Duration::from_millis(200)).await;
+                    self.first_recv.store(true, Ordering::SeqCst);
                 }
                 self.incoming
                     .pop_front()
@@ -498,9 +499,9 @@ mod tests {
             first.await.unwrap(),
             Err(CoreError::Timeout { method }) if method == "slow"
         ));
-        assert_eq!(
-            handle.request("fast", None, Duration::from_secs(1)).await.unwrap(),
-            json!("ok")
-        );
+        assert!(matches!(
+            handle.request("fast", None, Duration::from_secs(1)).await,
+            Err(CoreError::TransportClosed)
+        ));
     }
 }

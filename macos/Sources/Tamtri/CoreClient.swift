@@ -130,6 +130,7 @@ protocol CoreClient: Sendable {
     func respondPermission(conversationId: String, requestId: String, optionId: String) async throws
     func respondElicitation(conversationId: String, requestId: String, action: String, dataJSON: String?) async throws
     func cancelRun(conversationId: String) async throws
+    nonisolated func prepareForAppQuitSync() throws
     func cancelTask(conversationId: String, taskId: String) async throws
     func listRoots(conversationId: String) async throws -> [RootRecord]
     func attachRoot(conversationId: String, name: String, uri: String, kind: String, scope: String) async throws -> RootRecord
@@ -267,6 +268,8 @@ actor MockCoreClient: CoreClient {
     func cancelRun(conversationId: String) async throws {
         continuation.yield(CoreEvent(conversationId: conversationId, kind: "turn_ended", payloadJSON: #"{"reason":"cancelled"}"#))
     }
+
+    nonisolated func prepareForAppQuitSync() throws {}
 
     func cancelTask(conversationId: String, taskId: String) async throws {}
 

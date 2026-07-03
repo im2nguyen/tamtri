@@ -578,10 +578,8 @@ final class AppStore: ObservableObject {
         }
     }
 
-    func refreshGatewayServers() {
-        Task {
-            await reloadGatewayServers()
-        }
+    func refreshGatewayServers() async {
+        await reloadGatewayServers()
     }
 
     func refreshGatewayCapabilities() {
@@ -641,11 +639,15 @@ final class AppStore: ObservableObject {
         Task {
             do {
                 try await core.setGatewayCredential(credentialRef: credentialRef, value: value)
-                refreshGatewayServers()
+                await refreshGatewayServers()
             } catch {
                 errorMessage = error.localizedDescription
             }
         }
+    }
+
+    func prepareForAppQuitSync() {
+        try? core.prepareForAppQuitSync()
     }
 
     private var oauthListener: OAuthLoopbackListener?
@@ -662,7 +664,7 @@ final class AppStore: ObservableObject {
                         do {
                             _ = try await self.core.completeOAuthCallback(callbackURL: callbackURL)
                             self.oauthListener = nil
-                            self.refreshGatewayServers()
+                            await self.refreshGatewayServers()
                         } catch {
                             self.errorMessage = error.localizedDescription
                         }
