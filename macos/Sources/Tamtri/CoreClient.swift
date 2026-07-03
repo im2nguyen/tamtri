@@ -102,6 +102,7 @@ protocol CoreClient: Sendable {
     func createConversation(title: String, harnessId: String, modelId: String) async throws -> ConversationRecord
     func forkConversation(id: String, harnessId: String, modelId: String) async throws -> ConversationRecord
     func sendMessage(conversationId: String, text: String) async throws
+    func syncRuntimeRoots(conversationId: String, roots: [RootDto]) async throws
     func copyFileToWorkdir(conversationId: String, sourcePath: String) async throws -> String
     func listWorkdirFiles(conversationId: String) async throws -> [WorkdirFileRecord]
     func conversationWorkdirPath(conversationId: String) async throws -> String
@@ -195,6 +196,8 @@ actor MockCoreClient: CoreClient {
         continuation.yield(CoreEvent(conversationId: conversationId, kind: "text_delta", payloadJSON: #"{"text":"Thinking about it..."}"#))
         continuation.yield(CoreEvent(conversationId: conversationId, kind: "permission_requested", payloadJSON: #"{"request_id":"mock-permission","action":"edit","options":[{"id":"allow_once","label":"Allow once"},{"id":"deny","label":"Deny"}]}"#))
     }
+
+    func syncRuntimeRoots(conversationId: String, roots: [RootDto]) async throws {}
 
     func copyFileToWorkdir(conversationId: String, sourcePath: String) async throws -> String {
         URL(fileURLWithPath: sourcePath).lastPathComponent

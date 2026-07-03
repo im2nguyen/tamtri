@@ -72,6 +72,7 @@ final class AppStore: ObservableObject {
                     }
                     if event.kind == "turn_ended" {
                         self.liveTaskStates = [:]
+                        RootBookmarkAccess.endAccess(conversationId: event.conversationId)
                     }
                 }
             }
@@ -218,6 +219,9 @@ final class AppStore: ObservableObject {
         composerText = ""
         Task {
             do {
+                let roots = try await listRoots(conversationId: conversation.id)
+                let resolved = try RootBookmarkAccess.beginAccess(conversationId: conversation.id, roots: roots)
+                try await core.syncRuntimeRoots(conversationId: conversation.id, roots: resolved)
                 try await core.sendMessage(conversationId: conversation.id, text: text)
             } catch {
                 errorMessage = error.localizedDescription

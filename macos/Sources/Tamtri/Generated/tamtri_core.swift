@@ -839,6 +839,8 @@ public protocol TamtriCoreProtocol: AnyObject, Sendable {
     
     func submitAppBridgeRequest(conversationId: String, serverId: String, appId: String, templateRef: String, requestJson: String) throws  -> AppBridgeSubmissionDto
     
+    func syncRuntimeRoots(conversationId: String, roots: [RootDto]) throws 
+    
     func verifiedAttachmentPath(conversationId: String, path: String, size: UInt64, sha256: String) throws  -> String
     
     func verifyArtifactInline(size: UInt64, sha256: String, inlineContent: String) throws 
@@ -1246,6 +1248,16 @@ open func submitAppBridgeRequest(conversationId: String, serverId: String, appId
         FfiConverterString.lower(requestJson),uniffiCallStatus
     )
 })
+}
+    
+open func syncRuntimeRoots(conversationId: String, roots: [RootDto])throws   {try rustCallWithError(FfiConverterTypeTamtriError_lift) {
+        uniffiCallStatus in
+    uniffi_tamtri_core_fn_method_tamtricore_sync_runtime_roots(
+            self.uniffiCloneHandle(),
+        FfiConverterString.lower(conversationId),
+        FfiConverterSequenceTypeRootDto.lower(roots),uniffiCallStatus
+    )
+}
 }
     
 open func verifiedAttachmentPath(conversationId: String, path: String, size: UInt64, sha256: String)throws  -> String  {
@@ -2512,6 +2524,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_tamtri_core_checksum_method_tamtricore_submit_app_bridge_request() != 45041) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tamtri_core_checksum_method_tamtricore_sync_runtime_roots() != 21628) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_tamtri_core_checksum_method_tamtricore_verified_attachment_path() != 25850) {

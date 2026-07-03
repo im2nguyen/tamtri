@@ -5,7 +5,7 @@ use tamtri_core::config::{GatewayConfig, GatewayServerConfig, GatewayTransport};
 use tamtri_core::mcp::capabilities::{
     FeatureStatus, TamtriFeatureSupport, apps_available, report_from_initialize,
     server_advertises_apps, server_advertises_tasks, tasks_available,
-    upstream_gateway_capabilities_for,
+    upstream_gateway_capabilities,
 };
 use tamtri_core::mcp::gateway::{McpGateway, NoCredentials};
 use tamtri_core::mcp::client::McpClient;
@@ -122,14 +122,10 @@ fn unknown_extension_ignored_in_capability_report() {
 }
 
 #[test]
-fn upstream_gateway_does_not_advertise_rc_features() {
-    let caps = upstream_gateway_capabilities_for(TamtriFeatureSupport::milestone_7_pr1());
-    assert!(caps.tools.is_some());
-    assert!(caps.elicitation.is_some());
-    assert!(caps.sampling.is_none());
-    assert!(caps.tasks.is_none());
-    assert!(caps.roots.is_none());
-    assert!(caps.extensions.is_none());
+fn upstream_gateway_advertises_roots_when_enabled() {
+    let caps = upstream_gateway_capabilities();
+    assert!(caps.roots.is_some(), "M7 current build should advertise roots");
+    assert!(TamtriFeatureSupport::current().roots);
 }
 
 #[tokio::test]

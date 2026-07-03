@@ -54,7 +54,7 @@ impl TamtriFeatureSupport {
 
     /// Current M7 build support level.
     pub const fn current() -> Self {
-        Self::milestone_7_pr4()
+        Self::milestone_7_pr5()
     }
 }
 
@@ -311,5 +311,13 @@ mod tests {
         assert!(caps.sampling.is_none());
         assert!(caps.tools.is_some());
         assert!(caps.elicitation.is_some());
+    }
+
+    #[test]
+    fn upstream_gateway_advertises_roots_at_m7_pr5() {
+        let caps = upstream_gateway_capabilities_for(TamtriFeatureSupport::milestone_7_pr5());
+        assert!(caps.roots.is_some());
+        let caps = upstream_gateway_capabilities_for(TamtriFeatureSupport::milestone_7_pr4());
+        assert!(caps.roots.is_none());
     }
 }

@@ -128,6 +128,8 @@ interface TamtriCore {
   [Throws=TamtriError]
   void remove_root(string conversation_id, string root_id);
   [Throws=TamtriError]
+  void sync_runtime_roots(string conversation_id, sequence<RootDto> roots);
+  [Throws=TamtriError]
   sequence<GatewayServerDto> list_gateway_servers();
   [Throws=TamtriError]
   sequence<GatewayServerDto> refresh_gateway_capabilities();

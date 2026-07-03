@@ -18,8 +18,8 @@ use crate::config::{
 };
 use crate::conversation::reduce::TurnReducer;
 use crate::conversation::{
-    attach_root, remove_root, ContentBlock, Conversation, ElicitationAction, Id, McpServerRef,
-    Message, Role, Root, RootKind, RootScope, WorkingDir,
+    attach_root, remove_root, validate_root, ContentBlock, Conversation, ElicitationAction, Id,
+    McpServerRef, Message, Role, Root, RootKind, RootScope, WorkingDir,
 };
 use crate::harness::acp::{AcpAdapter, AgentLaunchSpec};
 use crate::harness::{
@@ -211,6 +211,8 @@ pub struct TamtriCore {
     pending_oauth: Arc<Mutex<HashMap<String, PendingOAuthFlow>>>,
     gateway_capability_cache: Arc<Mutex<HashMap<String, ServerCapabilityReport>>>,
     app_bridge: SharedAppBridgeCoordinator,
+    /// Shell-resolved root URIs (security-scoped bookmarks) keyed by conversation id.
+    runtime_roots: Arc<Mutex<HashMap<Id, Vec<Root>>>>,
 }
 
 const CONVERSATION_CACHE_LIMIT: usize = 32;
@@ -237,6 +239,7 @@ impl TamtriCore {
             pending_oauth: Arc::new(Mutex::new(HashMap::new())),
             gateway_capability_cache: Arc::new(Mutex::new(HashMap::new())),
             app_bridge: shared_app_bridge_coordinator(),
+            runtime_roots: Arc::new(Mutex::new(HashMap::new())),
         })
     }
 
@@ -421,6 +424,15 @@ impl TamtriCore {
 
     pub fn remove_root(&self, conversation_id: String, root_id: String) -> FfiResult<()> {
         self.remove_root_inner(&conversation_id, &root_id)
+            .map_err(ffi_err)
+    }
+
+    pub fn sync_runtime_roots(
+        &self,
+        conversation_id: String,
+        roots: Vec<RootDto>,
+    ) -> FfiResult<()> {
+        self.sync_runtime_roots_inner(&conversation_id, roots)
             .map_err(ffi_err)
     }
 
@@ -658,7 +670,11 @@ impl TamtriCore {
             Some(gateway_event_tx),
         )?);
         self.runtime
-            .block_on(gateway.set_roots(conversation.roots.clone()));
+            .block_on(gateway.set_roots(roots_for_gateway(
+                &self.runtime_roots,
+                id,
+                &conversation.roots,
+            )));
         let gateway_endpoint = self
             .runtime
             .block_on(start_loopback_gateway(Arc::clone(&gateway)))?;
@@ -696,6 +712,7 @@ impl TamtriCore {
         let conversation_cache = Arc::clone(&self.conversation_cache);
         let gateway_blocks = Arc::new(Mutex::new(Vec::<ContentBlock>::new()));
         let gateway_for_run = Arc::clone(&gateway);
+        let runtime_roots = Arc::clone(&self.runtime_roots);
         self.runtime.spawn(async move {
             let gateway_vault = Arc::clone(&vault);
             let gateway_observer = Arc::clone(&observer);
@@ -804,6 +821,9 @@ impl TamtriCore {
                     }
                     if let Ok(mut runs) = active_runs.lock() {
                         runs.remove(&id);
+                    }
+                    if let Ok(mut roots) = runtime_roots.lock() {
+                        roots.remove(&id);
                     }
                 }
                 Err(err) => {
@@ -1250,6 +1270,26 @@ impl TamtriCore {
         remove_root(&mut conversation, root_id)?;
         self.vault.save_meta(&conversation)?;
         self.invalidate_conversation_cache(id);
+        Ok(())
+    }
+
+    pub fn sync_runtime_roots_inner(
+        &self,
+        conversation_id: &str,
+        roots: Vec<RootDto>,
+    ) -> Result<()> {
+        let id = parse_id(conversation_id)?;
+        let roots: Vec<Root> = roots
+            .into_iter()
+            .map(|dto| root_from_dto(&dto))
+            .collect::<Result<_>>()?;
+        for root in &roots {
+            validate_root(root)?;
+        }
+        self.runtime_roots
+            .lock()
+            .map_err(|_| CoreError::Protocol("runtime roots lock poisoned".to_string()))?
+            .insert(id, roots);
         Ok(())
     }
 
@@ -1716,6 +1756,8 @@ fn record_gateway_content_block(blocks: &Mutex<Vec<ContentBlock>>, event: &Gatew
             blocks.push(ContentBlock::TaskRef {
                 task_id: state.task_id.clone(),
                 status: state.status.clone(),
+                title: state.title.clone(),
+                result_summary: state.result.as_ref().map(summarize_task_result),
             });
         }
         _ => {}
@@ -2134,6 +2176,65 @@ fn root_to_dto(root: &Root) -> RootDto {
         uri: root.uri.clone(),
         kind: root_kind_label(&root.kind).to_string(),
         scope: root_scope_label(&root.scope).to_string(),
+    }
+}
+
+fn root_from_dto(dto: &RootDto) -> Result<Root> {
+    Ok(Root {
+        id: dto.id.clone(),
+        name: dto.name.clone(),
+        uri: dto.uri.clone(),
+        kind: parse_root_kind(&dto.kind)?,
+        scope: parse_root_scope(&dto.scope)?,
+    })
+}
+
+fn roots_for_gateway(
+    runtime_roots: &Mutex<HashMap<Id, Vec<Root>>>,
+    conversation_id: Id,
+    stored: &[Root],
+) -> Vec<Root> {
+    let Ok(overrides) = runtime_roots.lock() else {
+        return stored.to_vec();
+    };
+    let Some(resolved) = overrides.get(&conversation_id) else {
+        return stored.to_vec();
+    };
+    merge_runtime_roots(stored, resolved)
+}
+
+fn merge_runtime_roots(stored: &[Root], resolved: &[Root]) -> Vec<Root> {
+    let resolved_by_id: HashMap<&str, &Root> = resolved.iter().map(|root| (root.id.as_str(), root)).collect();
+    stored
+        .iter()
+        .filter_map(|stored| {
+            resolved_by_id.get(stored.id.as_str()).map(|resolved| Root {
+                id: stored.id.clone(),
+                name: stored.name.clone(),
+                uri: resolved.uri.clone(),
+                kind: stored.kind.clone(),
+                scope: stored.scope.clone(),
+            })
+        })
+        .collect()
+}
+
+fn summarize_task_result(value: &serde_json::Value) -> String {
+    const MAX: usize = 240;
+    let summary = match value {
+        serde_json::Value::String(text) => text.clone(),
+        serde_json::Value::Object(map) => map
+            .get("message")
+            .or_else(|| map.get("summary"))
+            .and_then(|value| value.as_str())
+            .map(str::to_string)
+            .unwrap_or_else(|| value.to_string()),
+        _ => value.to_string(),
+    };
+    if summary.len() <= MAX {
+        summary
+    } else {
+        format!("{}…", &summary[..MAX])
     }
 }
 

@@ -37,6 +37,10 @@ actor TamtriBindingClient: CoreClient {
         try core.sendMessage(conversationId: conversationId, text: text)
     }
 
+    func syncRuntimeRoots(conversationId: String, roots: [RootDto]) async throws {
+        try core.syncRuntimeRoots(conversationId: conversationId, roots: roots)
+    }
+
     func copyFileToWorkdir(conversationId: String, sourcePath: String) async throws -> String {
         try core.copyFileToWorkdir(conversationId: conversationId, sourcePath: sourcePath)
     }
