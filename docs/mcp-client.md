@@ -114,4 +114,4 @@ Per-conversation roots live in `meta.json` as portable refs (`id`, `name`, `uri`
 
 `TamtriFeatureSupport::current()` enables Apps, Tasks, and Roots end-to-end. RC extension identifiers (`io.modelcontextprotocol/apps`, `/tasks`, `/roots`) parse without breaking 2025-11-25 servers. Settings shows per-server capability badges after **Probe capabilities**. **Sampling is always declined** — tamtri is not the model.
 
-See `docs/testing-m7.md` for a manual demo script and fixture wiring.
+See [docs/testing/](testing/README.md) for manual verification guides (Apps, Tasks, Roots, capabilities).

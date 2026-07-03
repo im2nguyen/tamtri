@@ -1,6 +1,6 @@
 # twenty-questions-mcp
 
-Stdio MCP fixture for tamtri Milestone 6 elicitation testing. The server picks a secret word and plays [20 Questions](https://en.wikipedia.org/wiki/20_Questions) by pausing `tools/call` and sending `elicitation/create` (form mode) for each yes/no question or final guess.
+Stdio MCP fixture for tamtri elicitation testing. Verification guide: [docs/testing/twenty-questions.md](../../docs/testing/twenty-questions.md). The server picks a secret word and plays [20 Questions](https://en.wikipedia.org/wiki/20_Questions) by pausing `tools/call` and sending `elicitation/create` (form mode) for each yes/no question or final guess.
 
 ## Build
 

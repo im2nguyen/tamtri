@@ -186,7 +186,7 @@ Tests: UI snapshot/state tests for form, URL, OAuth needed, OAuth connected, and
 Extend fixtures:
 
 - Downstream MCP stdio fixture that elicits during `tools/call`.
-- `fixtures/twenty-questions-mcp`: 20 Questions game with form-mode elicitation for manual and hermetic gateway tests (see `docs/testing-elicitation.md`).
+- `fixtures/twenty-questions-mcp`: 20 Questions game with form-mode elicitation for manual and hermetic gateway tests (see [docs/testing/twenty-questions.md](testing/twenty-questions.md)).
 - Downstream HTTP fixture with OAuth-protected endpoints.
 - Mock authorization server for PKCE and refresh.
 - Mock ACP agent path that calls a gateway tool which elicits.
