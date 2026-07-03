@@ -432,6 +432,8 @@ mod tests {
 
     #[tokio::test]
     async fn timeout_removes_pending_and_ignores_late_response() {
+        tokio::time::pause();
+
         let sent = Arc::new(Mutex::new(Vec::new()));
         let transport = DispatchMockTransport {
             incoming: VecDeque::from(vec![IncomingMessage::Response(
@@ -450,7 +452,7 @@ mod tests {
                     .await
             }
         });
-        tokio::time::sleep(Duration::from_millis(150)).await;
+        tokio::time::advance(Duration::from_millis(200)).await;
         assert!(matches!(
             first.await.unwrap(),
             Err(CoreError::Timeout { method }) if method == "slow"

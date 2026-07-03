@@ -114,4 +114,49 @@ final class ElicitationSchemaFormTests: XCTestCase {
         )
         XCTAssertEqual(result?.error, "Score must be at most 1.5.")
     }
+
+    func testBuildPayloadAcceptsEnumSelection() {
+        let field = ElicitationSchemaField(
+            id: "color",
+            title: "Color",
+            description: nil,
+            type: "string",
+            itemType: nil,
+            required: true,
+            enumValues: ["red", "green", "blue"],
+            minLength: nil,
+            maxLength: nil,
+            minimum: nil,
+            maximum: nil
+        )
+        let result = ElicitationSchemaFormBuilder.buildPayload(
+            fields: [field],
+            values: ["color": "green"],
+            booleans: [:]
+        )
+        XCTAssertNil(result?.error)
+        XCTAssertEqual(result?.payload["color"] as? String, "green")
+    }
+
+    func testBuildPayloadRejectsMissingRequiredField() {
+        let field = ElicitationSchemaField(
+            id: "name",
+            title: "Name",
+            description: nil,
+            type: "string",
+            itemType: nil,
+            required: true,
+            enumValues: [],
+            minLength: nil,
+            maxLength: nil,
+            minimum: nil,
+            maximum: nil
+        )
+        let result = ElicitationSchemaFormBuilder.buildPayload(
+            fields: [field],
+            values: [:],
+            booleans: [:]
+        )
+        XCTAssertNil(result)
+    }
 }

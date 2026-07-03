@@ -428,6 +428,81 @@ async fn gateway_tool_call_emits_progress_and_log() {
 }
 
 #[tokio::test]
+async fn gateway_tool_name_collision_routing() {
+    let command = env!("CARGO_BIN_EXE_mock-mcp-server");
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    let gateway = Arc::new(
+        McpGateway::new(
+            GatewayConfig {
+                default_call_timeout_secs: 300,
+                servers: vec![stdio_server("alpha", command), stdio_server("beta", command)],
+            },
+            Arc::new(NoCredentials),
+            Some(tx),
+        )
+        .unwrap(),
+    );
+
+    let tools = gateway.list_tools().await.unwrap();
+    let alpha_echo = tools
+        .iter()
+        .find(|tool| tool.server_id == "alpha" && tool.original_name == "echo")
+        .expect("alpha echo");
+    let beta_echo = tools
+        .iter()
+        .find(|tool| tool.server_id == "beta" && tool.original_name == "echo")
+        .expect("beta echo");
+    assert_ne!(alpha_echo.exposed_name, beta_echo.exposed_name);
+
+    let alpha_call = tokio::spawn({
+        let gateway = Arc::clone(&gateway);
+        let exposed = alpha_echo.exposed_name.clone();
+        async move {
+            gateway
+                .call_tool(&exposed, json!({"server": "alpha", "message": "alpha"}))
+                .await
+        }
+    });
+    let alpha_routed = tokio::time::timeout(Duration::from_secs(1), async {
+        loop {
+            if let Some(GatewayEvent::ToolRouted { server_id, .. }) = rx.recv().await
+                && server_id == "alpha"
+            {
+                return server_id;
+            }
+        }
+    })
+    .await
+    .expect("alpha route event");
+    alpha_call.await.unwrap().unwrap();
+
+    let beta_call = tokio::spawn({
+        let gateway = Arc::clone(&gateway);
+        let exposed = beta_echo.exposed_name.clone();
+        async move {
+            gateway
+                .call_tool(&exposed, json!({"server": "beta", "message": "beta"}))
+                .await
+        }
+    });
+    let beta_routed = tokio::time::timeout(Duration::from_secs(1), async {
+        loop {
+            if let Some(GatewayEvent::ToolRouted { server_id, .. }) = rx.recv().await
+                && server_id == "beta"
+            {
+                return server_id;
+            }
+        }
+    })
+    .await
+    .expect("beta route event");
+    beta_call.await.unwrap().unwrap();
+
+    assert_eq!(alpha_routed, "alpha");
+    assert_eq!(beta_routed, "beta");
+}
+
+#[tokio::test]
 async fn gateway_list_tools_recovers_after_timeout() {
     let dir = tempfile::tempdir().expect("temp dir");
     let marker_path = dir

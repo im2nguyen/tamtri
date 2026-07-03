@@ -23,7 +23,8 @@ use crate::conversation::{
 };
 use crate::harness::acp::{AcpAdapter, AgentLaunchSpec};
 use crate::harness::{
-    ContextSeed, ConversationContext, HarnessAdapter, HarnessEvent, RunControl, TurnInput,
+    ContextSeed, ConversationContext, HarnessAdapter, HarnessEvent, RunControl, TurnEndReason,
+    TurnInput,
 };
 use crate::mcp::elicitation::{audit_safe_elicitation_url, sanitize_transcript_data};
 use crate::mcp::oauth::{
@@ -300,6 +301,16 @@ impl TamtriCore {
                 connection_status: "unknown".to_string(),
                 last_error: String::new(),
             })
+    }
+
+    fn drain_gateway_events_to_vault(
+        &self,
+        gateway_event_rx: &mut tokio::sync::mpsc::UnboundedReceiver<GatewayEvent>,
+    ) -> Result<()> {
+        while let Ok(event) = gateway_event_rx.try_recv() {
+            append_vault_event_for_gateway_event(&self.vault, &event)?;
+        }
+        Ok(())
     }
 
     fn list_acp_agents_inner(&self) -> Result<Vec<AgentRosterEntryDto>> {
@@ -864,7 +875,10 @@ impl TamtriCore {
                             Some(&harness_display_for_run),
                         );
                         let _ = reducer.apply(&event);
-                        if matches!(event, HarnessEvent::TurnEnded { .. }) {
+                        if let HarnessEvent::TurnEnded { reason } = &event {
+                            if matches!(reason, TurnEndReason::Cancelled) {
+                                break;
+                            }
                             let reduced = reducer.finish();
                             let mut message = reduced.message;
                             let snapshotter =
@@ -1305,16 +1319,18 @@ impl TamtriCore {
 
     pub fn refresh_gateway_capabilities_inner(&self) -> Result<Vec<GatewayServerDto>> {
         let config = load_app_config(self.vault.root())?;
+        let (gateway_event_tx, mut gateway_event_rx) = tokio::sync::mpsc::unbounded_channel();
         let gateway = McpGateway::new(
             config.gateway.clone(),
             self.credentials.clone(),
-            None,
+            Some(gateway_event_tx),
         )?;
         for server in config.gateway.servers.iter().filter(|server| server.enabled) {
             let server_id = server.id.clone();
             let outcome = self
                 .runtime
                 .block_on(async { gateway.check_server_connection(server).await });
+            self.drain_gateway_events_to_vault(&mut gateway_event_rx)?;
             match outcome {
                 Ok(()) => self.record_gateway_server_status(&server_id, "connected", ""),
                 Err(err) => {
@@ -1325,6 +1341,7 @@ impl TamtriCore {
         let reports = self
             .runtime
             .block_on(async { gateway.probe_server_capabilities().await })?;
+        self.drain_gateway_events_to_vault(&mut gateway_event_rx)?;
         {
             let mut cache = self
                 .gateway_capability_cache
@@ -1734,7 +1751,20 @@ fn append_event_for_gateway_event(
     id: Id,
     event: &GatewayEvent,
 ) -> Result<()> {
-    let (kind, payload) = match event {
+    let (kind, payload) = gateway_event_to_audit(event);
+    vault.append_event(id, &Event::new(kind, payload))
+}
+
+fn append_vault_event_for_gateway_event(
+    vault: &FilesystemVault,
+    event: &GatewayEvent,
+) -> Result<()> {
+    let (kind, payload) = gateway_event_to_audit(event);
+    vault.append_vault_event(&Event::new(kind, payload))
+}
+
+fn gateway_event_to_audit(event: &GatewayEvent) -> (EventKind, serde_json::Value) {
+    match event {
         GatewayEvent::ServerConnected { server_id } => (
             EventKind::GatewayServerConnected,
             json!({ "server_id": server_id }),
@@ -1890,8 +1920,7 @@ fn append_event_for_gateway_event(
                 "target_kind": reason
             }),
         ),
-    };
-    vault.append_event(id, &Event::new(kind, payload))
+    }
 }
 
 fn sanitize_gateway_params(value: &serde_json::Value) -> serde_json::Value {

@@ -17,6 +17,41 @@ impl ConversationObserver for RecordingObserver {
 }
 
 #[test]
+fn crash_mid_turn_loses_only_uncommitted() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let observer = Arc::new(RecordingObserver::default());
+    let core = TamtriCore::new(temp.path().to_string_lossy().into_owned(), Arc::clone(&observer) as Arc<dyn ConversationObserver>)
+        .expect("core");
+    core.register_acp_agent(
+        "mock-acp".to_string(),
+        "Mock ACP".to_string(),
+        env!("CARGO_BIN_EXE_mock-acp-agent").to_string(),
+        Vec::new(),
+    )
+    .expect("agent");
+    let conversation = core
+        .create_conversation(
+            "Crash".to_string(),
+            "mock-acp".to_string(),
+            "mock".to_string(),
+        )
+        .expect("conversation");
+
+    core.send_message(conversation.id.clone(), "hello".to_string())
+        .expect("send");
+    wait_for_streaming_event(observer.as_ref());
+    core.cancel_run(conversation.id.clone()).expect("cancel");
+    wait_for_turn_end(observer.as_ref());
+    std::thread::sleep(Duration::from_millis(200));
+
+    let loaded = core.load_conversation(conversation.id).expect("load");
+    let messages: Vec<serde_json::Value> =
+        serde_json::from_str(&loaded.transcript_json).expect("transcript");
+    assert_eq!(messages.len(), 1, "vault should keep only the committed user message");
+    assert_eq!(messages[0]["role"], "user");
+}
+
+#[test]
 fn facade_run_commits_exactly_one_assistant_message() {
     let temp = tempfile::tempdir().expect("tempdir");
     let observer = Arc::new(RecordingObserver::default());
@@ -249,7 +284,12 @@ fn events_jsonl_gateway_receipts() {
         .map(|event| event["kind"].as_str().unwrap_or_default())
         .collect();
 
-    for expected in ["gateway_tool_routed", "gateway_credential_injected"] {
+    for expected in [
+        "gateway_tool_routed",
+        "gateway_credential_injected",
+        "gateway_progress",
+        "gateway_log",
+    ] {
         assert!(
             kinds.contains(&expected),
             "missing events.jsonl receipt: {expected}; kinds={kinds:?}"
@@ -313,9 +353,10 @@ fn fork_into_harness_updates_model_and_harness() {
     assert_eq!(fork.forked_from.as_deref(), Some(parent_id.as_str()));
 
     let listed = core.list_conversations().expect("list conversations");
+    let listed_ids: Vec<_> = listed.iter().map(|s| s.id.as_str()).collect();
     assert!(
         listed.iter().any(|summary| summary.id == parent_id),
-        "parent conversation should remain in vault after fork"
+        "parent conversation should remain in vault after fork; listed={listed_ids:?} parent={parent_id}"
     );
     assert!(
         listed.iter().any(|summary| summary.id == fork.id),
@@ -377,6 +418,26 @@ fn list_workdir_files_returns_copied_and_harness_files() {
     assert_eq!(paths, vec!["nested/report.html", "source.csv"]);
     assert_eq!(files[1].size, 8);
     assert!(files.iter().all(|file| file.modified_at > 0));
+}
+
+fn wait_for_streaming_event(observer: &RecordingObserver) {
+    let started = std::time::Instant::now();
+    loop {
+        if started.elapsed() > Duration::from_secs(5) {
+            panic!("timed out waiting for streaming harness event");
+        }
+        let events = observer.events.lock().expect("events");
+        if events.iter().any(|event| {
+            matches!(
+                event.kind.as_str(),
+                "text_delta" | "thought_delta" | "tool_call_started"
+            )
+        }) {
+            return;
+        }
+        drop(events);
+        std::thread::sleep(Duration::from_millis(25));
+    }
 }
 
 fn wait_for_permission_requested(observer: &RecordingObserver) -> String {

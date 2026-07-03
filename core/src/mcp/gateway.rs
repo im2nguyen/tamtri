@@ -454,7 +454,7 @@ impl McpGateway {
                     }
                 }
                 Err(err) => {
-                    if matches!(&err, CoreError::Timeout { .. }) {
+                    if matches!(&err, CoreError::Timeout { .. } | CoreError::TransportClosed) {
                         self.evict_client(&server.id).await;
                     }
                     self.emit(GatewayEvent::DownstreamError {
@@ -527,7 +527,7 @@ impl McpGateway {
             )
             .await;
         if let Err(err) = &raw_result {
-            if matches!(err, CoreError::Timeout { .. }) {
+            if matches!(err, CoreError::Timeout { .. } | CoreError::TransportClosed) {
                 self.evict_client(&route.server_id).await;
             }
             self.emit(GatewayEvent::DownstreamError {

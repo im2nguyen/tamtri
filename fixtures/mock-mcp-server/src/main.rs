@@ -60,6 +60,16 @@ fn main() {
                                 "name": "elicit_url",
                                 "description": "Elicits via URL handoff then echoes the action",
                                 "inputSchema": {"type": "object"}
+                            },
+                            {
+                                "name": "elicit_secret",
+                                "description": "Elicits a secret field; gateway should auto-decline",
+                                "inputSchema": {"type": "object"}
+                            },
+                            {
+                                "name": "elicit_complex",
+                                "description": "Elicits with a nested object schema",
+                                "inputSchema": {"type": "object"}
                             }
                         ]
                     }),
@@ -77,6 +87,45 @@ fn main() {
                     }
                 } else if tool_name == "elicit_url" {
                     match elicit_url_then_echo(&mut stdout, &mut input) {
+                        Ok(result) => response(&message, result),
+                        Err(err) => error_response(&message, -32000, err),
+                    }
+                } else if tool_name == "elicit_secret" {
+                    match elicit_with_schema(
+                        &mut stdout,
+                        &mut input,
+                        "What is your API key?",
+                        json!({
+                            "type": "object",
+                            "properties": {
+                                "api_key": {
+                                    "type": "string",
+                                    "title": "API key"
+                                }
+                            },
+                            "required": ["api_key"]
+                        }),
+                    ) {
+                        Ok(result) => response(&message, result),
+                        Err(err) => error_response(&message, -32000, err),
+                    }
+                } else if tool_name == "elicit_complex" {
+                    match elicit_with_schema(
+                        &mut stdout,
+                        &mut input,
+                        "Where do you live?",
+                        json!({
+                            "type": "object",
+                            "properties": {
+                                "address": {
+                                    "type": "object",
+                                    "properties": {
+                                        "street": { "type": "string" }
+                                    }
+                                }
+                            }
+                        }),
+                    ) {
                         Ok(result) => response(&message, result),
                         Err(err) => error_response(&message, -32000, err),
                     }
@@ -195,23 +244,37 @@ fn main() {
 }
 
 fn elicit_then_echo(stdout: &mut io::Stdout, input: &mut impl BufRead) -> Result<Value, String> {
+    elicit_with_schema(
+        stdout,
+        input,
+        "What name should the echo use?",
+        json!({
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string",
+                    "title": "Name"
+                }
+            },
+            "required": ["name"]
+        }),
+    )
+}
+
+fn elicit_with_schema(
+    stdout: &mut io::Stdout,
+    input: &mut impl BufRead,
+    message: &str,
+    requested_schema: Value,
+) -> Result<Value, String> {
     let request = json!({
         "jsonrpc": "2.0",
         "id": "elicit-1",
         "method": "elicitation/create",
         "params": {
             "mode": "form",
-            "message": "What name should the echo use?",
-            "requestedSchema": {
-                "type": "object",
-                "properties": {
-                    "name": {
-                        "type": "string",
-                        "title": "Name"
-                    }
-                },
-                "required": ["name"]
-            }
+            "message": message,
+            "requestedSchema": requested_schema
         }
     });
     serde_json::to_writer(&mut *stdout, &request).map_err(|err| err.to_string())?;
@@ -237,14 +300,11 @@ fn elicit_then_echo(stdout: &mut io::Stdout, input: &mut impl BufRead) -> Result
             "structuredContent": {"elicitation": action}
         }));
     }
-    let name = response
-        .pointer("/result/content/name")
-        .and_then(Value::as_str)
-        .unwrap_or("anonymous");
+    let content = response.pointer("/result/content").cloned().unwrap_or_else(|| json!({}));
     Ok(json!({
-        "content": [{"type": "text", "text": format!("hello {name}")}],
+        "content": [{"type": "text", "text": content.to_string()}],
         "isError": false,
-        "structuredContent": {"name": name}
+        "structuredContent": content
     }))
 }
 
