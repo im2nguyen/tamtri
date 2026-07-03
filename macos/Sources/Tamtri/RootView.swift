@@ -141,7 +141,7 @@ struct TranscriptView: View {
                 Divider()
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 12) {
-                        ForEach(LiveEventGroups.build(from: liveEvents)) { group in
+                        ForEach(LiveEventGrouping.build(from: liveEvents)) { group in
                             if let toolEvent = group.toolEvent {
                                 VStack(alignment: .leading, spacing: 8) {
                                     ToolCard(event: toolEvent)
@@ -204,56 +204,6 @@ struct TranscriptView: View {
             .enumerated()
             .filter { $0.element.conversationId == selectedId }
             .map { IdentifiedCoreEvent(id: $0.offset, event: $0.element) }
-    }
-}
-
-private struct IdentifiedCoreEvent: Identifiable {
-    let id: Int
-    let event: CoreEvent
-}
-
-private struct LiveEventGroup: Identifiable {
-    let id: Int
-    let toolEvent: CoreEvent?
-    let nested: [CoreEvent]
-    let standalone: CoreEvent?
-
-    init(id: Int, toolEvent: CoreEvent? = nil, nested: [CoreEvent] = [], standalone: CoreEvent? = nil) {
-        self.id = id
-        self.toolEvent = toolEvent
-        self.nested = nested
-        self.standalone = standalone
-    }
-}
-
-private enum LiveEventGroups {
-    static func build(from events: [IdentifiedCoreEvent]) -> [LiveEventGroup] {
-        var groups: [LiveEventGroup] = []
-        var index = 0
-        while index < events.count {
-            let item = events[index]
-            if item.event.kind == "tool_call_started",
-               let toolId = EventPayload.string(from: item.event.payloadJSON, key: "id") {
-                var nested: [CoreEvent] = []
-                var next = index + 1
-                while next < events.count {
-                    let candidate = events[next].event
-                    if candidate.kind == "elicitation_requested",
-                       EventPayload.string(from: candidate.payloadJSON, key: "origin_tool_call_id") == toolId {
-                        nested.append(candidate)
-                        next += 1
-                        continue
-                    }
-                    break
-                }
-                groups.append(LiveEventGroup(id: item.id, toolEvent: item.event, nested: nested))
-                index = next
-                continue
-            }
-            groups.append(LiveEventGroup(id: item.id, standalone: item.event))
-            index += 1
-        }
-        return groups
     }
 }
 
@@ -668,11 +618,17 @@ struct TaskRefCard: View {
     let block: TranscriptContentBlock
 
     var body: some View {
-        CompactCard(title: block.taskId ?? "Task", systemImage: "checklist") {
+        CompactCard(title: block.taskTitle ?? block.taskId ?? "Task", systemImage: "checklist") {
             Text("Status: \(block.taskStatus ?? "unknown")")
+            if let summary = block.taskResultSummary, !summary.isEmpty {
+                Text(summary)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+            }
         }
         .accessibilityLabel("Task \(block.taskId ?? "unknown")")
-        .accessibilityValue(block.taskStatus ?? "unknown")
+        .accessibilityValue([block.taskStatus, block.taskResultSummary].compactMap { $0 }.joined(separator: ", "))
     }
 }
 
@@ -1821,7 +1777,7 @@ struct SettingsView: View {
                     showAddServer = true
                 }
                 Spacer()
-                Link("20 Questions testing guide", destination: URL(string: "https://github.com/im2nguyen/tamtri/blob/main/docs/testing-elicitation.md")!)
+                Link("20 Questions testing guide", destination: URL(string: "https://github.com/im2nguyen/tamtri/blob/main/docs/testing/twenty-questions.md")!)
                     .font(.caption)
             }
 
@@ -1833,7 +1789,7 @@ struct SettingsView: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
-            Link("M7 Apps, Tasks, and Roots demo guide", destination: URL(string: "https://github.com/im2nguyen/tamtri/blob/main/docs/testing-m7.md")!)
+            Link("Apps, Tasks, and Roots guides", destination: URL(string: "https://github.com/im2nguyen/tamtri/blob/main/docs/testing/README.md")!)
                 .font(.caption)
         }
         .padding()

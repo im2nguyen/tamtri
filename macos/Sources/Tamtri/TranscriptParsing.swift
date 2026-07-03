@@ -67,6 +67,8 @@ struct TranscriptContentBlock: Decodable, Equatable {
 
     let taskId: String?
     let taskStatus: String?
+    let taskTitle: String?
+    let taskResultSummary: String?
 
     enum CodingKeys: String, CodingKey {
         case type
@@ -94,6 +96,8 @@ struct TranscriptContentBlock: Decodable, Equatable {
         case state
         case taskId = "task_id"
         case taskStatus = "status"
+        case taskTitle = "title"
+        case taskResultSummary = "result_summary"
     }
 
     var inputSummary: String {

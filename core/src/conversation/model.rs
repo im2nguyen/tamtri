@@ -101,6 +101,10 @@ pub enum ContentBlock {
     TaskRef {
         task_id: String,
         status: TaskStatus,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        title: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        result_summary: Option<String>,
     },
 }
 

@@ -67,7 +67,7 @@ async fn app_template_declared() {
 }
 
 #[tokio::test]
-async fn app_resource_persists() {
+async fn app_resource_persists_and_reloads() {
     let command = env!("CARGO_BIN_EXE_m7-app-mcp");
     let (tx, mut rx) = mpsc::unbounded_channel();
     let gateway = Arc::new(
@@ -147,6 +147,37 @@ async fn app_resource_persists() {
     vault.create(&conversation).unwrap();
     let loaded = vault.load(conversation.id).unwrap();
     assert_eq!(loaded.messages[0].content[0], block);
+
+    // Reload simulates offline replay: persisted block survives; template fetch needs live gateway.
+    let reloaded = vault.load(conversation.id).unwrap();
+    let ContentBlock::AppResource {
+        template_ref,
+        server_id,
+        ..
+    } = &reloaded.messages[0].content[0]
+    else {
+        panic!("expected app_resource block");
+    };
+    assert_eq!(template_ref, "ui://m7-app/demo");
+    assert_eq!(server_id.as_deref(), Some("m7-app"));
+
+    // A fresh gateway instance models offline replay: no warmed template cache.
+    let offline_gateway = McpGateway::new(
+        GatewayConfig {
+            default_call_timeout_secs: 300,
+            servers: vec![stdio_server("m7-app", command)],
+        },
+        Arc::new(NoCredentials),
+        None,
+    )
+    .unwrap();
+    assert!(
+        offline_gateway
+            .cached_app_template("m7-app", template_ref)
+            .await
+            .is_none(),
+        "offline reload must not have a warmed template without an active gateway run"
+    );
 }
 
 #[test]

@@ -122,12 +122,16 @@ async fn task_completion_persists_task_ref() {
     let block = ContentBlock::TaskRef {
         task_id: completed.task_id.clone(),
         status: completed.status.clone(),
+        title: completed.title.clone(),
+        result_summary: completed.result.as_ref().map(|value| value.to_string()),
     };
     assert_eq!(
         block,
         ContentBlock::TaskRef {
             task_id,
             status: TaskStatus::Completed,
+            title: completed.title.clone(),
+            result_summary: completed.result.as_ref().map(|value| value.to_string()),
         }
     );
     let serialized = serde_json::to_string(&block).expect("serialize task ref");

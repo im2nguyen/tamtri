@@ -86,6 +86,8 @@ fn all_blocks_message() -> Message {
             ContentBlock::TaskRef {
                 task_id: "task-1".into(),
                 status: TaskStatus::Running,
+                title: None,
+                result_summary: None,
             },
         ],
     }

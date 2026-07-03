@@ -128,6 +128,11 @@ struct WebTranscriptView: NSViewRepresentable {
       if (block.type === 'elicitation_response') {
         return '<div class="tool"><div class="tool-title">Elicitation response</div><div class="text">' + esc(block.action || '') + '</div></div>';
       }
+      if (block.type === 'app_resource') {
+        const title = esc(block.template_ref || block.uri || 'MCP App');
+        const server = block.server_id ? '<div class="muted">Server: ' + esc(block.server_id) + '</div>' : '';
+        return '<div class="tool"><div class="tool-title">App: ' + title + '</div>' + server + '<div class="muted">App panel (reload transcript to interact)</div></div>';
+      }
       return '';
     }
     function renderMessage(msg) {
@@ -138,7 +143,7 @@ struct WebTranscriptView: NSViewRepresentable {
       const roots = [];
       for (const block of content) {
         const origin = block.origin_tool_call_id;
-        if ((block.type === 'elicitation_request' || block.type === 'elicitation_response') && origin) {
+        if ((block.type === 'elicitation_request' || block.type === 'elicitation_response' || block.type === 'app_resource') && origin) {
           const list = nestedByTool.get(origin) || [];
           list.push(block);
           nestedByTool.set(origin, list);
