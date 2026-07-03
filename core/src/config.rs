@@ -177,6 +177,26 @@ pub fn validate_app_config(config: &AppConfig) -> Result<()> {
                     server.id
                 )));
             }
+            if let Some(authorization_endpoint) = oauth.authorization_endpoint.as_deref()
+                && authorization_endpoint.trim().is_empty()
+            {
+                return Err(CoreError::Protocol(format!(
+                    "gateway server {} has an empty oauth authorization_endpoint",
+                    server.id
+                )));
+            }
+            if oauth
+                .token_endpoint
+                .as_deref()
+                .unwrap_or_default()
+                .trim()
+                .is_empty()
+            {
+                return Err(CoreError::Protocol(format!(
+                    "gateway server {} has an empty oauth token_endpoint",
+                    server.id
+                )));
+            }
             if oauth.token_ref.trim().is_empty() {
                 return Err(CoreError::Protocol(format!(
                     "gateway server {} has an empty oauth token_ref",

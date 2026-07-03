@@ -47,7 +47,11 @@ pub(crate) async fn handle_gateway_request(
             "capabilities": {
                 "tools": {"listChanged": false},
                 "resources": {"listChanged": false},
-                "prompts": {"listChanged": false}
+                "prompts": {"listChanged": false},
+                "elicitation": {
+                    "form": {},
+                    "url": {}
+                }
             },
             "serverInfo": Implementation {
                 name: "tamtri-gateway".to_string(),

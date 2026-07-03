@@ -155,6 +155,11 @@ pub enum GatewayEvent {
         server_id: String,
         credential_ref: String,
     },
+    CredentialUpdated {
+        server_id: String,
+        credential_ref: String,
+        reason: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -172,6 +177,7 @@ pub struct McpGateway {
     event_broadcast: broadcast::Sender<GatewayEvent>,
     elicitation: Arc<GatewayElicitationService>,
     clients: Mutex<HashMap<String, Arc<McpClient>>>,
+    server_call_locks: Mutex<HashMap<String, Arc<Mutex<()>>>>,
     routes: Mutex<HashMap<String, ToolRoute>>,
     resource_routes: Mutex<HashMap<String, ResourceRoute>>,
     prompt_routes: Mutex<HashMap<String, PromptRoute>>,
@@ -254,6 +260,7 @@ impl McpGateway {
             event_broadcast,
             elicitation,
             clients: Mutex::new(HashMap::new()),
+            server_call_locks: Mutex::new(HashMap::new()),
             routes: Mutex::new(HashMap::new()),
             resource_routes: Mutex::new(HashMap::new()),
             prompt_routes: Mutex::new(HashMap::new()),
@@ -357,6 +364,8 @@ impl McpGateway {
             exposed_name: exposed_name.to_string(),
             original_name: route.original_name.clone(),
         });
+        let lock = self.server_call_lock(&route.server_id).await;
+        let _guard = lock.lock().await;
         let origin_tool_call_id = origin_tool_call_id_from_meta(meta.as_ref());
         self.elicitation
             .set_active_tool_call(&route.server_id, origin_tool_call_id)
@@ -372,6 +381,16 @@ impl McpGateway {
             });
         self.elicitation.clear_active_tool_call(&route.server_id).await;
         result
+    }
+
+    async fn server_call_lock(&self, server_id: &str) -> Arc<Mutex<()>> {
+        let mut locks = self.server_call_locks.lock().await;
+        if let Some(existing) = locks.get(server_id).cloned() {
+            return existing;
+        }
+        let lock = Arc::new(Mutex::new(()));
+        locks.insert(server_id.to_string(), Arc::clone(&lock));
+        lock
     }
 
     pub async fn list_resources(&self) -> Result<Vec<GatewayResource>> {
@@ -643,6 +662,11 @@ impl McpGateway {
             credentials
                 .store(&token_ref, &serialize_stored_oauth(&bundle)?)
                 .await?;
+            self.emit(GatewayEvent::CredentialUpdated {
+                server_id: server_id.to_string(),
+                credential_ref: token_ref.clone(),
+                reason: "oauth_refresh".to_string(),
+            });
         }
         match outcome {
             OAuthResolveOutcome::AccessToken(token) => {
@@ -860,5 +884,21 @@ mod tests {
             exposed_tool_name("my server", "Echo Tool"),
             "my_server__echo_tool"
         );
+    }
+
+    #[tokio::test]
+    async fn malformed_elicitation_params_return_invalid_params_error() {
+        let (event_broadcast, _) = broadcast::channel(8);
+        let service = Arc::new(GatewayElicitationService {
+            events: None,
+            event_broadcast,
+            active_tool_calls: Mutex::new(HashMap::new()),
+            pending_elicitations: Mutex::new(HashMap::new()),
+        });
+        let err = service
+            .handle_create("mock", serde_json::json!({"mode": 5}))
+            .await
+            .expect_err("expected invalid params");
+        assert_eq!(err.code, -32602);
     }
 }

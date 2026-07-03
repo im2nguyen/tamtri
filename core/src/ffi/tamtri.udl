@@ -34,6 +34,8 @@ dictionary GatewayServerDto {
   string oauth_token_ref;
   string oauth_client_id;
   string oauth_authorization_endpoint;
+  string oauth_token_endpoint;
+  sequence<string> oauth_scopes;
 };
 
 dictionary GatewayEnvVarDto {
@@ -92,6 +94,8 @@ interface TamtriCore {
   void save_gateway_servers(sequence<GatewayServerDto> servers);
   [Throws=TamtriError]
   void set_gateway_credential(string credential_ref, string value);
+  [Throws=TamtriError]
+  string? export_gateway_credential(string credential_ref);
   [Throws=TamtriError]
   OAuthHandoffDto start_oauth_flow(string server_id, string redirect_uri);
   [Throws=TamtriError]

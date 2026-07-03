@@ -1383,10 +1383,12 @@ public struct GatewayServerDto: Equatable, Hashable {
     public var oauthTokenRef: String
     public var oauthClientId: String
     public var oauthAuthorizationEndpoint: String
+    public var oauthTokenEndpoint: String
+    public var oauthScopes: [String]
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(id: String, displayName: String, enabled: Bool, scope: String, transport: String, stdioCommand: String, stdioArgs: [String], stdioEnv: [GatewayEnvVarDto], httpEndpoint: String, credentialRefs: [String], missingCredentialRefs: [String], oauthStatus: String, oauthTokenRef: String, oauthClientId: String, oauthAuthorizationEndpoint: String) {
+    public init(id: String, displayName: String, enabled: Bool, scope: String, transport: String, stdioCommand: String, stdioArgs: [String], stdioEnv: [GatewayEnvVarDto], httpEndpoint: String, credentialRefs: [String], missingCredentialRefs: [String], oauthStatus: String, oauthTokenRef: String, oauthClientId: String, oauthAuthorizationEndpoint: String, oauthTokenEndpoint: String, oauthScopes: [String]) {
         self.id = id
         self.displayName = displayName
         self.enabled = enabled
@@ -1402,6 +1404,8 @@ public struct GatewayServerDto: Equatable, Hashable {
         self.oauthTokenRef = oauthTokenRef
         self.oauthClientId = oauthClientId
         self.oauthAuthorizationEndpoint = oauthAuthorizationEndpoint
+        self.oauthTokenEndpoint = oauthTokenEndpoint
+        self.oauthScopes = oauthScopes
     }
 
     
@@ -1434,7 +1438,9 @@ public struct FfiConverterTypeGatewayServerDto: FfiConverterRustBuffer {
                 oauthStatus: FfiConverterString.read(from: &buf), 
                 oauthTokenRef: FfiConverterString.read(from: &buf), 
                 oauthClientId: FfiConverterString.read(from: &buf), 
-                oauthAuthorizationEndpoint: FfiConverterString.read(from: &buf)
+                oauthAuthorizationEndpoint: FfiConverterString.read(from: &buf),
+                oauthTokenEndpoint: FfiConverterString.read(from: &buf),
+                oauthScopes: FfiConverterSequenceString.read(from: &buf)
         )
     }
 
@@ -1454,6 +1460,8 @@ public struct FfiConverterTypeGatewayServerDto: FfiConverterRustBuffer {
         FfiConverterString.write(value.oauthTokenRef, into: &buf)
         FfiConverterString.write(value.oauthClientId, into: &buf)
         FfiConverterString.write(value.oauthAuthorizationEndpoint, into: &buf)
+        FfiConverterString.write(value.oauthTokenEndpoint, into: &buf)
+        FfiConverterSequenceString.write(value.oauthScopes, into: &buf)
     }
 }
 

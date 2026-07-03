@@ -140,7 +140,7 @@ impl McpClient {
             capabilities: ClientCapabilities {
                 elicitation: Some(ElicitationCapability {
                     form: Some(serde_json::json!({})),
-                    url: None,
+                    url: Some(serde_json::json!({})),
                 }),
             },
             client_info: Implementation {

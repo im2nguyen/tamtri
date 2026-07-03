@@ -14,6 +14,7 @@ use uuid::Uuid;
 use crate::artifact::{detect_mime, verify_inline_artifact, ArtifactSnapshot, ArtifactSnapshotter, verify_attachment};
 use crate::config::{
     load_app_config, replace_gateway_servers, GatewayScope, GatewayServerConfig, GatewayTransport,
+    OAuthConfig,
 };
 use crate::conversation::reduce::TurnReducer;
 use crate::conversation::{
@@ -109,6 +110,8 @@ pub struct GatewayServerDto {
     pub oauth_token_ref: String,
     pub oauth_client_id: String,
     pub oauth_authorization_endpoint: String,
+    pub oauth_token_endpoint: String,
+    pub oauth_scopes: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, uniffi::Record)]
@@ -803,6 +806,13 @@ impl TamtriCore {
                     token_ref: oauth.token_ref.clone(),
                 },
             );
+        self.vault.append_vault_event(&Event::new(
+            EventKind::OAuthHandoffStarted,
+            json!({
+                "server_id": server_id,
+                "credential_ref": oauth.token_ref.clone(),
+            }),
+        ))?;
         Ok(OAuthHandoffDto {
             server_id: server_id.to_string(),
             authorization_url,
@@ -875,6 +885,14 @@ impl TamtriCore {
             bundle.expires_at,
             false,
         ));
+        self.vault.append_vault_event(&Event::new(
+            EventKind::OAuthHandoffCompleted,
+            json!({
+                "server_id": pending.server_id,
+                "credential_ref": pending.token_ref,
+                "status": status,
+            }),
+        ))?;
         Ok(OAuthCompletionDto {
             server_id: pending.server_id,
             oauth_status: status.to_string(),
@@ -1166,6 +1184,18 @@ fn append_event_for_gateway_event(
                 "credential_ref": credential_ref,
             }),
         ),
+        GatewayEvent::CredentialUpdated {
+            server_id,
+            credential_ref,
+            reason,
+        } => (
+            EventKind::GatewayCredentialInjected,
+            json!({
+                "server_id": server_id,
+                "credential_ref": credential_ref,
+                "target_kind": reason
+            }),
+        ),
     };
     vault.append_event(id, &Event::new(kind, payload))
 }
@@ -1234,6 +1264,7 @@ fn gateway_event_kind(event: &GatewayEvent) -> &'static str {
         GatewayEvent::ServerConnected { .. } => "gateway_server_connected",
         GatewayEvent::ToolRouted { .. } => "gateway_tool_routed",
         GatewayEvent::CredentialInjected { .. } => "gateway_credential_injected",
+        GatewayEvent::CredentialUpdated { .. } => "gateway_credential_updated",
         GatewayEvent::Progress { .. } => "gateway_progress",
         GatewayEvent::Log { .. } => "gateway_log",
         GatewayEvent::Cancellation { .. } => "gateway_cancellation",
@@ -1355,7 +1386,7 @@ fn gateway_server_to_dto(
             .to_string()
         })
         .unwrap_or_else(|| "not_configured".to_string());
-    let (oauth_token_ref, oauth_client_id, oauth_authorization_endpoint) = server
+    let (oauth_token_ref, oauth_client_id, oauth_authorization_endpoint, oauth_token_endpoint, oauth_scopes) = server
         .oauth
         .as_ref()
         .map(|oauth| {
@@ -1366,6 +1397,8 @@ fn gateway_server_to_dto(
                     .authorization_endpoint
                     .clone()
                     .unwrap_or_default(),
+                oauth.token_endpoint.clone().unwrap_or_default(),
+                oauth.scopes.clone(),
             )
         })
         .unwrap_or_default();
@@ -1387,6 +1420,8 @@ fn gateway_server_to_dto(
         oauth_token_ref,
         oauth_client_id,
         oauth_authorization_endpoint,
+        oauth_token_endpoint,
+        oauth_scopes,
     })
 }
 
@@ -1439,6 +1474,40 @@ fn gateway_server_from_dto(
             )));
         }
     };
+
+    let incoming_oauth_empty = server.oauth_token_ref.trim().is_empty()
+        && server.oauth_client_id.trim().is_empty()
+        && server.oauth_authorization_endpoint.trim().is_empty()
+        && server.oauth_token_endpoint.trim().is_empty()
+        && server.oauth_scopes.iter().all(|scope| scope.trim().is_empty());
+
+    let oauth = if incoming_oauth_empty {
+        existing.and_then(|existing| existing.oauth.clone())
+    } else if server.oauth_token_ref.trim().is_empty()
+        || server.oauth_client_id.trim().is_empty()
+        || server.oauth_authorization_endpoint.trim().is_empty()
+        || server.oauth_token_endpoint.trim().is_empty()
+    {
+        return Err(CoreError::Protocol(
+            "oauth config requires token_ref, client_id, authorization_endpoint, and token_endpoint"
+                .to_string(),
+        ));
+    } else {
+        Some(OAuthConfig {
+            issuer: None,
+            authorization_endpoint: Some(server.oauth_authorization_endpoint.trim().to_string()),
+            token_endpoint: Some(server.oauth_token_endpoint.trim().to_string()),
+            client_id: server.oauth_client_id.trim().to_string(),
+            scopes: server
+                .oauth_scopes
+                .iter()
+                .map(|scope| scope.trim().to_string())
+                .filter(|scope| !scope.is_empty())
+                .collect(),
+            token_ref: server.oauth_token_ref.trim().to_string(),
+        })
+    };
+
     Ok(GatewayServerConfig {
         id: server.id.clone(),
         display_name: server.display_name.clone(),
@@ -1449,7 +1518,7 @@ fn gateway_server_from_dto(
         credentials: existing
             .map(|existing| existing.credentials.clone())
             .unwrap_or_default(),
-        oauth: existing.and_then(|existing| existing.oauth.clone()),
+        oauth,
     })
 }
 
