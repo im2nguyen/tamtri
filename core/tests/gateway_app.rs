@@ -4,7 +4,6 @@ use std::time::Duration;
 use serde_json::json;
 use tamtri_core::config::{GatewayConfig, GatewayScope, GatewayServerConfig, GatewayTransport};
 use tamtri_core::conversation::{ContentBlock, Conversation, Message, Role};
-use tamtri_core::mcp::app::{MCP_APP_MIME, Origin, template_from_resource_contents};
 use tamtri_core::mcp::capabilities::{FeatureStatus, TamtriFeatureSupport};
 use tamtri_core::mcp::gateway::{GatewayEvent, McpGateway, NoCredentials};
 use tamtri_core::vault::fs::FilesystemVault;
@@ -29,7 +28,7 @@ fn stdio_server(id: &str, command: &str) -> GatewayServerConfig {
 }
 
 #[tokio::test]
-async fn app_template_declared() {
+async fn app_template_declared_origin_loads() {
     let command = env!("CARGO_BIN_EXE_m7-app-mcp");
     let gateway = Arc::new(
         McpGateway::new(
@@ -180,24 +179,3 @@ async fn app_resource_persists_and_reloads() {
     );
 }
 
-#[test]
-fn app_template_declared_origin_loads_from_fixture_shape() {
-    let contents = [json!({
-        "uri": "ui://m7-app/demo",
-        "mimeType": MCP_APP_MIME,
-        "text": "<!DOCTYPE html><html><body>demo</body></html>",
-        "_meta": {
-            "ui": {
-                "csp": {
-                    "connectDomains": ["https://api.example.com"]
-                }
-            }
-        }
-    })];
-    let template =
-        template_from_resource_contents("m7-app", "ui://m7-app/demo", &contents).unwrap();
-    assert_eq!(
-        template.allowed_origins,
-        vec![Origin("https://api.example.com".into())]
-    );
-}

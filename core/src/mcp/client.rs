@@ -662,6 +662,9 @@ mod tests {
         let (mut client, sent) = client_with(vec![init_response()], McpClientConfig::default());
         let result = client.initialize().await.unwrap();
         assert_eq!(result.server_info.name, "mock");
+        assert_eq!(result.server_info.version, "1.0.0");
+        assert_eq!(client.server_info().unwrap().name, "mock");
+        assert_eq!(client.server_info().unwrap().version, "1.0.0");
         assert_eq!(
             client.server_capabilities(),
             Some(&ServerCapabilities {

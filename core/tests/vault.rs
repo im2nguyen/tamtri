@@ -106,6 +106,38 @@ fn conversation_dir(root: &Path, id: uuid::Uuid) -> std::path::PathBuf {
 }
 
 #[test]
+fn create_materializes_layout() {
+    let (dir, vault) = vault();
+    let c = Conversation::new("Layout");
+    vault.create(&c).unwrap();
+    let conv_dir = conversation_dir(dir.path(), c.id);
+    assert!(conv_dir.join("attachments").is_dir());
+    assert!(conv_dir.join("workdir").is_dir());
+    assert!(conv_dir.join("events.jsonl").is_file());
+    assert!(conv_dir.join("messages.jsonl").is_file());
+    assert!(conv_dir.join("meta.json").is_file());
+    assert!(!conv_dir.join("meta.json.tmp").exists());
+}
+
+#[test]
+fn meta_write_is_atomic() {
+    let (dir, vault) = vault();
+    let c = Conversation::new("Atomic meta");
+    vault.create(&c).unwrap();
+    let conv_dir = conversation_dir(dir.path(), c.id);
+    assert!(!conv_dir.join("meta.json.tmp").exists());
+
+    let mut updated = c.clone();
+    updated.title = "Renamed".into();
+    vault.save_meta(&updated).unwrap();
+    assert!(!conv_dir.join("meta.json.tmp").exists());
+    assert_eq!(vault.load(c.id).unwrap().title, "Renamed");
+
+    vault.append_message(c.id, &message("line")).unwrap();
+    assert!(!conv_dir.join("meta.json.tmp").exists());
+}
+
+#[test]
 fn meta_message_round_trip() {
     let (_dir, vault) = vault();
     let mut c = Conversation::new("Report From Data");
@@ -170,11 +202,28 @@ fn load_rejects_future_version() {
 
 #[test]
 fn content_block_tagging() {
-    for block in all_blocks_message().content {
-        let value = serde_json::to_value(&block).unwrap();
-        assert!(value.get("type").is_some());
+    let blocks = all_blocks_message().content;
+    let expected_types = [
+        "text",
+        "thinking",
+        "tool_call",
+        "tool_result",
+        "app_resource",
+        "artifact",
+        "elicitation_request",
+        "elicitation_response",
+        "task_ref",
+    ];
+    assert_eq!(blocks.len(), expected_types.len());
+    for (block, expected_type) in blocks.iter().zip(expected_types) {
+        let value = serde_json::to_value(block).unwrap();
+        assert_eq!(
+            value.get("type").and_then(|tag| tag.as_str()),
+            Some(expected_type),
+            "unexpected type tag for {block:?}"
+        );
         let round_trip: ContentBlock = serde_json::from_value(value).unwrap();
-        assert_eq!(round_trip, block);
+        assert_eq!(&round_trip, block);
     }
 }
 
@@ -651,10 +700,8 @@ fn artifact_inline_respects_threshold() {
         })
         .is_err()
     );
-}
 
-#[test]
-fn artifact_inline_violation_rejected_on_load() {
+    // Load path: malformed inline in messages.jsonl is rejected on read.
     let (dir, vault) = vault();
     let c = Conversation::new("Bad artifact load");
     vault.create(&c).unwrap();

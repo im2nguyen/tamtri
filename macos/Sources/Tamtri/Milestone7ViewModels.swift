@@ -33,6 +33,15 @@ enum TaskLiveCardViewModel {
         [state.status, state.progressMessage].compactMap { $0 }.joined(separator: ", ")
     }
 
+    static func accessibilityAnnouncement(for state: LiveTaskState) -> String {
+        let title = state.title ?? state.taskId
+        let status = state.status.replacingOccurrences(of: "_", with: " ")
+        if let progress = state.progressMessage, !progress.isEmpty, !state.isTerminal {
+            return "Task \(title), \(status), \(progress)"
+        }
+        return "Task \(title), \(status)"
+    }
+
     static func showsCancelButton(for state: LiveTaskState) -> Bool {
         !state.isTerminal
     }

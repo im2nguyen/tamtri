@@ -302,6 +302,61 @@ async fn task_cancel_routes_to_server() {
 }
 
 #[tokio::test]
+async fn task_failure_terminal_state() {
+    let command = env!("CARGO_BIN_EXE_m7-task-mcp");
+    let (tx, _rx) = mpsc::unbounded_channel();
+    let gateway = Arc::new(
+        McpGateway::new(
+            GatewayConfig {
+                default_call_timeout_secs: 300,
+                servers: vec![stdio_server("tasks", command)],
+            },
+            Arc::new(NoCredentials),
+            Some(tx),
+        )
+        .unwrap(),
+    );
+
+    let tools = gateway.list_tools().await.unwrap();
+    let exposed = tools
+        .iter()
+        .find(|tool| tool.original_name == "cancelable_task")
+        .map(|tool| tool.exposed_name.clone())
+        .unwrap();
+    let mut rx = gateway.subscribe();
+    gateway.call_tool(&exposed, json!({})).await.unwrap();
+
+    let task_id = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let event = rx.recv().await.expect("event");
+            if let GatewayEvent::TaskStarted { state } = event {
+                return state.task_id;
+            }
+        }
+    })
+    .await
+    .expect("task started");
+
+    gateway.cancel_task(&task_id).await.expect("cancel task");
+    let failed = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let event = rx.recv().await.expect("event");
+            if let GatewayEvent::TaskCompleted { state, .. } = event
+                && state.task_id == task_id
+            {
+                return state;
+            }
+        }
+    })
+    .await
+    .expect("failed task event");
+    assert_eq!(failed.status, TaskStatus::Failed);
+
+    // Terminal tasks reject a second cancel attempt.
+    assert!(gateway.cancel_task(&task_id).await.is_err());
+}
+
+#[tokio::test]
 async fn task_survives_background_resume() {
     let command = env!("CARGO_BIN_EXE_m7-task-mcp");
     let (tx, _rx) = mpsc::unbounded_channel();

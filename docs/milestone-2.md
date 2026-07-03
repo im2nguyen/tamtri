@@ -166,8 +166,17 @@ pub struct InitializeResult {
     pub server_info: Implementation,
 }
 
-// Minimal for this milestone. Expand in later milestones (roots, sampling, elicitation).
-pub struct ClientCapabilities { /* empty object for now, serialize as {} */ }
+// Minimal at M2 ship; expanded in M6 (elicitation) and M7 (roots). Sampling stays unset.
+pub struct ClientCapabilities {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub elicitation: Option<ElicitationCapability>, // M6: form + url
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub roots: Option<RootsCapability>, // M7: listChanged
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sampling: Option<SamplingCapability>, // M7: declined at gateway; field omitted at initialize
+}
+
+> **Reconciliation note.** M2 originally shipped `ClientCapabilities` as an empty `{}` at initialize. M6/M7 expanded the downstream client to advertise elicitation and roots so gateway intercept works; sampling is still omitted. The M2 test `initialize_handshake` asserts `serverInfo` is stored on the client; capability shape is covered by later milestone tests.
 
 pub struct ServerCapabilities {
     pub tools: Option<ToolsCapability>,

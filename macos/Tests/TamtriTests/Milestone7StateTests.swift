@@ -160,14 +160,26 @@ final class Milestone7StateTests: XCTestCase {
         XCTAssertEqual(TaskLiveCardViewModel.statusIcon(for: running.status), "clock")
         XCTAssertTrue(TaskLiveCardViewModel.showsCancelButton(for: running))
         XCTAssertEqual(TaskLiveCardViewModel.accessibilityStatus(for: running), "running, Reading rows")
+        XCTAssertEqual(
+            TaskLiveCardViewModel.accessibilityAnnouncement(for: running),
+            "Task Import CSV, running, Reading rows"
+        )
 
         let completed = LiveTaskState(payloadJSON: #"{"state":{"task_id":"t-1","status":"completed","title":"Import CSV"}}"#)
         XCTAssertEqual(TaskLiveCardViewModel.statusIcon(for: completed.status), "checkmark.circle")
         XCTAssertFalse(TaskLiveCardViewModel.showsCancelButton(for: completed))
+        XCTAssertEqual(
+            TaskLiveCardViewModel.accessibilityAnnouncement(for: completed),
+            "Task Import CSV, completed"
+        )
 
         let failed = LiveTaskState(payloadJSON: #"{"state":{"task_id":"t-2","status":"failed","title":"Import CSV"}}"#)
         XCTAssertEqual(TaskLiveCardViewModel.statusIcon(for: failed.status), "xmark.circle")
         XCTAssertFalse(TaskLiveCardViewModel.showsCancelButton(for: failed))
+        XCTAssertEqual(
+            TaskLiveCardViewModel.accessibilityAnnouncement(for: failed),
+            "Task Import CSV, failed"
+        )
     }
 
     func testTaskRefCardViewModelCompletedSnapshot() {
