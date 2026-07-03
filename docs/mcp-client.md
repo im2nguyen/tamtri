@@ -86,6 +86,8 @@ Downstream servers may call `elicitation/create` while a `tools/call` is pending
 
 ## OAuth for remote HTTP servers (Milestone 6 scaffold)
 
-`config.json` may attach an `oauth` block to streamable HTTP gateway servers. Core implements authorization code + PKCE in `core/src/mcp/oauth.rs`. Resolved bearer tokens inject into outbound HTTP via `CredentialResolver` using `token_ref` only in the vault. Shell-side loopback callback, keychain token bundle storage, and settings connect flow are still pending.
+`config.json` may attach an `oauth` block to streamable HTTP gateway servers. Core implements authorization code + PKCE in `core/src/mcp/oauth.rs`. Resolved bearer tokens inject into outbound HTTP via `CredentialResolver` using `token_ref` references only in the vault. The macOS shell owns the loopback callback listener and persists token bundles in Keychain.
+
+On macOS, the shell stores OAuth bundles in Keychain (service `tamtri.gateway`, account = `token_ref`). On startup it loads those bundles into core's in-memory credential store. When core silently refreshes an expiring bundle during an HTTP tool call, it emits a `gateway_credential_updated` UI event; the shell responds by exporting the updated bundle from core and persisting it back to Keychain. Token values never appear in `config.json` or `events.jsonl`.
 
 The `tamtri-gateway-stdio` helper forwards stdio JSON-RPC frames to that endpoint for agents that require stdio MCP server refs. Development builds discover it via `TAMTRI_GATEWAY_STDIO_HELPER`, next to the current executable, or under `target/debug`; release packaging still needs to bundle it beside the signed app executable.

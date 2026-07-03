@@ -94,3 +94,4 @@ Manual UI: trigger a gateway tool that elicits in URL mode, confirm the consent 
 
 - `mock-mcp-server` / `elicit` tool: minimal single-field elicitation smoke test.
 - See `docs/milestone-6.md` for the full elicitation + OAuth milestone checklist.
+- OAuth connect/reset and real remote server options: `docs/testing-oauth.md`.
