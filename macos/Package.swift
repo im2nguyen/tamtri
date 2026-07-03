@@ -27,6 +27,11 @@ let package = Package(
         .systemLibrary(
             name: "tamtri_coreFFI",
             path: "Sources/tamtri_coreFFI"
+        ),
+        .testTarget(
+            name: "TamtriTests",
+            dependencies: ["Tamtri"],
+            path: "Tests/TamtriTests"
         )
     ]
 )

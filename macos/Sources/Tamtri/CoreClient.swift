@@ -30,6 +30,22 @@ struct GatewayServerRecord: Identifiable, Equatable {
     let missingCredentialRefs: [String]
 }
 
+struct WorkdirFileRecord: Equatable, Identifiable, Hashable {
+    var id: String { relativePath }
+    let relativePath: String
+    let size: UInt64
+    let mimeType: String?
+    let modifiedAt: UInt64
+}
+
+struct WorkdirFilePreview: Equatable {
+    let relativePath: String
+    let mimeType: String?
+    let text: String?
+    let imageData: Data?
+    let error: String?
+}
+
 protocol CoreClient: Sendable {
     var events: AsyncStream<CoreEvent> { get }
 
@@ -38,6 +54,14 @@ protocol CoreClient: Sendable {
     func createConversation(title: String, harnessId: String, modelId: String) async throws -> ConversationRecord
     func forkConversation(id: String, harnessId: String, modelId: String) async throws -> ConversationRecord
     func sendMessage(conversationId: String, text: String) async throws
+    func copyFileToWorkdir(conversationId: String, sourcePath: String) async throws -> String
+    func listWorkdirFiles(conversationId: String) async throws -> [WorkdirFileRecord]
+    func conversationWorkdirPath(conversationId: String) async throws -> String
+    func readWorkdirFile(conversationId: String, relativePath: String) async throws -> WorkdirFilePreview
+    func verifyArtifactInline(size: UInt64, sha256: String, inlineContent: String) async throws
+    func logArtifactNavigationBlocked(conversationId: String, url: String) async throws
+    func readAttachmentVerified(conversationId: String, path: String, size: UInt64, sha256: String) async throws -> Data
+    func verifiedAttachmentPath(conversationId: String, path: String, size: UInt64, sha256: String) async throws -> String
     func respondPermission(conversationId: String, requestId: String, optionId: String) async throws
     func cancelRun(conversationId: String) async throws
     func listGatewayServers() async throws -> [GatewayServerRecord]
@@ -89,6 +113,34 @@ actor MockCoreClient: CoreClient {
     func sendMessage(conversationId: String, text: String) async throws {
         continuation.yield(CoreEvent(conversationId: conversationId, kind: "text_delta", payloadJSON: #"{"text":"Thinking about it..."}"#))
         continuation.yield(CoreEvent(conversationId: conversationId, kind: "permission_requested", payloadJSON: #"{"request_id":"mock-permission","action":"edit","options":[{"id":"allow_once","label":"Allow once"},{"id":"deny","label":"Deny"}]}"#))
+    }
+
+    func copyFileToWorkdir(conversationId: String, sourcePath: String) async throws -> String {
+        URL(fileURLWithPath: sourcePath).lastPathComponent
+    }
+
+    func listWorkdirFiles(conversationId: String) async throws -> [WorkdirFileRecord] {
+        []
+    }
+
+    func conversationWorkdirPath(conversationId: String) async throws -> String {
+        "/tmp/workdir"
+    }
+
+    func readWorkdirFile(conversationId: String, relativePath: String) async throws -> WorkdirFilePreview {
+        WorkdirFilePreview(relativePath: relativePath, mimeType: "text/plain", text: "mock", imageData: nil, error: nil)
+    }
+
+    func verifyArtifactInline(size: UInt64, sha256: String, inlineContent: String) async throws {}
+
+    func logArtifactNavigationBlocked(conversationId: String, url: String) async throws {}
+
+    func readAttachmentVerified(conversationId: String, path: String, size: UInt64, sha256: String) async throws -> Data {
+        Data()
+    }
+
+    func verifiedAttachmentPath(conversationId: String, path: String, size: UInt64, sha256: String) async throws -> String {
+        path
     }
 
     func respondPermission(conversationId: String, requestId: String, optionId: String) async throws {

@@ -1,12 +1,16 @@
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Duration;
 
+use tamtri_core::config::GatewayConfig;
 use tamtri_core::conversation::{ContentBlock, Message, Role, WorkingDir};
 use tamtri_core::harness::acp::{AcpAdapter, AgentLaunchSpec};
 use tamtri_core::harness::{
     ContextSeed, ConversationContext, HarnessAdapter, HarnessEvent, ToolStatus, TurnEndReason,
     TurnInput,
 };
+use tamtri_core::mcp::endpoint::start_loopback_gateway;
+use tamtri_core::mcp::gateway::{McpGateway, MemoryCredentials};
 
 fn adapter() -> AcpAdapter {
     AcpAdapter::new(AgentLaunchSpec {
@@ -33,13 +37,13 @@ fn real_adapter_from_env() -> Option<AcpAdapter> {
     }))
 }
 
-fn ctx() -> ConversationContext {
+fn ctx_in(path: PathBuf) -> ConversationContext {
     ConversationContext {
         seed: ContextSeed::FreshTranscript {
             messages: Vec::new(),
         },
         working_dir: WorkingDir::VaultLocal,
-        working_dir_path: PathBuf::from("."),
+        working_dir_path: path,
         roots: Vec::new(),
         mcp_servers: Vec::new(),
         model_id: "mock".into(),
@@ -62,7 +66,11 @@ fn user_turn() -> TurnInput {
 
 #[tokio::test]
 async fn acp_handshake_and_session_streams_events() {
-    let run = adapter().run(ctx(), user_turn()).await.unwrap();
+    let temp = tempfile::tempdir().unwrap();
+    let run = adapter()
+        .run(ctx_in(temp.path().to_path_buf()), user_turn())
+        .await
+        .unwrap();
     let mut events = collect_until_permission(run).await;
 
     assert!(
@@ -92,7 +100,11 @@ async fn acp_handshake_and_session_streams_events() {
 
 #[tokio::test]
 async fn permission_round_trip_mid_turn() {
-    let mut run = adapter().run(ctx(), user_turn()).await.unwrap();
+    let temp = tempfile::tempdir().unwrap();
+    let mut run = adapter()
+        .run(ctx_in(temp.path().to_path_buf()), user_turn())
+        .await
+        .unwrap();
     let mut permission_id = None;
 
     while let Some(event) = run.events.recv().await {
@@ -143,7 +155,11 @@ async fn hermes_acp_smoke() {
         text: "Reply with exactly: hello from acp".into(),
     }];
 
-    let mut run = adapter.run(ctx(), turn).await.expect("start real ACP run");
+    let temp = tempfile::tempdir().unwrap();
+    let mut run = adapter
+        .run(ctx_in(temp.path().to_path_buf()), turn)
+        .await
+        .expect("start real ACP run");
     let mut saw_text = false;
     let mut saw_end = false;
 
@@ -183,6 +199,67 @@ async fn hermes_acp_smoke() {
 
     assert!(saw_text, "real ACP agent should stream text");
     assert!(saw_end, "real ACP agent should end the turn");
+}
+
+#[tokio::test]
+#[ignore = "requires a locally installed real ACP agent; set TAMTRI_REAL_ACP_COMMAND and optional TAMTRI_REAL_ACP_ARGS"]
+async fn hermes_acp_accepts_tamtri_gateway_mcp_server() {
+    let adapter = real_adapter_from_env()
+        .expect("set TAMTRI_REAL_ACP_COMMAND, for example /Users/dos/.local/bin/hermes");
+    let gateway = Arc::new(
+        McpGateway::new(
+            GatewayConfig::default(),
+            Arc::new(MemoryCredentials::default()),
+            None,
+        )
+        .unwrap(),
+    );
+    let endpoint = start_loopback_gateway(gateway).await.unwrap();
+    let temp = tempfile::tempdir().unwrap();
+    let mut ctx = ctx_in(temp.path().to_path_buf());
+    ctx.mcp_servers = vec![endpoint.mcp_ref()];
+    let mut turn = user_turn();
+    turn.user_message.content = vec![ContentBlock::Text {
+        text: "Reply with exactly: gateway accepted".into(),
+    }];
+
+    let mut run = adapter
+        .run(ctx, turn)
+        .await
+        .expect("Hermes should accept Tamtri gateway mcpServers shape");
+    let mut saw_text = false;
+    while let Ok(Some(event)) =
+        tokio::time::timeout(Duration::from_secs(90), run.events.recv()).await
+    {
+        match event {
+            HarnessEvent::TextDelta { text } => saw_text |= !text.trim().is_empty(),
+            HarnessEvent::PermissionRequested {
+                request_id,
+                options,
+                ..
+            } => {
+                let option = options
+                    .iter()
+                    .find(|option| option.id.contains("allow"))
+                    .or_else(|| options.first())
+                    .expect("permission option")
+                    .id
+                    .clone();
+                run.control
+                    .respond_permission(&request_id, &option)
+                    .await
+                    .expect("respond permission");
+            }
+            HarnessEvent::TurnEnded { reason } => {
+                assert_eq!(reason, TurnEndReason::EndTurn);
+                break;
+            }
+            HarnessEvent::Error { message } => panic!("real ACP gateway error: {message}"),
+            _ => {}
+        }
+    }
+    endpoint.shutdown().await;
+    assert!(saw_text, "real ACP agent should stream text");
 }
 
 async fn collect_until_permission(mut run: tamtri_core::harness::HarnessRun) -> Vec<HarnessEvent> {

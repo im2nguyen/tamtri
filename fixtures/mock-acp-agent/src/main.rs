@@ -6,6 +6,7 @@ fn main() {
     let stdin = io::stdin();
     let mut stdout = io::stdout();
     let mut permission_id: Option<Value> = None;
+    let mut cwd: Option<String> = None;
 
     for line in stdin.lock().lines() {
         let Ok(line) = line else {
@@ -43,15 +44,28 @@ fn main() {
                         "result": {"agentCapabilities": {"streaming": true, "tools": true}}
                     }),
                 ),
-                Some("session/new") => write_msg(
-                    &mut stdout,
-                    json!({
-                        "jsonrpc": "2.0",
-                        "id": id,
-                        "result": {"sessionId": "mock-session"}
-                    }),
-                ),
+                Some("session/new") => {
+                    cwd = message
+                        .pointer("/params/cwd")
+                        .and_then(Value::as_str)
+                        .map(str::to_string);
+                    write_msg(
+                        &mut stdout,
+                        json!({
+                            "jsonrpc": "2.0",
+                            "id": id,
+                            "result": {"sessionId": "mock-session"}
+                        }),
+                    )
+                }
                 Some("session/prompt") => {
+                    if let Some(cwd) = &cwd {
+                        let _ = std::fs::create_dir_all(cwd);
+                        let _ = std::fs::write(
+                            std::path::Path::new(cwd).join("report.html"),
+                            "<!doctype html><html><body><h1>ok</h1></body></html>",
+                        );
+                    }
                     emit_updates(&mut stdout);
                     let req_id = json!("perm-1");
                     permission_id = Some(id);

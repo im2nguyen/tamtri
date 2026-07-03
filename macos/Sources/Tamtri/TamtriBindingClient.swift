@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import Security
 
@@ -34,6 +35,71 @@ actor TamtriBindingClient: CoreClient {
 
     func sendMessage(conversationId: String, text: String) async throws {
         try core.sendMessage(conversationId: conversationId, text: text)
+    }
+
+    func copyFileToWorkdir(conversationId: String, sourcePath: String) async throws -> String {
+        try core.copyFileToWorkdir(conversationId: conversationId, sourcePath: sourcePath)
+    }
+
+    func listWorkdirFiles(conversationId: String) async throws -> [WorkdirFileRecord] {
+        try core.listWorkdirFiles(conversationId: conversationId).map {
+            WorkdirFileRecord(
+                relativePath: $0.relativePath,
+                size: $0.size,
+                mimeType: $0.mimeType,
+                modifiedAt: $0.modifiedAt
+            )
+        }
+    }
+
+    func conversationWorkdirPath(conversationId: String) async throws -> String {
+        try core.conversationWorkdirPath(conversationId: conversationId)
+    }
+
+    func readWorkdirFile(conversationId: String, relativePath: String) async throws -> WorkdirFilePreview {
+        let content = try core.readWorkdirFile(conversationId: conversationId, relativePath: relativePath)
+        let mimeType = content.mimeType
+        if artifactIsImageMime(mimeType), NSImage(data: Data(content.data)) != nil {
+            return WorkdirFilePreview(
+                relativePath: relativePath,
+                mimeType: mimeType,
+                text: nil,
+                imageData: Data(content.data),
+                error: nil
+            )
+        }
+        if artifactIsTextLikeMime(mimeType), let text = String(data: Data(content.data), encoding: .utf8) {
+            return WorkdirFilePreview(
+                relativePath: relativePath,
+                mimeType: mimeType,
+                text: text,
+                imageData: nil,
+                error: nil
+            )
+        }
+        return WorkdirFilePreview(
+            relativePath: relativePath,
+            mimeType: mimeType,
+            text: nil,
+            imageData: nil,
+            error: "No in-app preview for this file type."
+        )
+    }
+
+    func verifyArtifactInline(size: UInt64, sha256: String, inlineContent: String) async throws {
+        try core.verifyArtifactInline(size: size, sha256: sha256, inlineContent: inlineContent)
+    }
+
+    func logArtifactNavigationBlocked(conversationId: String, url: String) async throws {
+        try core.logArtifactNavigationBlocked(conversationId: conversationId, url: url)
+    }
+
+    func readAttachmentVerified(conversationId: String, path: String, size: UInt64, sha256: String) async throws -> Data {
+        try core.readAttachmentVerified(conversationId: conversationId, path: path, size: size, sha256: sha256)
+    }
+
+    func verifiedAttachmentPath(conversationId: String, path: String, size: UInt64, sha256: String) async throws -> String {
+        try core.verifiedAttachmentPath(conversationId: conversationId, path: path, size: size, sha256: sha256)
     }
 
     func respondPermission(conversationId: String, requestId: String, optionId: String) async throws {

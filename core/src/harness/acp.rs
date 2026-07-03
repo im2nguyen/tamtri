@@ -58,9 +58,13 @@ impl HarnessAdapter for AcpAdapter {
     }
 
     async fn run(&self, ctx: ConversationContext, turn: TurnInput) -> Result<HarnessRun> {
-        let transport =
-            StdioTransport::spawn(&self.launch.command, &self.launch.args, &self.launch.env)
-                .await?;
+        let transport = StdioTransport::spawn_with_cwd(
+            &self.launch.command,
+            &self.launch.args,
+            &self.launch.env,
+            Some(&ctx.working_dir_path),
+        )
+        .await?;
         let (rpc, inbound) = RpcConnection::start(Box::new(transport));
 
         let _initialize = rpc
@@ -514,13 +518,21 @@ fn acp_mcp_servers(servers: &[McpServerRef]) -> Vec<serde_json::Value> {
                     "type": "stdio",
                     "name": server.name,
                     "command": command,
-                    "args": args
+                    "args": args,
+                    "env": []
                 })
             }
             "http" | "streamable_http" => json!({
                 "type": "http",
                 "name": server.name,
-                "url": server.endpoint
+                "url": server.endpoint,
+                "headers": []
+            }),
+            "sse" => json!({
+                "type": "sse",
+                "name": server.name,
+                "url": server.endpoint,
+                "headers": []
             }),
             other => json!({
                 "type": other,
@@ -571,6 +583,7 @@ mod tests {
         assert_eq!(value[0]["name"], "Tamtri Gateway");
         assert_eq!(value[0]["type"], "http");
         assert_eq!(value[0]["url"], "http://127.0.0.1:8765/mcp");
+        assert_eq!(value[0]["headers"], json!([]));
     }
 
     #[test]
@@ -585,5 +598,6 @@ mod tests {
         assert_eq!(value[0]["type"], "stdio");
         assert_eq!(value[0]["command"], "/tmp/tamtri-gateway-stdio");
         assert_eq!(value[0]["args"][0], "http://127.0.0.1:1234/mcp");
+        assert_eq!(value[0]["env"], json!([]));
     }
 }
