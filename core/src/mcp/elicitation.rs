@@ -2,6 +2,7 @@ use serde_json::{Map, Value, json};
 
 use crate::conversation::{ElicitationAction, ElicitationMode};
 use crate::mcp::protocol::ElicitationCreateParams;
+use crate::mcp::url_handoff::{redact_url_for_audit, validate_handoff_url};
 use crate::{CoreError, Result};
 
 pub fn parse_create_params(params: Value) -> Result<ElicitationCreateParams> {
@@ -109,6 +110,15 @@ pub fn origin_tool_call_id_from_meta(meta: Option<&Value>) -> Option<String> {
     None
 }
 
+pub fn validate_elicitation_url(raw: &str) -> Result<String> {
+    let validated = validate_handoff_url(raw)?;
+    Ok(validated.url)
+}
+
+pub fn audit_safe_elicitation_url(raw: &str) -> String {
+    redact_url_for_audit(raw)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -141,5 +151,11 @@ mod tests {
         let sanitized = sanitize_transcript_data(&data);
         assert_eq!(sanitized["name"], "octocat");
         assert_eq!(sanitized["api_key"], "[redacted]");
+    }
+
+    #[test]
+    fn elicitation_url_audit_redacts_query() {
+        let redacted = audit_safe_elicitation_url("https://example.com/auth?secret=1");
+        assert_eq!(redacted, "https://example.com/auth");
     }
 }

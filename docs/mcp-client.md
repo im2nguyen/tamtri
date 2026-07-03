@@ -74,6 +74,18 @@ The gateway keeps route tables from exposed names/URIs to the original downstrea
 
 `core/src/mcp/endpoint.rs` starts a run-scoped loopback HTTP endpoint on `127.0.0.1:0`. It accepts JSON-RPC POSTs for normal request/response MCP calls and a GET SSE stream that forwards gateway progress/logging/cancellation as JSON-RPC notifications. `TamtriCore` creates one endpoint for each run and passes exactly one MCP server ref named `Tamtri Gateway` into ACP `session/new`. The endpoint shuts down when the run ends or is cancelled.
 
-Implemented gateway events include server connection, tool routing, credential injection by reference, progress, logging, cancellation, and downstream errors. These events write `events.jsonl` receipts without storing secret values.
+Implemented gateway events include server connection, tool routing, credential injection by reference, progress, logging, cancellation, downstream errors, and elicitation request/resolution. These events write `events.jsonl` receipts without storing secret values.
+
+## Elicitation (Milestone 6)
+
+Downstream servers may call `elicitation/create` while a `tools/call` is pending. The gateway advertises elicitation to downstream clients, emits UI events, waits for the shell response, and returns `accept`, `decline`, or `cancel` to the server.
+
+- **Form mode** renders a native SwiftUI card for structured, non-secret answers.
+- **URL mode** renders a consent card with exact destination origin and path (query stripped in audit logs), then opens the system browser only after explicit approval.
+- Shared URL validation lives in `core/src/mcp/url_handoff.rs`. Non-HTTPS URLs are rejected except loopback OAuth callbacks. Userinfo URLs are rejected.
+
+## OAuth for remote HTTP servers (Milestone 6 scaffold)
+
+`config.json` may attach an `oauth` block to streamable HTTP gateway servers. Core implements authorization code + PKCE in `core/src/mcp/oauth.rs`. Resolved bearer tokens inject into outbound HTTP via `CredentialResolver` using `token_ref` only in the vault. Shell-side loopback callback, keychain token bundle storage, and settings connect flow are still pending.
 
 The `tamtri-gateway-stdio` helper forwards stdio JSON-RPC frames to that endpoint for agents that require stdio MCP server refs. Development builds discover it via `TAMTRI_GATEWAY_STDIO_HELPER`, next to the current executable, or under `target/debug`; release packaging still needs to bundle it beside the signed app executable.

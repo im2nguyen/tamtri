@@ -224,6 +224,8 @@ struct EventRow: View {
         switch event.kind {
         case "permission_requested":
             PermissionCard(event: event)
+        case "elicitation_requested":
+            ElicitationCard(event: event)
         case "thought_delta":
             DisclosureGroup("Thinking") {
                 Text(EventPayload.text(from: event.payloadJSON))
@@ -248,7 +250,7 @@ struct EventRow: View {
             Text("Turn ended")
                 .font(.caption)
                 .foregroundStyle(.secondary)
-        case "gateway_server_connected", "gateway_tool_routed", "gateway_progress", "gateway_log", "gateway_cancellation", "gateway_credential_injected", "gateway_downstream_error":
+        case "gateway_server_connected", "gateway_tool_routed", "gateway_progress", "gateway_log", "gateway_cancellation", "gateway_credential_injected", "gateway_downstream_error", "elicitation_resolved":
             GatewayEventCard(event: event)
         default:
             EmptyView()
@@ -341,6 +343,18 @@ struct ContentBlockView: View {
                 Text(block.outputSummary)
                     .font(.body.monospaced())
                     .textSelection(.enabled)
+            }
+        case "elicitation_request":
+            ElicitationHistoryCard(block: block)
+        case "elicitation_response":
+            CompactCard(title: "Elicitation response", systemImage: "bubble.left.and.text.bubble.right") {
+                Text(block.action ?? "unknown")
+                    .font(.body)
+                if let data = block.data {
+                    Text(data.truncatedDescription)
+                        .font(.body.monospaced())
+                        .textSelection(.enabled)
+                }
             }
         case "artifact":
             // Frozen attachments stay in messages.jsonl for replay/export;
@@ -694,6 +708,152 @@ struct PermissionCard: View {
         .padding(10)
         .background(.yellow.opacity(0.18), in: RoundedRectangle(cornerRadius: 8))
         .accessibilityLabel("Permission requested")
+    }
+}
+
+struct ElicitationCard: View {
+    @EnvironmentObject private var store: AppStore
+    let event: CoreEvent
+    @State private var answerText = ""
+
+    private var request: ElicitationPayload? {
+        try? JSONDecoder().decode(ElicitationPayload.self, from: Data(event.payloadJSON.utf8))
+    }
+
+    var body: some View {
+        if let request, request.mode == "url" {
+            URLConsentCard(
+                request: URLConsentRequest(
+                    requestId: request.requestId,
+                    serverId: request.serverId,
+                    originToolCallId: request.originToolCallId,
+                    message: request.message,
+                    url: request.url
+                )
+            )
+        } else {
+            formCard
+        }
+    }
+
+    private var formCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Label("Follow-up from \(request?.serverId ?? "gateway server")", systemImage: "questionmark.bubble")
+                .font(.headline)
+            if let origin = request?.originToolCallId, !origin.isEmpty {
+                Text("Related to tool call \(origin)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            if let request {
+                Text(request.message)
+                    .textSelection(.enabled)
+                if request.mode == "form" {
+                    TextField("Your answer", text: $answerText)
+                        .textFieldStyle(.roundedBorder)
+                }
+            }
+            HStack {
+                Button("Decline") {
+                    respond(action: "decline")
+                }
+                Button("Cancel", role: .cancel) {
+                    respond(action: "cancel")
+                }
+                Button("Submit") {
+                    respond(action: "accept")
+                }
+                .keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding(10)
+        .background(.teal.opacity(0.12), in: RoundedRectangle(cornerRadius: 8))
+        .accessibilityLabel("Elicitation requested")
+    }
+
+    private func respond(action: String) {
+        guard let request else { return }
+        let dataJSON: String?
+        if action == "accept" {
+            let field = request.primaryFieldName ?? "name"
+            let payload = [field: answerText]
+            if let data = try? JSONSerialization.data(withJSONObject: payload),
+               let json = String(data: data, encoding: .utf8) {
+                dataJSON = json
+            } else {
+                dataJSON = nil
+            }
+        } else {
+            dataJSON = nil
+        }
+        store.respondElicitation(requestId: request.requestId, action: action, dataJSON: dataJSON)
+    }
+}
+
+struct ElicitationHistoryCard: View {
+    let block: TranscriptContentBlock
+
+    var body: some View {
+        CompactCard(title: historyTitle, systemImage: historyIcon) {
+            VStack(alignment: .leading, spacing: 6) {
+                if let serverId = block.serverId {
+                    Text("From \(serverId)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Text(block.message ?? "")
+                    .textSelection(.enabled)
+                if block.mode == "url", let url = block.url {
+                    Text(URLHandoffPolicy.redactedDisplay(url))
+                        .font(.caption.monospaced())
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+    }
+
+    private var historyTitle: String {
+        block.mode == "url" ? "URL handoff requested" : "Elicitation"
+    }
+
+    private var historyIcon: String {
+        block.mode == "url" ? "safari" : "questionmark.bubble"
+    }
+}
+
+private struct ElicitationPayload: Decodable {
+    let requestId: String
+    let serverId: String?
+    let originToolCallId: String?
+    let mode: String
+    let message: String
+    let url: String?
+    let schema: JSONValue?
+
+    enum CodingKeys: String, CodingKey {
+        case requestId = "request_id"
+        case serverId = "server_id"
+        case originToolCallId = "origin_tool_call_id"
+        case mode
+        case message
+        case url
+        case schema
+    }
+
+    var primaryFieldName: String? {
+        guard case .object(let object) = schema,
+              case .object(let properties) = object["properties"] ?? .null
+        else {
+            return "name"
+        }
+        if case .array(let required) = object["required"] ?? .null {
+            for item in required {
+                if case .string(let name) = item, properties[name] != nil {
+                    return name
+                }
+            }
+        }
+        return properties.keys.sorted().first ?? "name"
     }
 }
 
@@ -1129,6 +1289,15 @@ struct ForkConversationView: View {
 struct SettingsView: View {
     @EnvironmentObject private var store: AppStore
     @Environment(\.dismiss) private var dismiss
+    @State private var showAddServer = false
+    @State private var serverToEdit: GatewayServerRecord?
+    @State private var serverToRemove: GatewayServerRecord?
+
+    private var vaultConfigPath: String {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".tamtri/vault/config.json")
+            .path
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -1136,29 +1305,97 @@ struct SettingsView: View {
                 Text("Settings")
                     .font(.title2.bold())
                 Spacer()
+                Button {
+                    store.refreshGatewayServers()
+                } label: {
+                    Label("Refresh", systemImage: "arrow.clockwise")
+                }
                 Button("Done") {
                     dismiss()
                 }
             }
+
             Text("Tamtri gateway tools")
                 .font(.headline)
+
+            Text("Servers are stored in \(vaultConfigPath). Edits here and in an external editor both update the same file; use Refresh after external changes.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
             if store.gatewayServers.isEmpty {
-                Text("No gateway servers are configured in config.json.")
-                    .foregroundStyle(.secondary)
+                VStack(spacing: 12) {
+                    Text("No gateway servers configured yet.")
+                        .foregroundStyle(.secondary)
+                    Button("Add MCP server") {
+                        showAddServer = true
+                    }
+                    .buttonStyle(.borderedProminent)
+                }
+                .frame(maxWidth: .infinity, minHeight: 180)
             } else {
-                List(store.gatewayServers) { server in
-                    GatewayServerRow(server: server)
+                List {
+                    ForEach(store.gatewayServers) { server in
+                        GatewayServerRow(
+                            server: server,
+                            onEdit: { serverToEdit = server },
+                            onRemove: { serverToRemove = server }
+                        )
+                    }
                 }
                 .frame(minHeight: 220)
             }
+
+            HStack {
+                Button("Add MCP server") {
+                    showAddServer = true
+                }
+                Spacer()
+                Link("20 Questions testing guide", destination: URL(string: "https://github.com/im2nguyen/tamtri/blob/main/docs/testing-elicitation.md")!)
+                    .font(.caption)
+            }
+
             Text("Agent-native tools are not exposed by this harness yet.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
         .padding()
-        .frame(width: 520, height: 380)
+        .frame(width: 560, height: 480)
         .onAppear {
             store.refreshGatewayServers()
+        }
+        .sheet(isPresented: $showAddServer) {
+            GatewayServerEditorSheet(
+                mode: .add,
+                existingServers: store.gatewayServers,
+                onSave: store.saveGatewayServers
+            )
+        }
+        .sheet(item: $serverToEdit) { server in
+            GatewayServerEditorSheet(
+                mode: .edit(server),
+                existingServers: store.gatewayServers,
+                onSave: store.saveGatewayServers
+            )
+        }
+        .confirmationDialog(
+            "Remove \(serverToRemove?.displayName ?? "server")?",
+            isPresented: Binding(
+                get: { serverToRemove != nil },
+                set: { if !$0 { serverToRemove = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button("Remove", role: .destructive) {
+                if let serverToRemove {
+                    store.removeGatewayServer(id: serverToRemove.id)
+                }
+                self.serverToRemove = nil
+            }
+            Button("Cancel", role: .cancel) {
+                serverToRemove = nil
+            }
+        } message: {
+            Text("This removes the server from config.json. Credential bindings for this server are removed too.")
         }
     }
 }
@@ -1166,6 +1403,8 @@ struct SettingsView: View {
 struct GatewayServerRow: View {
     @EnvironmentObject private var store: AppStore
     let server: GatewayServerRecord
+    let onEdit: () -> Void
+    let onRemove: () -> Void
     @State private var credentialValues: [String: String] = [:]
 
     var body: some View {
@@ -1178,8 +1417,16 @@ struct GatewayServerRow: View {
                 Spacer()
                 Text(server.scope)
                 Text(server.transport)
+                Button("Edit", action: onEdit)
+                Button("Remove", role: .destructive, action: onRemove)
             }
             .font(.caption)
+            if server.transport == "stdio", !server.stdioCommand.isEmpty {
+                Text(server.stdioCommand)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
             if server.credentialRefs.isEmpty {
                 Text("No credentials required")
                     .font(.caption)

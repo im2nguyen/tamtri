@@ -15,12 +15,12 @@ use crate::conversation::{ElicitationAction, ElicitationMode};
 use crate::mcp::client::{ElicitationHandler, McpClient, McpClientConfig, McpClientEvent};
 use crate::mcp::elicitation::{
     elicitation_mode, elicitation_request_id, origin_tool_call_id_from_meta, parse_create_params,
-    result_for_action, schema_looks_secret,
+    result_for_action, schema_looks_secret, validate_elicitation_url,
 };
 use crate::mcp::protocol::{
     CallToolResult, GetPromptResult, Prompt, ReadResourceResult, Resource, Tool,
 };
-use crate::rpc::jsonrpc::{JsonRpcError, METHOD_NOT_FOUND};
+use crate::rpc::jsonrpc::JsonRpcError;
 use crate::{CoreError, Result};
 
 #[async_trait]
@@ -505,6 +505,27 @@ impl McpGateway {
             }
             GatewayTransport::StreamableHttp { endpoint, headers } => {
                 let mut resolved_headers = headers.clone();
+                if let Some(oauth) = &server.oauth {
+                    if let Some(token) = self.credentials.resolve(&oauth.token_ref).await? {
+                        resolved_headers.push((
+                            "Authorization".to_string(),
+                            format!("Bearer {token}"),
+                        ));
+                        self.emit(GatewayEvent::CredentialInjected {
+                            server_id: server.id.clone(),
+                            credential_ref: oauth.token_ref.clone(),
+                            target_kind: "oauth_bearer".to_string(),
+                        });
+                    } else {
+                        self.emit(GatewayEvent::DownstreamError {
+                            server_id: server.id.clone(),
+                            message: format!(
+                                "oauth token missing for {}; connect in settings",
+                                server.id
+                            ),
+                        });
+                    }
+                }
                 for credential in &server.credentials {
                     if let CredentialTarget::Header { name, prefix } = &credential.target
                         && let Some(value) =
@@ -687,17 +708,25 @@ impl GatewayElicitationService {
             data: None,
         })?;
         let mode = elicitation_mode(&parsed);
-        if matches!(mode, ElicitationMode::Url) {
-            return Err(JsonRpcError {
-                code: METHOD_NOT_FOUND,
-                message: "url elicitation is not supported yet".to_string(),
-                data: None,
-            });
-        }
-        if let Some(schema) = parsed.requested_schema.as_ref()
+        if matches!(mode, ElicitationMode::Form)
+            && let Some(schema) = parsed.requested_schema.as_ref()
             && schema_looks_secret(schema)
         {
             return Ok(result_for_action(ElicitationAction::Decline, None));
+        }
+        if matches!(mode, ElicitationMode::Url) {
+            let Some(url) = parsed.url.as_deref() else {
+                return Err(JsonRpcError {
+                    code: -32602,
+                    message: "url elicitation requires url".to_string(),
+                    data: None,
+                });
+            };
+            validate_elicitation_url(url).map_err(|err| JsonRpcError {
+                code: -32602,
+                message: err.to_string(),
+                data: None,
+            })?;
         }
         let request_id = elicitation_request_id(&parsed, &Uuid::now_v7().to_string());
         let origin_tool_call_id = self

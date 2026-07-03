@@ -33,6 +33,11 @@
 - `gateway_cancellation`
 - `gateway_credential_injected`
 - `gateway_downstream_error`
+- `elicitation_requested`
+- `elicitation_resolved`
+- `oauth_handoff_started`
+- `oauth_handoff_completed`
+- `oauth_refresh_failed`
 - `harness_spawned`
 - `harness_exited`
 - `error`
@@ -46,6 +51,8 @@ The event log is local by default. It is not part of a portable share bundle unl
 Secrets never appear in payloads. The codec rejects secret-like keys such as `secret`, `token`, `password`, and `api_key`.
 
 Gateway credential receipts record references and target kinds only, for example `{ "server_id": "linear", "credential_ref": "keychain://linear", "target_kind": "header" }`. The resolved value is never serialized.
+
+Milestone 6 writes `elicitation_requested` and `elicitation_resolved` when a downstream server elicits during a tool call. URL-mode receipts include `url_origin` and a query-stripped `url`; query parameters are never stored. OAuth lifecycle receipts (`oauth_handoff_started`, `oauth_handoff_completed`, `oauth_refresh_failed`) record server id, credential references, and status only. Token values never appear in payloads.
 
 Milestone 4 writes gateway receipts for server connection, tool routing, credential injection, progress, logging, cancellation, and downstream errors.
 

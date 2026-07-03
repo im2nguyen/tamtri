@@ -10,7 +10,9 @@ use serde_json::json;
 use tokio::runtime::{Builder, Runtime};
 
 use crate::artifact::{detect_mime, verify_inline_artifact, ArtifactSnapshot, ArtifactSnapshotter, verify_attachment};
-use crate::config::load_app_config;
+use crate::config::{
+    load_app_config, replace_gateway_servers, GatewayScope, GatewayServerConfig, GatewayTransport,
+};
 use crate::conversation::reduce::TurnReducer;
 use crate::conversation::{
     ContentBlock, Conversation, ElicitationAction, Id, McpServerRef, Message, Role, WorkingDir,
@@ -19,7 +21,8 @@ use crate::harness::acp::{AcpAdapter, AgentLaunchSpec};
 use crate::harness::{
     ContextSeed, ConversationContext, HarnessAdapter, HarnessEvent, RunControl, TurnInput,
 };
-use crate::mcp::elicitation::sanitize_transcript_data;
+use crate::mcp::elicitation::{audit_safe_elicitation_url, sanitize_transcript_data};
+use crate::mcp::url_handoff::validate_handoff_url;
 use crate::mcp::endpoint::{GatewayEndpoint, start_loopback_gateway};
 use crate::mcp::gateway::{GatewayEvent, McpGateway, MemoryCredentials};
 use crate::vault::events::{Event, EventKind};
@@ -77,12 +80,22 @@ pub struct WorkdirFileContentDto {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, uniffi::Record)]
+pub struct GatewayEnvVarDto {
+    pub name: String,
+    pub value: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, uniffi::Record)]
 pub struct GatewayServerDto {
     pub id: String,
     pub display_name: String,
     pub enabled: bool,
     pub scope: String,
     pub transport: String,
+    pub stdio_command: String,
+    pub stdio_args: Vec<String>,
+    pub stdio_env: Vec<GatewayEnvVarDto>,
+    pub http_endpoint: String,
     pub credential_refs: Vec<String>,
     pub missing_credential_refs: Vec<String>,
 }
@@ -269,6 +282,10 @@ impl TamtriCore {
 
     pub fn set_gateway_credential(&self, credential_ref: String, value: String) -> FfiResult<()> {
         self.credentials.set(credential_ref, value).map_err(ffi_err)
+    }
+
+    pub fn save_gateway_servers(&self, servers: Vec<GatewayServerDto>) -> FfiResult<()> {
+        self.save_gateway_servers_inner(&servers).map_err(ffi_err)
     }
 
     pub fn copy_file_to_workdir(
@@ -678,39 +695,23 @@ impl TamtriCore {
             .gateway
             .servers
             .into_iter()
-            .map(|server| {
-                let credential_refs = server
-                    .credentials
-                    .iter()
-                    .map(|credential| credential.credential_ref.clone())
-                    .collect::<Vec<_>>();
-                let missing_credential_refs = credential_refs
-                    .iter()
-                    .filter_map(
-                        |credential_ref| match self.credentials.contains(credential_ref) {
-                            Ok(true) => None,
-                            Ok(false) | Err(_) => Some(credential_ref.clone()),
-                        },
-                    )
-                    .collect::<Vec<_>>();
-                Ok(GatewayServerDto {
-                    id: server.id,
-                    display_name: server.display_name,
-                    enabled: server.enabled,
-                    scope: serde_json::to_string(&server.scope)?
-                        .trim_matches('"')
-                        .to_string(),
-                    transport: match server.transport {
-                        crate::config::GatewayTransport::Stdio { .. } => "stdio".to_string(),
-                        crate::config::GatewayTransport::StreamableHttp { .. } => {
-                            "streamable_http".to_string()
-                        }
-                    },
-                    credential_refs,
-                    missing_credential_refs,
-                })
-            })
+            .map(|server| gateway_server_to_dto(&server, &self.credentials))
             .collect()
+    }
+
+    pub fn save_gateway_servers_inner(&self, servers: &[GatewayServerDto]) -> Result<()> {
+        let config = load_app_config(self.vault.root())?;
+        let existing_by_id = config
+            .gateway
+            .servers
+            .into_iter()
+            .map(|server| (server.id.clone(), server))
+            .collect::<HashMap<_, _>>();
+        let gateway_servers = servers
+            .iter()
+            .map(|server| gateway_server_from_dto(server, existing_by_id.get(&server.id)))
+            .collect::<Result<Vec<_>>>()?;
+        replace_gateway_servers(self.vault.root(), gateway_servers)
     }
 
     pub fn copy_file_to_workdir_inner(
@@ -947,7 +948,10 @@ fn append_event_for_gateway_event(
                 "mode": mode,
                 "message": message,
                 "schema": schema,
-                "url": url,
+                "url": url.as_ref().map(|value| audit_safe_elicitation_url(value)),
+                "url_origin": url.as_ref().and_then(|value| {
+                    validate_handoff_url(value).ok().map(|validated| validated.origin)
+                }),
                 "origin_tool_call_id": origin_tool_call_id,
             }),
         ),
@@ -1064,7 +1068,7 @@ fn record_gateway_content_block(blocks: &Mutex<Vec<ContentBlock>>, event: &Gatew
         mode: mode.clone(),
         message: message.clone(),
         schema: schema.clone(),
-        url: url.clone(),
+        url: url.as_ref().map(|value| audit_safe_elicitation_url(value)),
     });
 }
 
@@ -1075,6 +1079,139 @@ fn parse_elicitation_action(action: &str) -> Result<ElicitationAction> {
         "cancel" => Ok(ElicitationAction::Cancel),
         _ => Err(CoreError::Protocol(format!(
             "unknown elicitation action: {action}"
+        ))),
+    }
+}
+
+fn gateway_server_to_dto(
+    server: &GatewayServerConfig,
+    credentials: &MemoryCredentials,
+) -> Result<GatewayServerDto> {
+    let credential_refs = server
+        .credentials
+        .iter()
+        .map(|credential| credential.credential_ref.clone())
+        .collect::<Vec<_>>();
+    let missing_credential_refs = credential_refs
+        .iter()
+        .filter_map(|credential_ref| match credentials.contains(credential_ref) {
+            Ok(true) => None,
+            Ok(false) | Err(_) => Some(credential_ref.clone()),
+        })
+        .collect::<Vec<_>>();
+    let (transport, stdio_command, stdio_args, stdio_env, http_endpoint) =
+        match &server.transport {
+            GatewayTransport::Stdio {
+                command,
+                args,
+                env,
+            } => (
+                "stdio".to_string(),
+                command.clone(),
+                args.clone(),
+                env.iter()
+                    .map(|(name, value)| GatewayEnvVarDto {
+                        name: name.clone(),
+                        value: value.clone(),
+                    })
+                    .collect(),
+                String::new(),
+            ),
+            GatewayTransport::StreamableHttp { endpoint, .. } => (
+                "streamable_http".to_string(),
+                String::new(),
+                Vec::new(),
+                Vec::new(),
+                endpoint.clone(),
+            ),
+        };
+    Ok(GatewayServerDto {
+        id: server.id.clone(),
+        display_name: server.display_name.clone(),
+        enabled: server.enabled,
+        scope: serde_json::to_string(&server.scope)?
+            .trim_matches('"')
+            .to_string(),
+        transport,
+        stdio_command,
+        stdio_args,
+        stdio_env,
+        http_endpoint,
+        credential_refs,
+        missing_credential_refs,
+    })
+}
+
+fn gateway_server_from_dto(
+    server: &GatewayServerDto,
+    existing: Option<&GatewayServerConfig>,
+) -> Result<GatewayServerConfig> {
+    if server.id.trim().is_empty() {
+        return Err(CoreError::Protocol(
+            "gateway server id cannot be empty".to_string(),
+        ));
+    }
+    if server.display_name.trim().is_empty() {
+        return Err(CoreError::Protocol(
+            "gateway server display name cannot be empty".to_string(),
+        ));
+    }
+    let scope = parse_gateway_scope(&server.scope)?;
+    let transport = match server.transport.as_str() {
+        "stdio" => {
+            if server.stdio_command.trim().is_empty() {
+                return Err(CoreError::Protocol(
+                    "stdio transport requires a command path".to_string(),
+                ));
+            }
+            GatewayTransport::Stdio {
+                command: server.stdio_command.clone(),
+                args: server.stdio_args.clone(),
+                env: server
+                    .stdio_env
+                    .iter()
+                    .map(|entry| (entry.name.clone(), entry.value.clone()))
+                    .collect(),
+            }
+        }
+        "streamable_http" => {
+            if server.http_endpoint.trim().is_empty() {
+                return Err(CoreError::Protocol(
+                    "streamable_http transport requires an endpoint URL".to_string(),
+                ));
+            }
+            GatewayTransport::StreamableHttp {
+                endpoint: server.http_endpoint.clone(),
+                headers: Vec::new(),
+            }
+        }
+        other => {
+            return Err(CoreError::Protocol(format!(
+                "unknown gateway transport: {other}"
+            )));
+        }
+    };
+    Ok(GatewayServerConfig {
+        id: server.id.clone(),
+        display_name: server.display_name.clone(),
+        enabled: server.enabled,
+        scope,
+        transport,
+        timeout_secs: existing.and_then(|existing| existing.timeout_secs),
+        credentials: existing
+            .map(|existing| existing.credentials.clone())
+            .unwrap_or_default(),
+        oauth: existing.and_then(|existing| existing.oauth.clone()),
+    })
+}
+
+fn parse_gateway_scope(scope: &str) -> Result<GatewayScope> {
+    match scope {
+        "system" => Ok(GatewayScope::System),
+        "user" => Ok(GatewayScope::User),
+        "project" => Ok(GatewayScope::Project),
+        other => Err(CoreError::Protocol(format!(
+            "unknown gateway scope: {other}"
         ))),
     }
 }

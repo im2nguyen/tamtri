@@ -79,8 +79,16 @@ Form fields are non-secret by design (questions and guesses only).
 Run:
 
 ```bash
-cargo test -p tamtri-core gateway_elicitation_twenty_questions
+cargo test -p tamtri-core gateway_elicitation
+cargo test -p tamtri-core url_elicitation
+cargo test -p tamtri-core oauth
 ```
+
+### URL-mode elicitation
+
+`mock-mcp-server` exposes an `elicit_url` tool that sends `mode: "url"` with an HTTPS authorize URL. Gateway tests cover accept/decline round-trips and URL validation (HTTPS required, userinfo rejected). Audit logs store `url_origin` and a query-stripped `url`.
+
+Manual UI: trigger a gateway tool that elicits in URL mode, confirm the consent card shows origin and redacted path, approve to open the system browser, and verify the downstream tool completes.
 
 ## Related fixtures
 
