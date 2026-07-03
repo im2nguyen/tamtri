@@ -64,7 +64,5 @@ fn reducer_golden_files() {
 
 #[test]
 fn gateway_reducer_golden_files() {
-    for case in ["elicitation_request_response"] {
-        reduce_gateway_fixture(case);
-    }
+    reduce_gateway_fixture("elicitation_request_response");
 }

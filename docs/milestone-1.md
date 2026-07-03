@@ -1,6 +1,6 @@
 # Milestone 1: Core Skeleton (vault + conversation model)
 
-**Status: Complete.** Legible vault, conversation model, fork/import, and enumerated tests.
+**Status: Complete.** Legible vault, conversation model, fork/import, and enumerated tests. Round 8 literal 100% verified.
 
 First Claude Code session. Build the Rust core (`tamtri-core`): the canonical conversation model, the **legible vault** (folder per conversation, `meta.json` + append-only `messages.jsonl` + `attachments/`), and fork/import. No UI. No MCP. No harnesses. This milestone locks the format everything else depends on, and it is the format the future team/enterprise sync layer will reuse, so get it clean.
 

@@ -1,6 +1,6 @@
 # Milestone 7: Apps + Tasks + Roots
 
-**Status: Complete.** Apps, Tasks, and Roots wired end-to-end with RC capability gates, fixtures, and tests. Sampling remains declined by design.
+**Status: Complete.** Apps, Tasks, and Roots wired end-to-end with RC capability gates, fixtures, and tests. Sampling remains declined by design. Round 8 literal 100% verified.
 
 Seventh build session. The remaining rich MCP primitives come online. Apps reuse the M5 webview host or React renderer island with a stricter declared-origin policy and a consent-gated UI-to-host bridge. Tasks turn long-running server work into durable task cards. Roots let users attach filesystem or knowledge roots per conversation and expose them through the gateway.
 

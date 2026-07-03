@@ -1,6 +1,6 @@
 # Milestone 2: MCP Client Baseline
 
-**Status: Complete.** Stdio MCP client, hermetic + integration tests, documented in `/docs/mcp-client.md`.
+**Status: Complete.** Stdio MCP client, hermetic + integration tests, documented in `/docs/mcp-client.md`. Round 8 literal 100% verified.
 
 Second Claude Code session. Build an MCP client in `tamtri-core` that connects to a local MCP server over stdio, completes the lifecycle handshake, lists tools, and calls a tool end to end. This is the foundation of tamtri's whole thesis, so the protocol layer must be correct and the message-loop design must leave room for server-initiated requests (elicitation, sampling) in later milestones.
 

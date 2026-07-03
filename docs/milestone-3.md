@@ -1,6 +1,6 @@
 # Milestone 3: AcpAdapter + First Light
 
-**Status: Complete.** Core + Swift first light, mock ACP fixture, consent cards, `events.jsonl`, UniFFI bridge.
+**Status: Complete.** Core + Swift first light, mock ACP fixture, consent cards, `events.jsonl`, UniFFI bridge. Round 8 literal 100% verified.
 
 Third build session. The core meets the shell. Build the `HarnessAdapter` seam and its first implementation (`AcpAdapter`), the reducer that turns live events into persisted `ContentBlock`s, the start of `events.jsonl`, the UniFFI bridge, and a minimal Swift outer shell. The transcript can be native SwiftUI for first light or an initial WebKit renderer island if that is faster, but Swift owns the app and the renderer owns no product logic. At the end, a real conversation with a real ACP agent runs inside a real Mac app and survives relaunch.
 

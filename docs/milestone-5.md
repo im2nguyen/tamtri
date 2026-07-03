@@ -1,6 +1,6 @@
 # Milestone 5: Rendering Plane + Artifact Hero
 
-**Status: Complete.** Artifact snapshotting, sandboxed inline render, drag-and-drop, policy tests. Full a11y pass and React island deferred to M8.
+**Status: Complete.** Artifact snapshotting, sandboxed inline render, drag-and-drop, policy tests. Full a11y pass and React island deferred to M8. Round 8 literal 100% verified.
 
 Fifth build session. This is the first "show, don't tell" milestone: a harness creates a report file and tamtri renders it inline. The same sandboxed rendering infrastructure later hosts MCP Apps, but this milestone is about artifacts produced by the harness, especially the report-from-data hero. This is also the natural milestone to introduce the React/TypeScript renderer island if the transcript/cards are moving to WebKit.
 

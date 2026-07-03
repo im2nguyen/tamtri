@@ -1,6 +1,6 @@
 # Milestone 4: Gateway + Full MCP Client
 
-**Status: Complete.** Gateway proxy, multiplexed MCP client, registry, fork-into, settings panel. Release packaging of `tamtri-gateway-stdio` deferred to M9.
+**Status: Complete.** Gateway proxy, multiplexed MCP client, registry, fork-into, settings panel. Release packaging of `tamtri-gateway-stdio` deferred to M9. Round 8 literal 100% verified.
 
 Fourth build session. tamtri takes its place in the middle: the agent sees tamtri as its MCP server, and tamtri connects to the real downstream MCP servers as a client. This is the largest core milestone because it turns the M2 downstream client and the M3 shared JSON-RPC loop into the gateway that the product thesis depends on.
 

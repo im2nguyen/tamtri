@@ -1,6 +1,6 @@
 # Milestone 6: Elicitation + Remote Auth
 
-**Status: Complete.** Form and URL elicitation, OAuth 2.1 + PKCE, keychain tokens, hermetic + Swift policy tests.
+**Status: Complete.** Form and URL elicitation, OAuth 2.1 + PKCE, keychain tokens, hermetic + Swift policy tests. Round 8 literal 100% verified.
 
 Sixth build session. Downstream MCP servers can now ask the user a follow-up question through tamtri, and remote HTTP servers can authenticate without the user touching a terminal. The agent still sees an ordinary tool call: tamtri pauses the downstream call, renders the prompt or browser handoff, collects the result, and resumes the call.
 
