@@ -503,6 +503,7 @@ struct AppPanelView: View {
                             bridgeScript: template.bridgeScript,
                             webViewID: webViewID
                         ),
+                        persistedStateJSON: state?.toJSONString(),
                         pendingBridgeResponse: pendingBridgeResponse,
                         onBridgeRequest: { requestJSON, viewID in
                             store.submitAppBridgeRequest(
@@ -955,11 +956,11 @@ struct MarkdownPreview: View {
     let content: String
 
     var body: some View {
-        if let attributed = try? AttributedString(markdown: content) {
+        if let attributed = attributedMarkdownPreview(content) {
             Text(attributed)
                 .textSelection(.enabled)
         } else {
-            Text(content)
+            Text(sanitizedMarkdownForPreview(content))
                 .textSelection(.enabled)
         }
     }
@@ -969,6 +970,7 @@ struct SandboxedHTMLView: NSViewRepresentable {
     let html: String
     var policy: WebContentPolicy = .artifactNoNetwork
     var bridgeContext: AppBridgeContext?
+    var persistedStateJSON: String?
     var pendingBridgeResponse: String?
     var onBridgeRequest: ((String, UUID) -> Void)?
     var onBlockedNavigation: ((URL) -> Void)?
@@ -997,7 +999,15 @@ struct SandboxedHTMLView: NSViewRepresentable {
             context.coordinator.lastDeliveredResponse = pendingBridgeResponse
         }
         let bridgeScript = bridgeContext?.bridgeScript
-        webView.loadHTMLString(sandboxedHTML(for: html, policy: policy, bridgeScript: bridgeScript), baseURL: nil)
+        webView.loadHTMLString(
+            sandboxedHTML(
+                for: html,
+                policy: policy,
+                bridgeScript: bridgeScript,
+                persistedStateJSON: persistedStateJSON
+            ),
+            baseURL: nil
+        )
     }
 
     func makeCoordinator() -> Coordinator {
@@ -1932,7 +1942,13 @@ struct ComposerView: View {
             } label: {
                 Label("Send", systemImage: "paperplane.fill")
             }
-            .disabled(store.selectedConversation == nil)
+            .disabled(store.selectedConversation == nil || store.isRunActive)
+            Button {
+                store.cancelRun()
+            } label: {
+                Label("Cancel", systemImage: "stop.fill")
+            }
+            .disabled(!store.isRunActive)
         }
         .padding()
         .background(isDropTargeted ? Color.accentColor.opacity(0.12) : Color.clear)

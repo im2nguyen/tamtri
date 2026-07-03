@@ -2,6 +2,10 @@ import Foundation
 import SwiftUI
 import WebKit
 
+// DEPRECATED: Unused M5 placeholder. Native SwiftUI transcript + ArtifactCard rendering
+// replaced this WebKit transcript shell. Kept for reference; not wired into the app.
+
+@available(*, deprecated, message: "Unused; native SwiftUI transcript is used instead.")
 @MainActor
 struct WebTranscriptView: NSViewRepresentable {
     let transcriptJSON: String

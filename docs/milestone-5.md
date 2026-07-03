@@ -23,18 +23,18 @@ Current repo status:
 
 - `core/src/artifact.rs` snapshots renderable `FileChanged` paths from the conversation workdir into hash-prefixed files under `attachments/`, validates the resulting `Artifact` block, and emits `artifact_snapshotted` receipts (including `tool_call_id` when the snapshot came from an explicit `FileChanged`).
 - `verify_inline_artifact` rejects inline transcript bytes whose size or SHA-256 do not match the `Artifact` block before any renderer uses them.
-- `TamtriCore` appends snapshot artifact blocks to the committed assistant message before writing `messages.jsonl`, so reload redraws from transcript state instead of the mutable workdir file. It snapshots explicit `FileChanged` paths first, then performs a conservative end-of-turn scan for renderable files under `workdir/` because real ACP harnesses may create files through generic execution tools without emitting file-diff events.
+- `TamtriCore` appends snapshot artifact blocks to the committed assistant message before writing `messages.jsonl`, so reload redraws from transcript state instead of the mutable workdir file. It snapshots explicit `FileChanged` paths first, then any remaining `referenced_paths` collected by the turn reducer (paths from `FileChanged`, tool-result diffs, and write/edit tool inputs). There is no full `workdir/` directory scan at end-of-turn.
+- The turn reducer tracks `referenced_paths` from harness events so incidental files in `workdir/` (for example a dropped input CSV) are not snapshotted unless the harness actually touched them.
 - The mock ACP agent writes deterministic `workdir/report.html`; the facade integration test verifies an artifact block appears, remains stable after the workdir file changes, and that `artifact_snapshotted` includes `tool_call_id`.
-- Swift renders HTML/SVG in a no-network `WKWebView` with strict CSP, blocked navigation logged to `events.jsonl` as `artifact_navigation_blocked`. CSV/TSV, markdown/text, and images preview in the Files inspector (right panel). **Transcript artifact cards are hidden**; users preview live `workdir/` files from the Files panel instead.
+- Swift renders inline transcript `Artifact` blocks via `ArtifactCard`: HTML/SVG in a no-network `WKWebView` with strict CSP, blocked navigation logged to `events.jsonl` as `artifact_navigation_blocked`. CSV/TSV, markdown, images, and plain text preview inline after integrity verification. The Files inspector (right panel) still lists live `workdir/` files for browsing and reveal/open actions.
 - Drag-and-drop into the composer copies files into the selected conversation workdir and inserts `Attached: <filename>` references into the draft prompt.
 - `list_workdir_files` returns `modified_at` (Unix mtime); the Files panel auto-selects the newest file when a turn ends.
-- Swift renderer policy tests cover CSP injection, external navigation blocking, and MIME routing.
+- Swift renderer policy tests cover CSP injection, external navigation blocking, MIME routing, and markdown preview sanitization.
+- Core hermetic test verifies `log_artifact_navigation_blocked` appends an `artifact_navigation_blocked` receipt to `events.jsonl`.
 - `/docs/vault-format.md`, `/docs/events-format.md`, and `/docs/renderer.md` describe the snapshot boundary, audit receipts, MIME handling, and sandbox policy.
 
 Remaining M5 gaps (defer to M8 unless noted):
 
-- End-of-turn workdir scan still snapshots incidental files (e.g. input CSV) into `attachments/`; M8 Task 4 tightens this policy.
-- Markdown renders as plain text, not sanitized markdown rendering.
 - Full accessibility pass on artifact/file surfaces (M8).
 - React renderer island not built (optional per M5; native SwiftUI suffices for V1).
 - Deeper renderer UI automation can still be added later, but the V1 policy surface is covered by tests and the app build.
