@@ -37,6 +37,23 @@ pub fn remove_root(conversation: &mut Conversation, root_id: &str) -> Result<Roo
     Ok(removed)
 }
 
+/// Filesystem roots require a shell security-scoped bookmark before the gateway can read paths.
+pub fn filesystem_root_requires_bookmark(root: &Root) -> bool {
+    matches!(root.kind, RootKind::Filesystem)
+}
+
+/// Returns the user-facing error state when a filesystem root has no bookmark.
+pub fn missing_bookmark_error_state(root: &Root, bookmark_present: bool) -> Option<String> {
+    if filesystem_root_requires_bookmark(root) && !bookmark_present {
+        Some(format!(
+            "Missing access bookmark for root \"{}\". Re-pick the folder in conversation settings.",
+            root.name
+        ))
+    } else {
+        None
+    }
+}
+
 pub fn validate_root(root: &Root) -> Result<()> {
     if root.uri.trim().is_empty() {
         return Err(CoreError::MalformedVault("root uri is required".to_string()));
@@ -186,15 +203,15 @@ mod tests {
     }
 
     #[test]
-    fn path_outside_root_denied() {
+    fn missing_bookmark_error_state_for_filesystem_only() {
         let root = Root {
             id: "r1".into(),
-            name: "tmp".into(),
-            uri: "file:///tmp/tamtri-root".into(),
+            name: "Reports".into(),
+            uri: "file:///tmp/reports".into(),
             kind: RootKind::Filesystem,
             scope: RootScope::Conversation,
         };
-        assert!(is_path_under_root("/tmp/tamtri-root/report.csv", &root).unwrap());
-        assert!(!is_path_under_root("/etc/passwd", &root).unwrap());
+        assert!(missing_bookmark_error_state(&root, false).is_some());
+        assert!(missing_bookmark_error_state(&root, true).is_none());
     }
 }

@@ -27,6 +27,7 @@
 - `artifact_snapshotted`
 - `artifact_navigation_blocked`
 - `gateway_server_connected`
+- `gateway_server_disconnected`
 - `gateway_tool_routed`
 - `gateway_progress`
 - `gateway_log`
@@ -56,14 +57,14 @@ Milestone 6 writes `elicitation_requested` and `elicitation_resolved` when a dow
 
 Milestone 4 writes gateway receipts for server connection, tool routing, credential injection, progress, logging, cancellation, and downstream errors.
 
-Milestone 5 writes `artifact_snapshotted` when a renderable file is copied from `workdir/` into `attachments/`. The payload records original path, attachment path, MIME type, size, and SHA-256, never file contents. When the snapshot came from an explicit harness `FileChanged`, the payload also includes `tool_call_id`. End-of-turn scan snapshots omit `tool_call_id`.
+Milestone 5 writes `artifact_snapshotted` when a renderable file is copied from `workdir/` into `attachments/`. The payload records original path, attachment path, MIME type, size, and SHA-256, never file contents. When the snapshot came from an explicit harness `FileChanged`, the payload also includes `tool_call_id`. Snapshots from `referenced_paths` without an explicit `FileChanged` omit `tool_call_id`.
 
 Blocked artifact or workdir HTML navigation (external `http`, `https`, `file`, or custom schemes) is logged as `artifact_navigation_blocked` with `{ "url": "<blocked-url>" }`.
 
 Milestone 7 adds gateway receipts for Apps, Tasks, and Roots:
 
 - `app_returned` — `{ "server_id", "template_ref", "uri", "origin_tool_call_id?", "state" }` (state is JSON; no secrets).
-- `app_bridge_consent_requested` / `app_bridge_resolved` — app-initiated bridge actions with `request_id`, `server_id`, `app_id`, `template_ref`, action summary, and resolution. No secret values.
+- `app_bridge_consent_requested` / `app_bridge_consent_resolved` — vault audit receipts for app-initiated bridge actions with `request_id`, `server_id`, `app_id`, `template_ref`, action summary, and resolution. No secret values. The shell receives a separate live UI event `app_bridge_resolved` (not written to `events.jsonl`) when the bridge response is ready to deliver back to the App webview.
 - `app_navigation_blocked` — `{ "server_id", "template_ref", "url" }` when an App webview hits an undeclared origin.
 - `task_started`, `task_updated`, `task_completed` — task state snapshots (`task_id`, `server_id`, `status`, optional `title`, `progress`, `result`). Full payloads mirror `TaskState` in core.
 - `roots_listed` — `{ "count" }` when a downstream server requests roots through the gateway (paths only, never bookmark bytes).

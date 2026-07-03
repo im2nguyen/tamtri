@@ -1,5 +1,7 @@
 # Milestone 2: MCP Client Baseline
 
+**Status: Complete.** Stdio MCP client, hermetic + integration tests, documented in `/docs/mcp-client.md`. Round 8 literal 100% verified.
+
 Second Claude Code session. Build an MCP client in `tamtri-core` that connects to a local MCP server over stdio, completes the lifecycle handshake, lists tools, and calls a tool end to end. This is the foundation of tamtri's whole thesis, so the protocol layer must be correct and the message-loop design must leave room for server-initiated requests (elicitation, sampling) in later milestones.
 
 Scope is tools only. No elicitation, Apps, Tasks, Sampling, or Roots yet. No HTTP transport. No FFI. No UI.
@@ -16,6 +18,10 @@ Scope is tools only. No elicitation, Apps, Tasks, Sampling, or Roots yet. No HTT
 - Hermetic unit tests (mock transport) plus one real-subprocess integration test, all green.
 - `cargo clippy` clean. No `unwrap()` / `expect()` in non-test code.
 - Protocol version, negotiated capabilities, timeout policy, ping handling, and the message-loop limitation are documented in `/docs/mcp-client.md`.
+
+## Implementation checkpoints and gaps
+
+Task 4 originally specified a sequential read-until-my-reply loop inside `McpClient`, with a mutex-serialized transport and a milestone-4 seam for multiplexing. The repo implements that behavior on the shared `rpc::dispatch::RpcConnection` introduced in Milestone 3 for ACP, not as a one-off reader in `mcp/client.rs`. Timeouts still poison the connection (`CoreError::Timeout` then `CoreError::TransportClosed` on reuse), interleaved notifications and server requests are handled while waiting, and the public `&self` API shape is unchanged. Milestone 4 promoted concurrent fan-out on the same loop. See `/docs/mcp-client.md` for the current poison-on-timeout policy.
 
 ## Architectural note: the core becomes async
 
@@ -40,7 +46,7 @@ tracing-subscriber = "0.3"
 - stdio transport framing: newline-delimited JSON. One JSON-RPC message per line on stdin/stdout. Server logs go to stderr; capture and forward to `tracing`, never parse stderr as protocol.
 - Lifecycle: client sends `initialize` (request), server replies, client sends `notifications/initialized` (notification), then normal operation.
 
-## Task 1: JSON-RPC layer (`mcp/jsonrpc.rs`)
+## Task 1: JSON-RPC layer (`rpc/jsonrpc.rs`, re-exported as `mcp/jsonrpc.rs`)
 
 Minimal, correct JSON-RPC 2.0 types. Derive serde on all.
 
@@ -116,7 +122,7 @@ impl IncomingMessage {
 
 Parsing (and minimally answering) server-initiated requests now is what keeps Milestone 4 from being a rewrite.
 
-## Task 2: Transport (`mcp/transport/`)
+## Task 2: Transport (`rpc/transport/`)
 
 Trait (`transport/mod.rs`):
 
@@ -131,7 +137,7 @@ pub trait Transport: Send {
 }
 ```
 
-`StdioTransport` (`transport/stdio.rs`):
+`StdioTransport` (`rpc/transport/stdio.rs`):
 - Spawn with `tokio::process::Command`, piping stdin, stdout, stderr.
 - Child environment is scrubbed by default: start from a clean env, set `PATH`, `HOME`, `TMPDIR`, `LANG`, then apply the explicitly provided `env` pairs. Never inherit the full parent environment; the gateway story is credential hygiene, and leaking the host env to every downstream server contradicts it.
 - Write each outgoing message as compact JSON followed by `\n` to child stdin.
@@ -160,8 +166,17 @@ pub struct InitializeResult {
     pub server_info: Implementation,
 }
 
-// Minimal for this milestone. Expand in later milestones (roots, sampling, elicitation).
-pub struct ClientCapabilities { /* empty object for now, serialize as {} */ }
+// Minimal at M2 ship; expanded in M6 (elicitation) and M7 (roots). Sampling stays unset.
+pub struct ClientCapabilities {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub elicitation: Option<ElicitationCapability>, // M6: form + url
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub roots: Option<RootsCapability>, // M7: listChanged
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sampling: Option<SamplingCapability>, // M7: declined at gateway; field omitted at initialize
+}
+
+> **Reconciliation note.** M2 originally shipped `ClientCapabilities` as an empty `{}` at initialize. M6/M7 expanded the downstream client to advertise elicitation and roots so gateway intercept works; sampling is still omitted. The M2 test `initialize_handshake` asserts `serverInfo` is stored on the client; capability shape is covered by later milestone tests.
 
 pub struct ServerCapabilities {
     pub tools: Option<ToolsCapability>,
@@ -198,6 +213,8 @@ Keeping `content` as raw `Value`s is intentional. The tool-content shape is stil
 
 ## Task 4: McpClient (`mcp/client.rs`)
 
+> **Implementation note (post–M3/M4).** The sequential read-until-my-reply loop and poison-on-timeout policy described here live in the shared `rpc::dispatch::RpcConnection` today, not in a `Mutex<ClientInner>` inside `mcp/client.rs`. `McpClient` holds an `RpcHandle` to that loop; the public `&self` API shape is unchanged. Milestone 4 promoted concurrent fan-out on the same reader task.
+
 ```rust
 pub struct McpClientConfig {
     pub init_timeout: Duration,      // default 30s: initialize, notifications/initialized, tools/list
@@ -209,7 +226,9 @@ Timeouts are user-configurable, not compile-time constants. `McpClientConfig::de
 
 ```rust
 pub struct McpClient {
-    inner: tokio::sync::Mutex<ClientInner>,   // transport + next_id; see API-shape note below
+    // M2 design: Mutex<ClientInner> serialized the transport. Shipped as RpcHandle + background
+    // dispatch loop (M3 for ACP, M4 for gateway). Post-init methods still take &self.
+    handle: RpcHandle,
     config: McpClientConfig,
     server_info: Option<Implementation>,
     server_capabilities: Option<ServerCapabilities>,
@@ -227,7 +246,7 @@ impl McpClient {
 }
 ```
 
-**API shape matters more than the internals.** Post-init methods take `&self`, not `&mut self`, with the transport behind a `tokio::sync::Mutex` this milestone. The mutex serializes calls (correct for M2's sequential design), and in milestone 4 the internals swap to a background reader task + pending-request map + request channel without changing a single public signature. If the surface were `&mut self`, every M4 caller would break.
+**API shape matters more than the internals.** Post-init methods take `&self`, not `&mut self`. M2 serialized calls through one reader (mutex-backed in the original sketch; `RpcConnection` in the repo). Milestone 4 promoted that reader to a background task + pending-request map + request channel without changing a single public signature. If the surface were `&mut self`, every M4 caller would break.
 
 Behavior:
 - `connect_stdio` builds a `StdioTransport`, then calls `initialize`, then sends the `notifications/initialized` notification.
@@ -292,8 +311,6 @@ Protocol(String),
 JsonRpc { code: i64, message: String },
 #[error("transport closed")]
 TransportClosed,
-#[error("protocol version mismatch: server {0}")]
-VersionMismatch(String),
 #[error("request timed out: {method}")]
 Timeout { method: String },
 ```

@@ -1,0 +1,5 @@
+[
+  {"type": "text_delta", "text": "Starting"},
+  {"type": "error", "message": "agent failed"},
+  {"type": "turn_ended", "reason": "failed"}
+]

@@ -20,6 +20,7 @@ struct ConversationRecord: Equatable {
     let title: String
     let harnessId: String?
     let modelId: String?
+    let forkedFrom: String?
     let transcriptJSON: String
     let parsedMessages: [ParsedTranscriptMessage]
 
@@ -28,12 +29,14 @@ struct ConversationRecord: Equatable {
         title: String,
         harnessId: String?,
         modelId: String?,
+        forkedFrom: String? = nil,
         transcriptJSON: String
     ) {
         self.id = id
         self.title = title
         self.harnessId = harnessId
         self.modelId = modelId
+        self.forkedFrom = forkedFrom
         self.transcriptJSON = transcriptJSON
         self.parsedMessages = TranscriptParsing.parseTranscript(transcriptJSON)
     }
@@ -76,6 +79,9 @@ struct GatewayServerRecord: Identifiable, Equatable {
     let capTasks: String
     let capRoots: String
     let capSampling: String
+    let connectionStatus: String
+    let lastError: String
+    let timeoutSecs: UInt64?
 }
 
 struct WorkdirFileRecord: Equatable, Identifiable, Hashable {
@@ -94,6 +100,31 @@ struct WorkdirFilePreview: Equatable {
     let error: String?
 }
 
+struct AttachmentFilePreview: Equatable {
+    let path: String
+    let mimeType: String?
+    let text: String?
+    let imageData: Data?
+    let error: String?
+}
+
+struct HarnessAgentRecord: Identifiable, Equatable {
+    let id: String
+    let displayName: String
+}
+
+struct ModelInfoRecord: Identifiable, Equatable {
+    let id: String
+    let displayName: String
+}
+
+struct GatewayToolRecord: Identifiable, Equatable {
+    var id: String { exposedName }
+    let exposedName: String
+    let serverId: String
+    let originalName: String
+}
+
 protocol CoreClient: Sendable {
     var events: AsyncStream<CoreEvent> { get }
 
@@ -101,6 +132,8 @@ protocol CoreClient: Sendable {
     func loadConversation(id: String) async throws -> ConversationRecord
     func createConversation(title: String, harnessId: String, modelId: String) async throws -> ConversationRecord
     func forkConversation(id: String, harnessId: String, modelId: String) async throws -> ConversationRecord
+    func listAcpAgents() async throws -> [HarnessAgentRecord]
+    func listAcpAgentModels(agentId: String) async throws -> [ModelInfoRecord]
     func sendMessage(conversationId: String, text: String) async throws
     func syncRuntimeRoots(conversationId: String, roots: [RootDto]) async throws
     func copyFileToWorkdir(conversationId: String, sourcePath: String) async throws -> String
@@ -119,12 +152,16 @@ protocol CoreClient: Sendable {
     func respondPermission(conversationId: String, requestId: String, optionId: String) async throws
     func respondElicitation(conversationId: String, requestId: String, action: String, dataJSON: String?) async throws
     func cancelRun(conversationId: String) async throws
+    nonisolated func prepareForAppQuitSync() throws
     func cancelTask(conversationId: String, taskId: String) async throws
     func listRoots(conversationId: String) async throws -> [RootRecord]
     func attachRoot(conversationId: String, name: String, uri: String, kind: String, scope: String) async throws -> RootRecord
     func removeRoot(conversationId: String, rootId: String) async throws
     func listGatewayServers() async throws -> [GatewayServerRecord]
     func refreshGatewayCapabilities() async throws -> [GatewayServerRecord]
+    func listGatewayTools() async throws -> [GatewayToolRecord]
+    func getGatewaySettings() async throws -> UInt64
+    func setGatewayDefaultTimeout(_ seconds: UInt64) async throws
     func saveGatewayServers(_ servers: [GatewayServerRecord]) async throws
     func setGatewayCredential(credentialRef: String, value: String) async throws
     func exportGatewayCredential(credentialRef: String) async throws -> String?
@@ -192,9 +229,18 @@ actor MockCoreClient: CoreClient {
         return record
     }
 
+    func listAcpAgents() async throws -> [HarnessAgentRecord] {
+        [HarnessAgentRecord(id: "mock-acp", displayName: "Mock ACP")]
+    }
+
+    func listAcpAgentModels(agentId: String) async throws -> [ModelInfoRecord] {
+        _ = agentId
+        return [ModelInfoRecord(id: "mock", displayName: "Mock Model")]
+    }
+
     func sendMessage(conversationId: String, text: String) async throws {
         continuation.yield(CoreEvent(conversationId: conversationId, kind: "text_delta", payloadJSON: #"{"text":"Thinking about it..."}"#))
-        continuation.yield(CoreEvent(conversationId: conversationId, kind: "permission_requested", payloadJSON: #"{"request_id":"mock-permission","action":"edit","options":[{"id":"allow_once","label":"Allow once"},{"id":"deny","label":"Deny"}]}"#))
+        continuation.yield(CoreEvent(conversationId: conversationId, kind: "permission_requested", payloadJSON: #"{"request_id":"mock-permission","action":"edit","options":[{"id":"allow_once","label":"Allow once"},{"id":"allow_for_conversation","label":"Allow for this conversation"},{"id":"deny","label":"Deny"}]}"#))
     }
 
     func syncRuntimeRoots(conversationId: String, roots: [RootDto]) async throws {}
@@ -222,7 +268,7 @@ actor MockCoreClient: CoreClient {
     func resolveAppTemplate(conversationId: String, serverId: String, templateRef: String) async throws -> AppTemplateRecord? { nil }
 
     func submitAppBridgeRequest(conversationId: String, serverId: String, appId: String, templateRef: String, requestJSON: String) async throws -> AppBridgeSubmission {
-        continuation.yield(CoreEvent(conversationId: conversationId, kind: "app_bridge_consent_requested", payloadJSON: #"{"request_id":"mock-bridge","server_id":"mock","app_id":"demo","template_ref":"ui://demo","summary":"Mock app wants to call echo","options":[{"id":"deny","label":"Deny"},{"id":"allow_once","label":"Allow once"}]}"#))
+        continuation.yield(CoreEvent(conversationId: conversationId, kind: "app_bridge_consent_requested", payloadJSON: #"{"request_id":"mock-bridge","server_id":"mock","app_id":"demo","template_ref":"ui://demo","summary":"Mock app wants to call echo","options":[{"id":"deny","label":"Deny"},{"id":"allow_once","label":"Allow once"},{"id":"allow_for_conversation","label":"Allow for this conversation"}]}"#))
         return AppBridgeSubmission(requestId: "mock-bridge", needsConsent: true)
     }
 
@@ -256,6 +302,8 @@ actor MockCoreClient: CoreClient {
     func cancelRun(conversationId: String) async throws {
         continuation.yield(CoreEvent(conversationId: conversationId, kind: "turn_ended", payloadJSON: #"{"reason":"cancelled"}"#))
     }
+
+    nonisolated func prepareForAppQuitSync() throws {}
 
     func cancelTask(conversationId: String, taskId: String) async throws {}
 
@@ -294,7 +342,10 @@ actor MockCoreClient: CoreClient {
                 capApps: "unknown",
                 capTasks: "unknown",
                 capRoots: "unknown",
-                capSampling: "declined"
+                capSampling: "declined",
+                connectionStatus: "unknown",
+                lastError: "",
+                timeoutSecs: nil
             )
         ]
     }
@@ -302,6 +353,14 @@ actor MockCoreClient: CoreClient {
     func refreshGatewayCapabilities() async throws -> [GatewayServerRecord] {
         try await listGatewayServers()
     }
+
+    func listGatewayTools() async throws -> [GatewayToolRecord] {
+        [GatewayToolRecord(exposedName: "mock__echo", serverId: "mock", originalName: "echo")]
+    }
+
+    func getGatewaySettings() async throws -> UInt64 { 300 }
+
+    func setGatewayDefaultTimeout(_ seconds: UInt64) async throws {}
 
     func saveGatewayServers(_ servers: [GatewayServerRecord]) async throws {}
 

@@ -5,7 +5,8 @@ use pretty_assertions::assert_eq;
 use serde_json::json;
 use tamtri_core::config::{GatewayConfig, GatewayScope, GatewayServerConfig, GatewayTransport};
 use tamtri_core::conversation::{
-    Conversation, Root, RootKind, RootScope, attach_root, is_path_under_any_root, remove_root,
+    Conversation, Root, RootKind, RootScope, attach_root, filesystem_root_requires_bookmark,
+    is_path_under_any_root, missing_bookmark_error_state, remove_root,
 };
 use tamtri_core::mcp::gateway::{McpGateway, NoCredentials};
 use tamtri_core::vault::fs::FilesystemVault;
@@ -72,17 +73,22 @@ fn root_attach_persists_ref_not_bookmark() {
 #[test]
 fn root_missing_bookmark_surfaces_error_state() {
     let root = sample_root("file:///tmp/tamtri-data");
-    let bookmark_present = false;
-    let error_state = if root.kind == RootKind::Filesystem && !bookmark_present {
-        Some(format!(
-            "Missing access bookmark for root \"{}\". Re-pick the folder in conversation settings.",
-            root.name
-        ))
-    } else {
-        None
+    assert!(filesystem_root_requires_bookmark(&root));
+
+    let error_state = missing_bookmark_error_state(&root, false).expect("error state");
+    assert!(error_state.contains("Re-pick"));
+    assert!(error_state.contains("Data"));
+    assert!(missing_bookmark_error_state(&root, true).is_none());
+
+    let kb_root = Root {
+        id: "kb-1".to_string(),
+        name: "Docs".to_string(),
+        uri: "kb://team/docs".to_string(),
+        kind: RootKind::KnowledgeBase,
+        scope: RootScope::Conversation,
     };
-    assert!(error_state.is_some());
-    assert!(error_state.unwrap().contains("Re-pick"));
+    assert!(!filesystem_root_requires_bookmark(&kb_root));
+    assert!(missing_bookmark_error_state(&kb_root, false).is_none());
 }
 
 #[tokio::test]
@@ -159,6 +165,53 @@ fn path_outside_root_denied() {
         is_path_under_any_root(&root_path.join("report.csv").to_string_lossy(), &roots).unwrap()
     );
     assert!(!is_path_under_any_root("/etc/passwd", &roots).unwrap());
+}
+
+#[tokio::test]
+async fn roots_listed_emitted_when_downstream_lists_roots() {
+    let command = env!("CARGO_BIN_EXE_m7-roots-mcp");
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let gateway = McpGateway::new(
+        GatewayConfig {
+            default_call_timeout_secs: 300,
+            servers: vec![stdio_server("m7roots", command)],
+        },
+        Arc::new(NoCredentials),
+        Some(tx),
+    )
+    .unwrap();
+    let temp = tempfile::tempdir().expect("tempdir");
+    let root_path = temp.path().join("data");
+    fs::create_dir_all(&root_path).expect("mkdir");
+    let root_uri = format!("file://{}", root_path.to_string_lossy());
+    gateway
+        .set_roots(vec![sample_root(&root_uri)])
+        .await;
+
+    let gateway_for_call = Arc::new(gateway);
+    let call_gateway = Arc::clone(&gateway_for_call);
+    let call_task = tokio::spawn(async move {
+        call_gateway
+            .call_tool("m7roots__probe_roots", json!({}))
+            .await
+    });
+
+    let listed = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            let event = rx.recv().await.expect("gateway event");
+            if let tamtri_core::mcp::gateway::GatewayEvent::RootsListed { server_id, count } =
+                event
+            {
+                return (server_id, count);
+            }
+        }
+    })
+    .await
+    .expect("roots_listed event timed out");
+
+    assert_eq!(listed.0, "m7roots");
+    assert_eq!(listed.1, 1);
+    call_task.await.expect("call task").expect("probe_roots");
 }
 
 #[tokio::test]

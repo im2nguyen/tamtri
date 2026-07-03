@@ -62,6 +62,10 @@ impl GatewayTaskTracker {
             .insert(server_id.to_string(), client);
     }
 
+    pub async fn unregister_client(&self, server_id: &str) {
+        self.clients.lock().await.remove(server_id);
+    }
+
     pub async fn client_for(&self, server_id: &str) -> Option<Arc<McpClient>> {
         self.clients.lock().await.get(server_id).cloned()
     }

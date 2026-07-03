@@ -125,3 +125,33 @@ fn preserve_env(cmd: &mut Command, key: &str) {
         cmd.env(key, value);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::rpc::jsonrpc::IncomingMessage;
+
+    #[tokio::test]
+    async fn spawn_scrubs_parent_only_environment_variables() {
+        // SAFETY: test-only env mutation; no concurrent tests rely on this variable.
+        unsafe { std::env::set_var("TAMTRI_STDIO_ENV_SCRUB_TEST", "must-not-leak") };
+        let script = r#"printf '%s\n' "{\"jsonrpc\":\"2.0\",\"method\":\"env_probe\",\"params\":{\"secret\":\"${TAMTRI_STDIO_ENV_SCRUB_TEST:-}\",\"has_path\":\"${PATH:+yes}\"}}""#;
+        let mut transport = StdioTransport::spawn(
+            "/bin/sh",
+            &[String::from("-c"), script.to_string()],
+            &[],
+        )
+        .await
+        .expect("spawn probe shell");
+        let message = transport.recv().await.expect("env probe line");
+        let params = match message {
+            IncomingMessage::Notification(note) => note
+                .params
+                .expect("env_probe params should be present"),
+            other => panic!("expected env_probe notification, got {other:?}"),
+        };
+        assert_eq!(params["secret"], "");
+        assert_eq!(params["has_path"], "yes");
+        transport.close().await.expect("close probe shell");
+    }
+}

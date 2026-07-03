@@ -1,5 +1,7 @@
 # Milestone 1: Core Skeleton (vault + conversation model)
 
+**Status: Complete.** Legible vault, conversation model, fork/import, and enumerated tests. Round 8 literal 100% verified.
+
 First Claude Code session. Build the Rust core (`tamtri-core`): the canonical conversation model, the **legible vault** (folder per conversation, `meta.json` + append-only `messages.jsonl` + `attachments/`), and fork/import. No UI. No MCP. No harnesses. This milestone locks the format everything else depends on, and it is the format the future team/enterprise sync layer will reuse, so get it clean.
 
 ## Definition of done
@@ -167,7 +169,7 @@ Known ceiling, accepted for V1: `load` reads the entire transcript into memory a
 Storage is a legible vault. One folder per conversation. Conversation-level metadata lives in a small, freely-rewritten `meta.json`; messages live in an append-only `messages.jsonl`.
 
 ```
-<vault>/conversations/<yyyy-mm-dd>-<slug>--<shortid>/
+<vault>/conversations/<yyyy-mm-dd>-<slug>--<id-suffix>/
   meta.json        mutable, tiny
   messages.jsonl   append-only, exactly one Message object per line
   events.jsonl     RESERVED this milestone (created empty, not written). The local audit log; written from milestone 3.
@@ -218,7 +220,7 @@ Document the layout and the migration seam in `/docs/vault-format.md`.
 The vault is the source of truth. Folders are user-visible and legible.
 
 Folder naming (`vault/naming.rs`):
-- `folder_name(c) = "<yyyy-mm-dd>-<slug>--<shortid>"`, where `slug` is the title lowercased, ASCII-folded, non-alphanumerics collapsed to single hyphens, trimmed, truncated to ~40 chars; `shortid` is the first 8 chars of the id (simple form). The short id suffix guarantees uniqueness and sidesteps title collisions, unicode, and APFS case-insensitivity.
+- `folder_name(c) = "<yyyy-mm-dd>-<slug>--<id-suffix>"`, where `slug` is the title lowercased, ASCII-folded, non-alphanumerics collapsed to single hyphens, trimmed, truncated to ~40 chars; `id_suffix` is the id in simple form (32 lowercase hex chars, no hyphens). An earlier 8-char suffix was superseded: UUID v7 ids from rapid forks can collide in 8 hex chars, so the full simple form guarantees folder uniqueness and sidesteps title collisions, unicode, and APFS case-insensitivity.
 
 Trait (`vault/mod.rs`):
 

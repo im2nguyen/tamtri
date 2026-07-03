@@ -128,6 +128,16 @@ impl McpClient {
         Ok(client)
     }
 
+    /// Hermetic integration-test constructor. Production code should use `connect_stdio` or
+    /// `connect_http`.
+    pub fn connect_test(
+        transport: Box<dyn Transport>,
+        config: McpClientConfig,
+        events: Option<mpsc::UnboundedSender<McpClientEvent>>,
+    ) -> Self {
+        Self::with_transport(transport, config, events, None, None)
+    }
+
     fn with_transport(
         transport: Box<dyn Transport>,
         config: McpClientConfig,
@@ -516,7 +526,7 @@ mod tests {
     use super::*;
     use crate::CoreError;
     use crate::conversation::ContentBlock;
-    use crate::mcp::bridge::tool_result_block;
+    use crate::mcp::bridge::{tool_call_block, tool_result_block};
     use crate::mcp::jsonrpc::{
         IncomingMessage, JsonRpcError, JsonRpcNotification, JsonRpcRequest, JsonRpcResponse,
         RequestId,
@@ -652,6 +662,9 @@ mod tests {
         let (mut client, sent) = client_with(vec![init_response()], McpClientConfig::default());
         let result = client.initialize().await.unwrap();
         assert_eq!(result.server_info.name, "mock");
+        assert_eq!(result.server_info.version, "1.0.0");
+        assert_eq!(client.server_info().unwrap().name, "mock");
+        assert_eq!(client.server_info().unwrap().version, "1.0.0");
         assert_eq!(
             client.server_capabilities(),
             Some(&ServerCapabilities {
@@ -896,6 +909,18 @@ mod tests {
     }
 
     #[test]
+    fn tool_call_block_maps_to_content_block() {
+        let args = json!({"message": "hello"});
+        let block = tool_call_block("call-1", "echo", &args);
+        let ContentBlock::ToolCall { id, name, input } = block else {
+            panic!("expected tool call");
+        };
+        assert_eq!(id, "call-1");
+        assert_eq!(name, "echo");
+        assert_eq!(input, args);
+    }
+
+    #[test]
     fn result_maps_to_tool_result_block() {
         let result = CallToolResult {
             content: vec![json!({"type": "text", "text": "hi"})],
@@ -997,6 +1022,7 @@ mod tests {
 
     #[tokio::test]
     async fn request_times_out() {
+        tokio::time::pause();
         let client = McpClient::with_transport(
             Box::new(MockTransport::never_recv()),
             McpClientConfig {
@@ -1007,9 +1033,15 @@ mod tests {
             None,
             None,
         );
+        let first = client.list_tools();
+        tokio::time::advance(Duration::from_millis(10)).await;
+        assert!(matches!(
+            first.await,
+            Err(CoreError::Timeout { method }) if method == "tools/list"
+        ));
         assert!(matches!(
             client.list_tools().await,
-            Err(CoreError::Timeout { method }) if method == "tools/list"
+            Err(CoreError::TransportClosed)
         ));
     }
 

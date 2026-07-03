@@ -6,6 +6,7 @@ pub mod client;
 pub mod elicitation;
 pub mod endpoint;
 pub mod gateway;
+pub mod gateway_content;
 pub mod gateway_tasks;
 pub mod oauth;
 pub mod jsonrpc;
@@ -16,5 +17,5 @@ pub mod tasks;
 pub mod transport;
 pub mod url_handoff;
 
-pub use client::{McpClient, McpClientConfig};
+pub use client::{McpClient, McpClientConfig, McpClientEvent};
 pub use protocol::MCP_PROTOCOL_VERSION;

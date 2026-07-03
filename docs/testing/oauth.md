@@ -108,6 +108,17 @@ cargo test -p tamtri-core oauth
 
 The vault may point at a loopback mock (`http://127.0.0.1:9876/mcp` with matching `/authorize` and `/token`). Any completed Connect against that mock leaves a real keychain bundle and shows `connected` until reset. See reset steps above.
 
+## Deferred: OAuth discovery (not M6)
+
+Automatic OAuth discovery is explicitly out of scope for milestone 6 and remains deferred:
+
+- No RFC 9728 protected-resource metadata fetch from the MCP endpoint.
+- No RFC 8414 authorization-server metadata from `/.well-known/oauth-authorization-server`.
+- No parsing of `WWW-Authenticate` on 401 to learn authorize/token endpoints.
+- No dynamic client registration (DCR) inside tamtri.
+
+Until discovery ships, every remote server needs a hand-authored `oauth` block in vault `config.json` (`authorization_endpoint`, `token_endpoint`, `client_id`). One-time DCR via `curl` (or a pre-registered OAuth app) is the supported workaround.
+
 ## Known limitations
 
 - No automatic discovery from `/.well-known/oauth-protected-resource` or `WWW-Authenticate` on 401.

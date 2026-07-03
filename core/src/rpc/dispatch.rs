@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::time::Duration;
 
 use serde_json::Value;
@@ -28,6 +28,7 @@ pub enum InboundMessage {
 pub struct RpcHandle {
     command_tx: mpsc::Sender<RpcCommand>,
     next_id: Arc<AtomicI64>,
+    poisoned: Arc<AtomicBool>,
 }
 
 enum RpcCommand {
@@ -37,7 +38,7 @@ enum RpcCommand {
     },
     Notify(JsonRpcNotification),
     Respond(JsonRpcResponse),
-    RemovePending(RequestId),
+    Poison,
     Close(oneshot::Sender<Result<()>>),
 }
 
@@ -46,12 +47,21 @@ impl RpcConnection {
         let (command_tx, mut command_rx) = mpsc::channel(64);
         let (inbound_tx, inbound_rx) = mpsc::channel(64);
 
+        let poisoned = Arc::new(AtomicBool::new(false));
+        let poisoned_for_task = Arc::clone(&poisoned);
+
         tokio::spawn(async move {
             let mut pending = HashMap::new();
             let mut closed = false;
             while !closed {
                 while let Ok(command) = command_rx.try_recv() {
-                    closed = handle_command(command, &mut transport, &mut pending).await;
+                    closed = handle_command(
+                        command,
+                        &mut transport,
+                        &mut pending,
+                        poisoned_for_task.as_ref(),
+                    )
+                    .await;
                     if closed {
                         break;
                     }
@@ -63,11 +73,13 @@ impl RpcConnection {
                 match tokio::time::timeout(RECV_POLL_INTERVAL, transport.recv()).await {
                     Ok(Ok(message)) => route_incoming(message, &inbound_tx, &mut pending).await,
                     Ok(Err(err)) => {
+                        poisoned_for_task.store(true, Ordering::Release);
                         fail_pending(&mut pending, err);
                         closed = true;
                     }
                     Err(_) => {
                         if command_rx.is_closed() {
+                            poisoned_for_task.store(true, Ordering::Release);
                             fail_pending(&mut pending, CoreError::TransportClosed);
                             closed = true;
                         }
@@ -76,6 +88,7 @@ impl RpcConnection {
             }
 
             let _ = transport.close().await;
+            poisoned_for_task.store(true, Ordering::Release);
             fail_pending(&mut pending, CoreError::TransportClosed);
         });
 
@@ -83,6 +96,7 @@ impl RpcConnection {
             RpcHandle {
                 command_tx,
                 next_id: Arc::new(AtomicI64::new(1)),
+                poisoned,
             },
             inbound_rx,
         )
@@ -96,6 +110,9 @@ impl RpcHandle {
         params: Option<Value>,
         timeout: Duration,
     ) -> Result<Value> {
+        if self.poisoned.load(Ordering::Acquire) {
+            return Err(CoreError::TransportClosed);
+        }
         let id = RequestId::Number(self.next_id.fetch_add(1, Ordering::Relaxed));
         let request = JsonRpcRequest::new(id.clone(), method, params);
         let (response_tx, response_rx) = oneshot::channel();
@@ -111,7 +128,8 @@ impl RpcHandle {
             Ok(Ok(result)) => result,
             Ok(Err(_)) => Err(CoreError::TransportClosed),
             Err(_) => {
-                let _ = self.command_tx.send(RpcCommand::RemovePending(id)).await;
+                self.poisoned.store(true, Ordering::Release);
+                let _ = self.command_tx.send(RpcCommand::Poison).await;
                 Err(CoreError::Timeout {
                     method: method.to_string(),
                 })
@@ -160,6 +178,7 @@ async fn handle_command(
     command: RpcCommand,
     transport: &mut Box<dyn Transport>,
     pending: &mut HashMap<RequestId, oneshot::Sender<Result<Value>>>,
+    poisoned: &AtomicBool,
 ) -> bool {
     match command {
         RpcCommand::Request {
@@ -185,9 +204,11 @@ async fn handle_command(
             let _ = transport.send_response(&resp).await;
             false
         }
-        RpcCommand::RemovePending(id) => {
-            pending.remove(&id);
-            false
+        RpcCommand::Poison => {
+            poisoned.store(true, Ordering::Release);
+            fail_pending(pending, CoreError::TransportClosed);
+            let _ = transport.close().await;
+            true
         }
         RpcCommand::Close(done) => {
             let result = transport.close().await;
@@ -339,6 +360,56 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn request_times_out_poisons_connection() {
+        let sent = Arc::new(Mutex::new(Vec::new()));
+        let transport = DispatchMockTransport {
+            incoming: VecDeque::new(),
+            sent,
+            recv_delay: Duration::from_secs(60),
+        };
+        let (handle, _inbound) = RpcConnection::start(Box::new(transport));
+
+        let pending = tokio::spawn(async move {
+            handle
+                .request("slow", None, Duration::from_millis(50))
+                .await
+        });
+        tokio::time::sleep(Duration::from_millis(60)).await;
+
+        assert!(matches!(
+            pending.await.unwrap(),
+            Err(CoreError::Timeout { method }) if method == "slow"
+        ));
+
+        let (handle, _inbound) = {
+            let sent = Arc::new(Mutex::new(Vec::new()));
+            let transport = DispatchMockTransport {
+                incoming: VecDeque::new(),
+                sent,
+                recv_delay: Duration::from_secs(60),
+            };
+            RpcConnection::start(Box::new(transport))
+        };
+        let first = tokio::spawn({
+            let handle = handle.clone();
+            async move {
+                handle
+                    .request("slow", None, Duration::from_millis(50))
+                    .await
+            }
+        });
+        tokio::time::sleep(Duration::from_millis(60)).await;
+        assert!(matches!(
+            first.await.unwrap(),
+            Err(CoreError::Timeout { method }) if method == "slow"
+        ));
+        assert!(matches!(
+            handle.request("again", None, Duration::from_secs(1)).await,
+            Err(CoreError::TransportClosed)
+        ));
+    }
+
+    #[tokio::test]
     async fn close_fails_pending() {
         let sent = Arc::new(Mutex::new(Vec::new()));
         let transport = DispatchMockTransport {
@@ -357,5 +428,38 @@ mod tests {
         handle.close().await.unwrap();
 
         assert!(pending.await.unwrap().is_err());
+    }
+
+    #[tokio::test]
+    async fn timeout_removes_pending_and_ignores_late_response() {
+        tokio::time::pause();
+
+        let sent = Arc::new(Mutex::new(Vec::new()));
+        let transport = DispatchMockTransport {
+            incoming: VecDeque::from(vec![IncomingMessage::Response(
+                JsonRpcResponse::success(RequestId::Number(1), json!("late")),
+            )]),
+            sent,
+            recv_delay: Duration::from_secs(60),
+        };
+        let (handle, _inbound) = RpcConnection::start(Box::new(transport));
+
+        let first = tokio::spawn({
+            let handle = handle.clone();
+            async move {
+                handle
+                    .request("slow", None, Duration::from_millis(100))
+                    .await
+            }
+        });
+        tokio::time::advance(Duration::from_millis(200)).await;
+        assert!(matches!(
+            first.await.unwrap(),
+            Err(CoreError::Timeout { method }) if method == "slow"
+        ));
+        assert!(matches!(
+            handle.request("fast", None, Duration::from_secs(1)).await,
+            Err(CoreError::TransportClosed)
+        ));
     }
 }

@@ -179,8 +179,7 @@ async fn handle_http_mcp_connection(
     Ok(())
 }
 
-#[test]
-fn oauth_pkce_flow_records_handoff_receipts_and_stores_token_ref_only() {
+fn oauth_pkce_flow_stores_token_reference_only_impl() {
     let (token_endpoint, auth_endpoint) = spawn_oauth_token_server_blocking();
     let temp = tempfile::tempdir().unwrap();
     let observer = Arc::new(NoopObserver);
@@ -238,8 +237,17 @@ fn oauth_pkce_flow_records_handoff_receipts_and_stores_token_ref_only() {
     assert_eq!(servers[0].oauth_status, "connected");
 }
 
-#[tokio::test]
-async fn oauth_refresh_success_updates_keychain() {
+#[test]
+fn oauth_pkce_flow_stores_token_reference_only() {
+    oauth_pkce_flow_stores_token_reference_only_impl();
+}
+
+#[test]
+fn oauth_pkce_flow_records_handoff_receipts_and_stores_token_ref_only() {
+    oauth_pkce_flow_stores_token_reference_only_impl();
+}
+
+async fn oauth_refresh_success_updates_keychain_impl() {
     let (token_endpoint, _) = spawn_oauth_token_server().await;
     let credentials = Arc::new(MemoryCredentials::default());
     let token_ref = "keychain://remote".to_string();
@@ -277,6 +285,18 @@ async fn oauth_refresh_success_updates_keychain() {
     assert!(matches!(outcome, OAuthResolveOutcome::AccessToken(_)));
     let updated = parse_stored_oauth(&credentials.get_stored(&token_ref).unwrap().unwrap()).unwrap();
     assert_eq!(updated.access_token, "access-new");
+}
+
+/// Spec name from docs/milestone-6.md; `MemoryCredentials` mirrors keychain preload in core tests.
+/// Real keychain round-trips live in `KeychainCredentialStoreTests` (Swift).
+#[tokio::test]
+async fn oauth_refresh_success_updates_keychain() {
+    oauth_refresh_success_updates_keychain_impl().await;
+}
+
+#[tokio::test]
+async fn oauth_refresh_success_updates_persisted_credential_memory_store() {
+    oauth_refresh_success_updates_keychain_impl().await;
 }
 
 #[tokio::test]
@@ -411,4 +431,52 @@ async fn oauth_refresh_failure_marks_reauth_required() {
         oauth_connection_status(Some(&oauth), false, None, true),
         OAuthConnectionStatus::ReauthRequired
     );
+}
+
+#[test]
+fn oauth_refresh_failed_records_events_jsonl_receipt() {
+    let (token_endpoint, _) = spawn_oauth_token_server_blocking();
+    let temp = tempfile::tempdir().unwrap();
+    let observer = Arc::new(NoopObserver);
+    let core = TamtriCore::new(
+        temp.path().to_string_lossy().into_owned(),
+        observer,
+    )
+    .expect("core");
+
+    let oauth = OAuthConfig {
+        issuer: None,
+        authorization_endpoint: None,
+        token_endpoint: Some(token_endpoint),
+        client_id: "tamtri-test".to_string(),
+        scopes: vec![],
+        token_ref: "keychain://remote-oauth".to_string(),
+    };
+    let server = http_oauth_server("http://127.0.0.1:9/mcp".to_string(), oauth);
+    tamtri_core::config::replace_gateway_servers(temp.path(), vec![server]).unwrap();
+
+    let bundle = StoredOAuthBundle {
+        access_token: "stale-access".to_string(),
+        refresh_token: Some("stale-refresh".to_string()),
+        expires_at: Some(Utc::now().timestamp() - 10),
+        reauth_required: false,
+    };
+    core.set_gateway_credential(
+        "keychain://remote-oauth".to_string(),
+        serialize_stored_oauth(&bundle).unwrap(),
+    )
+    .expect("credential");
+
+    core.refresh_gateway_capabilities().expect("refresh");
+
+    let events = read_vault_events(temp.path()).expect("read events");
+    let kinds: Vec<EventKind> = events.iter().map(|event| event.kind.clone()).collect();
+    assert!(
+        kinds.contains(&EventKind::OAuthRefreshFailed),
+        "expected oauth_refresh_failed receipt, saw {kinds:?}"
+    );
+    let serialized = serde_json::to_string(&events).unwrap();
+    assert!(!serialized.contains("stale-access"));
+    assert!(!serialized.contains("stale-refresh"));
+    assert!(!serialized.contains("access-new"));
 }

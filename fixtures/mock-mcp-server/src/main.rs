@@ -23,6 +23,7 @@ fn main() {
             continue;
         }
 
+        let mut exit_after_write = false;
         let response = match message.get("method").and_then(Value::as_str) {
             Some("initialize") => response(
                 &message,
@@ -36,34 +37,73 @@ fn main() {
                     "serverInfo": {"name": "mock-mcp-server", "version": "0.1.0"}
                 }),
             ),
-            Some("tools/list") => response(
-                &message,
-                json!({
-                    "tools": [
-                        {
-                            "name": "echo",
-                            "description": "Echoes its arguments",
-                            "inputSchema": {"type": "object"}
-                        },
-                        {
-                            "name": "elicit",
-                            "description": "Elicits a name then echoes it",
-                            "inputSchema": {"type": "object"}
-                        },
-                        {
-                            "name": "elicit_url",
-                            "description": "Elicits via URL handoff then echoes the action",
-                            "inputSchema": {"type": "object"}
-                        }
-                    ]
-                }),
-            ),
+            Some("tools/list") => {
+                if should_exit_after_first_list() {
+                    exit_after_write = true;
+                    response(
+                        &message,
+                        json!({
+                            "tools": [
+                                {
+                                    "name": "echo",
+                                    "description": "Echoes its arguments",
+                                    "inputSchema": {"type": "object"}
+                                }
+                            ]
+                        }),
+                    )
+                } else if should_hang_on_list() {
+                    loop {
+                        std::thread::sleep(std::time::Duration::from_secs(3600));
+                    }
+                } else {
+                    response(
+                        &message,
+                        json!({
+                            "tools": [
+                                {
+                                    "name": "echo",
+                                    "description": "Echoes its arguments",
+                                    "inputSchema": {"type": "object"}
+                                },
+                                {
+                                    "name": "elicit",
+                                    "description": "Elicits a name then echoes it",
+                                    "inputSchema": {"type": "object"}
+                                },
+                                {
+                                    "name": "elicit_url",
+                                    "description": "Elicits via URL handoff then echoes the action",
+                                    "inputSchema": {"type": "object"}
+                                },
+                                {
+                                    "name": "elicit_secret",
+                                    "description": "Elicits a secret field; gateway should auto-decline",
+                                    "inputSchema": {"type": "object"}
+                                },
+                                {
+                                    "name": "elicit_complex",
+                                    "description": "Elicits with a nested object schema",
+                                    "inputSchema": {"type": "object"}
+                                },
+                                {
+                                    "name": "fail",
+                                    "description": "Always fails for gateway error receipt tests",
+                                    "inputSchema": {"type": "object"}
+                                }
+                            ]
+                        }),
+                    )
+                }
+            }
             Some("tools/call") => {
                 let tool_name = message
                     .pointer("/params/name")
                     .and_then(Value::as_str)
                     .unwrap_or_default();
-                if tool_name == "elicit" {
+                if tool_name == "fail" {
+                    error_response(&message, -32000, "forced tool failure")
+                } else if tool_name == "elicit" {
                     match elicit_then_echo(&mut stdout, &mut input) {
                         Ok(result) => response(&message, result),
                         Err(err) => error_response(&message, -32000, err),
@@ -73,11 +113,53 @@ fn main() {
                         Ok(result) => response(&message, result),
                         Err(err) => error_response(&message, -32000, err),
                     }
+                } else if tool_name == "elicit_secret" {
+                    match elicit_with_schema(
+                        &mut stdout,
+                        &mut input,
+                        "What is your API key?",
+                        json!({
+                            "type": "object",
+                            "properties": {
+                                "api_key": {
+                                    "type": "string",
+                                    "title": "API key"
+                                }
+                            },
+                            "required": ["api_key"]
+                        }),
+                    ) {
+                        Ok(result) => response(&message, result),
+                        Err(err) => error_response(&message, -32000, err),
+                    }
+                } else if tool_name == "elicit_complex" {
+                    match elicit_with_schema(
+                        &mut stdout,
+                        &mut input,
+                        "Where do you live?",
+                        json!({
+                            "type": "object",
+                            "properties": {
+                                "address": {
+                                    "type": "object",
+                                    "properties": {
+                                        "street": { "type": "string" }
+                                    }
+                                }
+                            }
+                        }),
+                    ) {
+                        Ok(result) => response(&message, result),
+                        Err(err) => error_response(&message, -32000, err),
+                    }
                 } else {
                     let arguments = message
                         .pointer("/params/arguments")
                         .cloned()
                         .unwrap_or_else(|| json!({}));
+                    if should_emit_progress() {
+                        emit_progress_and_log(&mut stdout);
+                    }
                     response(
                         &message,
                         json!({
@@ -88,17 +170,37 @@ fn main() {
                     )
                 }
             }
-            Some("resources/list") => response(
-                &message,
-                json!({
-                    "resources": [{
-                        "uri": "mock://report",
-                        "name": "Report",
-                        "description": "A mock resource",
-                        "mimeType": "text/plain"
-                    }]
-                }),
-            ),
+            Some("resources/list") => {
+                let cursor = message
+                    .pointer("/params/cursor")
+                    .and_then(Value::as_str);
+                if cursor == Some("page2") {
+                    response(
+                        &message,
+                        json!({
+                            "resources": [{
+                                "uri": "mock://appendix",
+                                "name": "Appendix",
+                                "description": "Second page resource",
+                                "mimeType": "text/plain"
+                            }]
+                        }),
+                    )
+                } else {
+                    response(
+                        &message,
+                        json!({
+                            "resources": [{
+                                "uri": "mock://report",
+                                "name": "Report",
+                                "description": "A mock resource",
+                                "mimeType": "text/plain"
+                            }],
+                            "nextCursor": "page2"
+                        }),
+                    )
+                }
+            }
             Some("resources/read") => response(
                 &message,
                 json!({
@@ -109,16 +211,35 @@ fn main() {
                     }]
                 }),
             ),
-            Some("prompts/list") => response(
-                &message,
-                json!({
-                    "prompts": [{
-                        "name": "summarize",
-                        "description": "Summarize something",
-                        "arguments": [{"name": "topic", "required": true}]
-                    }]
-                }),
-            ),
+            Some("prompts/list") => {
+                let cursor = message
+                    .pointer("/params/cursor")
+                    .and_then(Value::as_str);
+                if cursor == Some("page2") {
+                    response(
+                        &message,
+                        json!({
+                            "prompts": [{
+                                "name": "outline",
+                                "description": "Outline something",
+                                "arguments": [{"name": "topic", "required": true}]
+                            }]
+                        }),
+                    )
+                } else {
+                    response(
+                        &message,
+                        json!({
+                            "prompts": [{
+                                "name": "summarize",
+                                "description": "Summarize something",
+                                "arguments": [{"name": "topic", "required": true}]
+                            }],
+                            "nextCursor": "page2"
+                        }),
+                    )
+                }
+            }
             Some("prompts/get") => response(
                 &message,
                 json!({
@@ -142,27 +263,44 @@ fn main() {
         if stdout.flush().is_err() {
             break;
         }
+        if exit_after_write {
+            std::process::exit(0);
+        }
     }
 }
 
 fn elicit_then_echo(stdout: &mut io::Stdout, input: &mut impl BufRead) -> Result<Value, String> {
+    elicit_with_schema(
+        stdout,
+        input,
+        "What name should the echo use?",
+        json!({
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string",
+                    "title": "Name"
+                }
+            },
+            "required": ["name"]
+        }),
+    )
+}
+
+fn elicit_with_schema(
+    stdout: &mut io::Stdout,
+    input: &mut impl BufRead,
+    message: &str,
+    requested_schema: Value,
+) -> Result<Value, String> {
     let request = json!({
         "jsonrpc": "2.0",
         "id": "elicit-1",
         "method": "elicitation/create",
         "params": {
             "mode": "form",
-            "message": "What name should the echo use?",
-            "requestedSchema": {
-                "type": "object",
-                "properties": {
-                    "name": {
-                        "type": "string",
-                        "title": "Name"
-                    }
-                },
-                "required": ["name"]
-            }
+            "message": message,
+            "requestedSchema": requested_schema
         }
     });
     serde_json::to_writer(&mut *stdout, &request).map_err(|err| err.to_string())?;
@@ -188,14 +326,11 @@ fn elicit_then_echo(stdout: &mut io::Stdout, input: &mut impl BufRead) -> Result
             "structuredContent": {"elicitation": action}
         }));
     }
-    let name = response
-        .pointer("/result/content/name")
-        .and_then(Value::as_str)
-        .unwrap_or("anonymous");
+    let content = response.pointer("/result/content").cloned().unwrap_or_else(|| json!({}));
     Ok(json!({
-        "content": [{"type": "text", "text": format!("hello {name}")}],
+        "content": [{"type": "text", "text": content.to_string()}],
         "isError": false,
-        "structuredContent": {"name": name}
+        "structuredContent": content
     }))
 }
 
@@ -231,6 +366,47 @@ fn elicit_url_then_echo(stdout: &mut io::Stdout, input: &mut impl BufRead) -> Re
         "isError": false,
         "structuredContent": {"elicitation": action}
     }))
+}
+
+fn should_emit_progress() -> bool {
+    std::env::var("MOCK_MCP_EMIT_PROGRESS")
+        .ok()
+        .is_some_and(|value| value == "1")
+}
+
+fn emit_progress_and_log(stdout: &mut io::Stdout) {
+    for notification in [
+        json!({
+            "jsonrpc": "2.0",
+            "method": "notifications/progress",
+            "params": {"progress": 0.5, "message": "halfway"}
+        }),
+        json!({
+            "jsonrpc": "2.0",
+            "method": "notifications/message",
+            "params": {"level": "info", "data": "working"}
+        }),
+    ] {
+        let _ = serde_json::to_writer(&mut *stdout, &notification);
+        let _ = writeln!(stdout);
+        let _ = stdout.flush();
+    }
+}
+
+fn should_hang_on_list() -> bool {
+    let Some(marker) = std::env::var("MOCK_MCP_LIST_MARKER").ok() else {
+        return false;
+    };
+    if std::path::Path::new(&marker).exists() {
+        return false;
+    }
+    std::fs::write(&marker, "hung").is_ok()
+}
+
+fn should_exit_after_first_list() -> bool {
+    std::env::var("MOCK_MCP_EXIT_AFTER_FIRST_LIST")
+        .ok()
+        .is_some_and(|value| !value.is_empty() && value != "0")
 }
 
 fn response(request: &Value, result: Value) -> Value {

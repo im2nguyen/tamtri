@@ -66,6 +66,44 @@ final class OAuthLoopbackListener: @unchecked Sendable {
     }
 }
 
+struct GatewayOAuthPresentation: Equatable {
+    enum IconTone: Equatable {
+        case connected
+        case warning
+        case neutral
+    }
+
+    let iconSystemName: String
+    let iconTone: IconTone
+    let showsConnectButton: Bool
+    let statusLabel: String
+
+    static func forStatus(_ status: String) -> GatewayOAuthPresentation {
+        let iconSystemName: String
+        let iconTone: IconTone
+        switch status {
+        case "connected":
+            iconSystemName = "checkmark.seal.fill"
+            iconTone = .connected
+        case "reauth_required", "expired":
+            iconSystemName = "exclamationmark.triangle.fill"
+            iconTone = .warning
+        case "missing":
+            iconSystemName = "key.slash"
+            iconTone = .neutral
+        default:
+            iconSystemName = "key"
+            iconTone = .neutral
+        }
+        return GatewayOAuthPresentation(
+            iconSystemName: iconSystemName,
+            iconTone: iconTone,
+            showsConnectButton: status != "connected",
+            statusLabel: status.replacingOccurrences(of: "_", with: " ")
+        )
+    }
+}
+
 enum OAuthTokenStore {
     static func save(bundleJSON: String, for tokenRef: String) throws {
         try KeychainCredentialStore.save(value: bundleJSON, for: tokenRef)
@@ -77,7 +115,17 @@ enum OAuthTokenStore {
 }
 
 enum KeychainCredentialStore {
+    #if DEBUG
+    /// When set, `save` throws with this status instead of calling SecItemAdd (tests only).
+    nonisolated(unsafe) static var testSaveFailureStatus: OSStatus?
+    #endif
+
     static func save(value: String, for credentialRef: String) throws {
+        #if DEBUG
+        if let status = testSaveFailureStatus {
+            throw NSError(domain: NSOSStatusErrorDomain, code: Int(status))
+        }
+        #endif
         let data = Data(value.utf8)
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,

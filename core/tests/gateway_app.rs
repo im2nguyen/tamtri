@@ -4,7 +4,6 @@ use std::time::Duration;
 use serde_json::json;
 use tamtri_core::config::{GatewayConfig, GatewayScope, GatewayServerConfig, GatewayTransport};
 use tamtri_core::conversation::{ContentBlock, Conversation, Message, Role};
-use tamtri_core::mcp::app::{MCP_APP_MIME, Origin, template_from_resource_contents};
 use tamtri_core::mcp::capabilities::{FeatureStatus, TamtriFeatureSupport};
 use tamtri_core::mcp::gateway::{GatewayEvent, McpGateway, NoCredentials};
 use tamtri_core::vault::fs::FilesystemVault;
@@ -29,7 +28,7 @@ fn stdio_server(id: &str, command: &str) -> GatewayServerConfig {
 }
 
 #[tokio::test]
-async fn app_template_declared() {
+async fn app_template_declared_origin_loads() {
     let command = env!("CARGO_BIN_EXE_m7-app-mcp");
     let gateway = Arc::new(
         McpGateway::new(
@@ -180,24 +179,65 @@ async fn app_resource_persists_and_reloads() {
     );
 }
 
-#[test]
-fn app_template_declared_origin_loads_from_fixture_shape() {
-    let contents = [json!({
-        "uri": "ui://m7-app/demo",
-        "mimeType": MCP_APP_MIME,
-        "text": "<!DOCTYPE html><html><body>demo</body></html>",
-        "_meta": {
-            "ui": {
-                "csp": {
-                    "connectDomains": ["https://api.example.com"]
+#[tokio::test]
+async fn app_template_undeclared_origin_blocked() {
+    let command = env!("CARGO_BIN_EXE_m7-app-mcp");
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    let gateway = Arc::new(
+        McpGateway::new(
+            GatewayConfig {
+                default_call_timeout_secs: 300,
+                servers: vec![stdio_server("m7-app", command)],
+            },
+            Arc::new(NoCredentials),
+            Some(tx),
+        )
+        .unwrap(),
+    );
+
+    let tools = gateway.list_tools().await.unwrap();
+    let exposed = tools
+        .iter()
+        .find(|tool| tool.original_name == "show_bad_origin_app")
+        .map(|tool| tool.exposed_name.clone())
+        .expect("show_bad_origin_app tool");
+
+    let call = tokio::spawn({
+        let gateway = Arc::clone(&gateway);
+        let exposed = exposed.clone();
+        async move { gateway.call_tool(&exposed, json!({})).await }
+    });
+
+    let downstream_message = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let event = rx.recv().await.expect("gateway event");
+            match event {
+                GatewayEvent::DownstreamError { message, .. }
+                    if message.contains("origin") =>
+                {
+                    return message;
                 }
+                GatewayEvent::AppReturned { .. } => {
+                    panic!("app returned despite invalid declared origin");
+                }
+                _ => {}
             }
         }
-    })];
-    let template =
-        template_from_resource_contents("m7-app", "ui://m7-app/demo", &contents).unwrap();
-    assert_eq!(
-        template.allowed_origins,
-        vec![Origin("https://api.example.com".into())]
+    })
+    .await
+    .expect("downstream error for invalid declared origin");
+    assert!(
+        downstream_message.contains("whitespace"),
+        "expected invalid origin parse error, got: {downstream_message}"
+    );
+
+    call.await.unwrap().expect("tool call completes");
+    assert!(
+        gateway
+            .cached_app_template("m7-app", "ui://m7-app/bad-origin")
+            .await
+            .is_none(),
+        "invalid template must not be cached"
     );
 }
+

@@ -170,6 +170,7 @@ pub fn validate_app_config(config: &AppConfig) -> Result<()> {
                 )));
             }
         }
+        validate_transport_secrets(&server.id, &server.transport)?;
         if let Some(oauth) = &server.oauth {
             if oauth.client_id.trim().is_empty() {
                 return Err(CoreError::Protocol(format!(
@@ -204,6 +205,42 @@ pub fn validate_app_config(config: &AppConfig) -> Result<()> {
                 )));
             }
         }
+    }
+    Ok(())
+}
+
+fn validate_transport_secrets(server_id: &str, transport: &GatewayTransport) -> Result<()> {
+    match transport {
+        GatewayTransport::Stdio { env, .. } => {
+            for (name, value) in env {
+                reject_inline_secret(server_id, "stdio env", name, value)?;
+            }
+        }
+        GatewayTransport::StreamableHttp { headers, .. } => {
+            for (name, value) in headers {
+                reject_inline_secret(server_id, "HTTP header", name, value)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn reject_inline_secret(server_id: &str, location: &str, name: &str, value: &str) -> Result<()> {
+    if value.trim().is_empty() {
+        return Ok(());
+    }
+    let key = name.to_ascii_lowercase();
+    let secret_key = key.contains("secret")
+        || key.contains("token")
+        || key.contains("password")
+        || key.contains("api_key")
+        || key == "authorization"
+        || key == "proxy-authorization";
+    let bearer_value = value.trim_start().to_ascii_lowercase().starts_with("bearer ");
+    if secret_key || bearer_value {
+        return Err(CoreError::Protocol(format!(
+            "gateway server {server_id} must not store inline secrets in {location} `{name}`; use credentials[] credential_ref bindings"
+        )));
     }
     Ok(())
 }
@@ -322,5 +359,57 @@ mod tests {
             }
         });
         assert!(serde_json::from_value::<AppConfig>(value).is_err());
+
+        let stdio_secret = AppConfig {
+            gateway: GatewayConfig {
+                default_call_timeout_secs: 300,
+                servers: vec![GatewayServerConfig {
+                    id: "bad-env".to_string(),
+                    display_name: "Bad Env".to_string(),
+                    enabled: true,
+                    scope: GatewayScope::Project,
+                    transport: GatewayTransport::Stdio {
+                        command: "mock".to_string(),
+                        args: Vec::new(),
+                        env: vec![("API_KEY".to_string(), "sk-live-inline".to_string())],
+                    },
+                    timeout_secs: None,
+                    credentials: Vec::new(),
+                    oauth: None,
+                }],
+            },
+            ..AppConfig::default()
+        };
+        assert!(matches!(
+            validate_app_config(&stdio_secret),
+            Err(CoreError::Protocol(message)) if message.contains("inline secrets")
+        ));
+
+        let http_secret = AppConfig {
+            gateway: GatewayConfig {
+                default_call_timeout_secs: 300,
+                servers: vec![GatewayServerConfig {
+                    id: "bad-header".to_string(),
+                    display_name: "Bad Header".to_string(),
+                    enabled: true,
+                    scope: GatewayScope::Project,
+                    transport: GatewayTransport::StreamableHttp {
+                        endpoint: "http://127.0.0.1:8080/mcp".to_string(),
+                        headers: vec![(
+                            "Authorization".to_string(),
+                            "Bearer secret-token".to_string(),
+                        )],
+                    },
+                    timeout_secs: None,
+                    credentials: Vec::new(),
+                    oauth: None,
+                }],
+            },
+            ..AppConfig::default()
+        };
+        assert!(matches!(
+            validate_app_config(&http_secret),
+            Err(CoreError::Protocol(message)) if message.contains("inline secrets")
+        ));
     }
 }

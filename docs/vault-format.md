@@ -4,7 +4,7 @@ tamtri stores conversations as a legible vault, not an opaque app database. The 
 
 ```text
 <vault>/config.json
-<vault>/conversations/<yyyy-mm-dd>-<slug>--<shortid>/
+<vault>/conversations/<yyyy-mm-dd>-<slug>--<id-suffix>/
   meta.json
   messages.jsonl
   events.jsonl
@@ -12,9 +12,11 @@ tamtri stores conversations as a legible vault, not an opaque app database. The 
   workdir/
 ```
 
-`config.json` is vault-level app configuration. Milestone 4 uses it for the default harness id, hand-editable agent roster, and MCP gateway registry. It stores downstream server definitions, scopes, timeout overrides, and credential references only. It never stores resolved secret values. Writes are atomic via `config.json.tmp` in the same vault root. At run time, core reads this registry, starts a run-scoped Tamtri gateway endpoint, and exposes that single endpoint to the ACP harness instead of exposing downstream server definitions directly.
+`config.json` is vault-level app configuration. Milestone 4 uses it for the default harness id, hand-editable agent roster, and MCP gateway registry. It stores downstream server definitions, scopes, timeout overrides, and credential references only. It never stores resolved secret values. Inline secrets in `stdio.env` or HTTP `headers` are rejected at save time; use `credentials[]` with `credential_ref` bindings instead. Writes are atomic via `config.json.tmp` in the same vault root. At run time, core reads this registry to decide which downstream MCP servers the gateway proxies.
 
 `meta.json` is the small mutable header. It contains `schema_version`, conversation identity, timestamps, harness/model ids, working directory mode, MCP server refs, roots, and fork lineage. Writes are atomic: tamtri writes `meta.json.tmp` in the same folder, then renames it over `meta.json`.
+
+**MCP server refs: two roles.** `config.json` owns downstream routing (full server definitions). `meta.json` `mcp_servers` records the conversation's upstream tamtri gateway ref only: one entry with `id` `tamtri-gateway`, the loopback HTTP endpoint, and transport `http`. ACP `session/new` receives that ref; the harness never sees downstream definitions directly. Per-conversation downstream filtering via `meta.json` is not implemented in M4; the vault registry is the sole source of enabled downstream servers.
 
 `messages.jsonl` is the transcript and the complete render source. It is append-only: one compact JSON `Message` per line. Streaming deltas are buffered in memory and committed only when the message is complete, so in-flight tokens never hit the log. `load` reads the full transcript into memory in V1; long sessions can therefore produce multi-megabyte in-memory transcripts. A streaming reader is a future implementation option, not a format change.
 
@@ -22,7 +24,7 @@ tamtri stores conversations as a legible vault, not an opaque app database. The 
 
 `attachments/` contains curated rendered artifacts. Anything the transcript renders is a content-hashed snapshot under `attachments/`, frozen at render time. `workdir/` stays messy, mutable, and local. Milestone 5 snapshots renderable `FileChanged` paths from the conversation workdir into `attachments/<sha256-prefix>-<safe-basename>` before appending an `Artifact` block, so reloading from `messages.jsonl` plus `attachments/` does not depend on the mutable workdir copy.
 
-ACP agents are launched with the conversation `workdir/` as their process cwd, and the same path is sent in `session/new.cwd`. If a harness creates files without emitting explicit file-change notifications, Tamtri scans renderable files under `workdir/` at turn end and snapshots them through the same `attachments/` pipeline.
+ACP agents are launched with the conversation `workdir/` as their process cwd, and the same path is sent in `session/new.cwd`. At turn end Tamtri snapshots only paths collected in the turn reducer's `referenced_paths` list (from `FileChanged`, tool-result diffs, and write/edit tool inputs). There is no full `workdir/` directory scan, so incidental files such as a dropped input CSV are not snapshotted unless the harness actually touched them.
 
 Construct artifact blocks through `ContentBlock::artifact(path, mime_type, size, sha256, inline)`. `ContentBlock::Artifact.path` must be a vault-relative file under `attachments/`. Absolute paths and any `.` or `..` component are rejected. This blocks path traversal from imported bundles. Small UTF-8 text artifacts may inline in `messages.jsonl` up to `ARTIFACT_INLINE_MAX_BYTES` (`32 KiB`); larger text, binary artifacts, and inline content with non-text MIME types are stored as files and referenced by path, size, MIME type, and SHA-256. The message codec runs the same validator on deserialization, so `load` and import reject malformed artifact blocks with `MalformedVault`.
 
@@ -38,7 +40,7 @@ Reads are lock-free and read-only. A torn final `messages.jsonl` line is ignored
 
 Writes take an exclusive advisory lock on that conversation's `messages.jsonl`, then repair any torn final line on disk before appending. There is no vault-wide lock, so different conversations can be written concurrently and external tools can browse the vault at any time.
 
-Folder names are cosmetic. The id in `meta.json` is the truth, so Finder renames do not break load or list. Duplicate ids from Finder copies or sync conflicts resolve deterministically to the newest `updated_at`, with path-name ordering as the tie breaker. tamtri never auto-deletes the losing folders; it reports them through `VaultIssue::DuplicateId`.
+Folder names are cosmetic. The id in `meta.json` is the truth, so Finder renames do not break load or list. The `<id-suffix>` is the conversation id in simple form: 32 lowercase hex characters with no hyphens. An earlier design truncated this to 8 hex chars for shorter Finder names; that was superseded because UUID v7 ids generated in rapid succession (multiple forks in one session) made 8-char suffix collisions plausible, especially on APFS case-insensitive volumes. The full simple form guarantees folder uniqueness without relying on slug and date alone. Duplicate ids from Finder copies or sync conflicts resolve deterministically to the newest `updated_at`, with path-name ordering as the tie breaker. tamtri never auto-deletes the losing folders; it reports them through `VaultIssue::DuplicateId`.
 
 ## Sync Stance
 

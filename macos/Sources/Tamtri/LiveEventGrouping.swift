@@ -19,6 +19,10 @@ enum LiveEventGrouping {
         "elicitation_requested",
         "app_returned",
         "app_bridge_consent_requested",
+        "file_changed",
+        "task_started",
+        "task_updated",
+        "task_completed",
     ]
 
     private static func payloadString(from json: String, key: String) -> String? {
@@ -28,6 +32,25 @@ enum LiveEventGrouping {
             return nil
         }
         return object[key] as? String
+    }
+
+    private static func originToolCallId(from event: CoreEvent) -> String? {
+        if let id = payloadString(from: event.payloadJSON, key: "origin_tool_call_id") {
+            return id
+        }
+        if let id = payloadString(from: event.payloadJSON, key: "originToolCallId") {
+            return id
+        }
+        guard let data = event.payloadJSON.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let state = object["state"] as? [String: Any]
+        else {
+            return nil
+        }
+        if let id = state["origin_tool_call_id"] as? String {
+            return id
+        }
+        return state["originToolCallId"] as? String
     }
 
     static func build(from events: [IdentifiedCoreEvent]) -> [LiveEventGroupModel] {
@@ -42,7 +65,7 @@ enum LiveEventGrouping {
                 while next < events.count {
                     let candidate = events[next].event
                     guard nestableKinds.contains(candidate.kind),
-                          payloadString(from: candidate.payloadJSON, key: "origin_tool_call_id") == toolId
+                          originToolCallId(from: candidate) == toolId
                     else {
                         break
                     }

@@ -17,6 +17,7 @@ struct GatewayServerDraft: Equatable {
     var oauthAuthorizationEndpoint: String
     var oauthTokenEndpoint: String
     var oauthScopesText: String
+    var timeoutSecsText: String
 
     static let empty = GatewayServerDraft(
         id: "",
@@ -32,7 +33,8 @@ struct GatewayServerDraft: Equatable {
         oauthClientId: "",
         oauthAuthorizationEndpoint: "",
         oauthTokenEndpoint: "",
-        oauthScopesText: ""
+        oauthScopesText: "",
+        timeoutSecsText: ""
     )
 
     init(
@@ -49,7 +51,8 @@ struct GatewayServerDraft: Equatable {
         oauthClientId: String,
         oauthAuthorizationEndpoint: String,
         oauthTokenEndpoint: String,
-        oauthScopesText: String
+        oauthScopesText: String,
+        timeoutSecsText: String
     ) {
         self.id = id
         self.displayName = displayName
@@ -65,6 +68,7 @@ struct GatewayServerDraft: Equatable {
         self.oauthAuthorizationEndpoint = oauthAuthorizationEndpoint
         self.oauthTokenEndpoint = oauthTokenEndpoint
         self.oauthScopesText = oauthScopesText
+        self.timeoutSecsText = timeoutSecsText
     }
 
     init(from server: GatewayServerRecord) {
@@ -82,6 +86,7 @@ struct GatewayServerDraft: Equatable {
         oauthAuthorizationEndpoint = server.oauthAuthorizationEndpoint
         oauthTokenEndpoint = server.oauthTokenEndpoint
         oauthScopesText = server.oauthScopes.joined(separator: "\n")
+        timeoutSecsText = server.timeoutSecs.map(String.init) ?? ""
     }
 
     func toRecord(preservingCredentialsFrom existing: GatewayServerRecord?) -> GatewayServerRecord {
@@ -97,6 +102,8 @@ struct GatewayServerDraft: Equatable {
         let resolvedOauthAuthorizationEndpoint = oauthFieldsEmpty ? (existing?.oauthAuthorizationEndpoint ?? "") : oauthAuthorizationEndpoint
         let resolvedOauthTokenEndpoint = oauthFieldsEmpty ? (existing?.oauthTokenEndpoint ?? "") : oauthTokenEndpoint
         let resolvedOauthScopes = oauthFieldsEmpty ? (existing?.oauthScopes ?? []) : GatewayServerDraft.parseLines(oauthScopesText)
+        let trimmedTimeout = timeoutSecsText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let resolvedTimeout = trimmedTimeout.isEmpty ? nil : UInt64(trimmedTimeout)
 
         return GatewayServerRecord(
             id: id.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -123,7 +130,10 @@ struct GatewayServerDraft: Equatable {
             capApps: existing?.capApps ?? "unknown",
             capTasks: existing?.capTasks ?? "unknown",
             capRoots: existing?.capRoots ?? "unknown",
-            capSampling: existing?.capSampling ?? "unknown"
+            capSampling: existing?.capSampling ?? "unknown",
+            connectionStatus: existing?.connectionStatus ?? "unknown",
+            lastError: existing?.lastError ?? "",
+            timeoutSecs: resolvedTimeout ?? existing?.timeoutSecs
         )
     }
 
@@ -216,6 +226,8 @@ struct GatewayServerEditorSheet: View {
                 TextField("Display name", text: $draft.displayName)
                     .textFieldStyle(.roundedBorder)
                 Toggle("Enabled", isOn: $draft.enabled)
+                TextField("Call timeout override (seconds, optional)", text: $draft.timeoutSecsText)
+                    .textFieldStyle(.roundedBorder)
                 Picker("Scope", selection: $draft.scope) {
                     Text("System").tag("system")
                     Text("User").tag("user")

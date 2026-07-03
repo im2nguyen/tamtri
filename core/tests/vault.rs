@@ -88,6 +88,7 @@ fn all_blocks_message() -> Message {
                 status: TaskStatus::Running,
                 title: None,
                 result_summary: None,
+                origin_tool_call_id: Some("tool-1".into()),
             },
         ],
     }
@@ -102,6 +103,38 @@ fn conversation_dir(root: &Path, id: uuid::Uuid) -> std::path::PathBuf {
             meta.contains(&id.to_string())
         })
         .expect("conversation folder")
+}
+
+#[test]
+fn create_materializes_layout() {
+    let (dir, vault) = vault();
+    let c = Conversation::new("Layout");
+    vault.create(&c).unwrap();
+    let conv_dir = conversation_dir(dir.path(), c.id);
+    assert!(conv_dir.join("attachments").is_dir());
+    assert!(conv_dir.join("workdir").is_dir());
+    assert!(conv_dir.join("events.jsonl").is_file());
+    assert!(conv_dir.join("messages.jsonl").is_file());
+    assert!(conv_dir.join("meta.json").is_file());
+    assert!(!conv_dir.join("meta.json.tmp").exists());
+}
+
+#[test]
+fn meta_write_is_atomic() {
+    let (dir, vault) = vault();
+    let c = Conversation::new("Atomic meta");
+    vault.create(&c).unwrap();
+    let conv_dir = conversation_dir(dir.path(), c.id);
+    assert!(!conv_dir.join("meta.json.tmp").exists());
+
+    let mut updated = c.clone();
+    updated.title = "Renamed".into();
+    vault.save_meta(&updated).unwrap();
+    assert!(!conv_dir.join("meta.json.tmp").exists());
+    assert_eq!(vault.load(c.id).unwrap().title, "Renamed");
+
+    vault.append_message(c.id, &message("line")).unwrap();
+    assert!(!conv_dir.join("meta.json.tmp").exists());
 }
 
 #[test]
@@ -169,11 +202,28 @@ fn load_rejects_future_version() {
 
 #[test]
 fn content_block_tagging() {
-    for block in all_blocks_message().content {
-        let value = serde_json::to_value(&block).unwrap();
-        assert!(value.get("type").is_some());
+    let blocks = all_blocks_message().content;
+    let expected_types = [
+        "text",
+        "thinking",
+        "tool_call",
+        "tool_result",
+        "app_resource",
+        "artifact",
+        "elicitation_request",
+        "elicitation_response",
+        "task_ref",
+    ];
+    assert_eq!(blocks.len(), expected_types.len());
+    for (block, expected_type) in blocks.iter().zip(expected_types) {
+        let value = serde_json::to_value(block).unwrap();
+        assert_eq!(
+            value.get("type").and_then(|tag| tag.as_str()),
+            Some(expected_type),
+            "unexpected type tag for {block:?}"
+        );
         let round_trip: ContentBlock = serde_json::from_value(value).unwrap();
-        assert_eq!(round_trip, block);
+        assert_eq!(&round_trip, block);
     }
 }
 
@@ -196,6 +246,38 @@ fn fork_is_deep_copy() {
 }
 
 #[test]
+fn fork_creates_unique_folder_names() {
+    let (dir, vault) = vault();
+    let parent = Conversation::new("Rapid fork");
+    vault.create(&parent).unwrap();
+
+    let mut folder_names = std::collections::HashSet::new();
+    folder_names.insert(
+        conversation_dir(dir.path(), parent.id)
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned(),
+    );
+
+    let mut current = parent;
+    for _ in 0..20 {
+        let fork = current.fork();
+        vault.create(&fork).unwrap();
+        let name = conversation_dir(dir.path(), fork.id)
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        assert!(
+            folder_names.insert(name.clone()),
+            "duplicate folder name: {name}"
+        );
+        current = fork;
+    }
+}
+
+#[test]
 fn import_folder_as_new_assigns_new_id() {
     let (dir, source) = vault();
     let mut c = Conversation::new("Import me");
@@ -210,6 +292,97 @@ fn import_folder_as_new_assigns_new_id() {
     assert_ne!(imported.id, c.id);
     assert_eq!(imported.forked_from, None);
     assert_eq!(imported.messages, c.messages);
+}
+
+#[test]
+fn import_rejects_malformed_artifact() {
+    let (dir, source) = vault();
+    let c = Conversation::new("Import traversal");
+    source.create(&c).unwrap();
+    let src = conversation_dir(dir.path(), c.id);
+    let mut bad = message("bad");
+    bad.content = vec![ContentBlock::Artifact {
+        path: "attachments/../secrets.txt".into(),
+        mime_type: "text/plain".into(),
+        size: 1,
+        sha256: "abc".into(),
+        inline: Some("x".into()),
+    }];
+    let raw = serde_json::to_string(&bad).unwrap();
+    fs::write(src.join("messages.jsonl"), format!("{raw}\n")).unwrap();
+
+    let (_target_dir, target) = vault();
+    assert!(matches!(
+        target.import_folder_as_new(&src),
+        Err(CoreError::MalformedVault(_))
+    ));
+}
+
+#[test]
+fn import_folder_as_new_copies_attachments() {
+    let (dir, source) = vault();
+    let c = Conversation::new("Import attachments");
+    source.create(&c).unwrap();
+    let src = conversation_dir(dir.path(), c.id);
+    fs::write(
+        src.join("attachments/report.html"),
+        b"<h1>report</h1>",
+    )
+    .unwrap();
+
+    let (target_dir, target) = vault();
+    let imported = target.import_folder_as_new(&src).unwrap();
+    let dst = conversation_dir(target_dir.path(), imported.id);
+
+    assert_eq!(
+        fs::read(dst.join("attachments/report.html")).unwrap(),
+        b"<h1>report</h1>"
+    );
+}
+
+#[test]
+fn save_meta_round_trip() {
+    let (_dir, vault) = vault();
+    let mut c = Conversation::new("Save meta");
+    vault.create(&c).unwrap();
+    c.title = "Updated title".into();
+    c.updated_at = Utc::now();
+    vault.save_meta(&c).unwrap();
+
+    let loaded = vault.load(c.id).unwrap();
+    assert_eq!(loaded.title, "Updated title");
+    assert_eq!(loaded.updated_at, c.updated_at);
+}
+
+#[test]
+fn issues_reports_unreadable_folder() {
+    let (dir, vault) = vault();
+    let c = Conversation::new("Bad meta");
+    vault.create(&c).unwrap();
+    let conv_dir = conversation_dir(dir.path(), c.id);
+    fs::write(conv_dir.join("meta.json"), "{not json").unwrap();
+
+    assert!(vault.issues().unwrap().iter().any(|issue| {
+        matches!(
+            issue,
+            VaultIssue::UnreadableFolder { path, .. } if *path == conv_dir
+        )
+    }));
+}
+
+#[test]
+fn issues_reports_torn_tail() {
+    let (dir, vault) = vault();
+    let c = Conversation::new("Torn issue");
+    vault.create(&c).unwrap();
+    vault.append_message(c.id, &message("first")).unwrap();
+    let path = conversation_dir(dir.path(), c.id).join("messages.jsonl");
+    let mut file = OpenOptions::new().append(true).open(&path).unwrap();
+    write!(file, "{{\"id\":\"not done\"").unwrap();
+
+    assert!(vault.issues().unwrap().iter().any(|issue| {
+        matches!(issue, VaultIssue::TornTailDetected { id } if *id == c.id)
+    }));
 }
 
 #[test]
@@ -350,6 +523,42 @@ fn renamed_folder_still_loads() {
 }
 
 #[test]
+fn duplicate_id_tiebreaks_by_folder_name() {
+    let (dir, vault) = vault();
+    let mut c = Conversation::new("Tiebreak");
+    let ts = Utc::now();
+    c.updated_at = ts;
+    c.created_at = ts;
+    vault.create(&c).unwrap();
+    let original = conversation_dir(dir.path(), c.id);
+    let copy_a = original.parent().unwrap().join("aaa-duplicate");
+    let copy_b = original.parent().unwrap().join("zzz-duplicate");
+    copy_dir_all(&original, &copy_a);
+    copy_dir_all(&original, &copy_b);
+
+    let expected_winner = [original.as_path(), copy_a.as_path(), copy_b.as_path()]
+        .into_iter()
+        .min()
+        .unwrap()
+        .file_name()
+        .unwrap()
+        .to_string_lossy()
+        .to_string();
+
+    assert_eq!(vault.list().unwrap().len(), 1);
+    assert_eq!(vault.load(c.id).unwrap().title, "Tiebreak");
+    assert!(vault.issues().unwrap().iter().any(|issue| {
+        matches!(
+            issue,
+            VaultIssue::DuplicateId { id, winner, losers }
+                if *id == c.id
+                    && winner.file_name().unwrap().to_string_lossy() == expected_winner
+                    && losers.len() == 2
+        )
+    }));
+}
+
+#[test]
 fn duplicate_id_resolves_to_newest() {
     let (dir, vault) = vault();
     let mut c = Conversation::new("Duplicate");
@@ -373,8 +582,17 @@ fn duplicate_id_resolves_to_newest() {
 
     assert_eq!(vault.list().unwrap().len(), 1);
     assert_eq!(vault.load(c.id).unwrap().title, "Duplicate newer");
+    let expected_winner = copy.file_name().unwrap().to_string_lossy();
+    let expected_loser = original.file_name().unwrap().to_string_lossy();
     assert!(vault.issues().unwrap().iter().any(|issue| {
-        matches!(issue, VaultIssue::DuplicateId { id, losers, .. } if *id == c.id && losers.len() == 1)
+        matches!(
+            issue,
+            VaultIssue::DuplicateId { id, winner, losers }
+                if *id == c.id
+                    && winner.file_name().unwrap().to_string_lossy() == expected_winner
+                    && losers.len() == 1
+                    && losers[0].file_name().unwrap().to_string_lossy() == expected_loser
+        )
     }));
 }
 
@@ -491,10 +709,8 @@ fn artifact_inline_respects_threshold() {
         })
         .is_err()
     );
-}
 
-#[test]
-fn artifact_inline_violation_rejected_on_load() {
+    // Load path: malformed inline in messages.jsonl is rejected on read.
     let (dir, vault) = vault();
     let c = Conversation::new("Bad artifact load");
     vault.create(&c).unwrap();
@@ -516,36 +732,14 @@ fn artifact_inline_violation_rejected_on_load() {
     ));
 }
 
-#[test]
-fn artifact_path_traversal_rejected() {
-    assert!(
-        ContentBlock::artifact(
-            "attachments/../secrets.txt",
-            "text/plain",
-            1,
-            "abc",
-            Some("x".into()),
-        )
-        .is_err()
-    );
-    assert!(
-        ContentBlock::artifact(
-            "attachments/./a.txt",
-            "text/plain",
-            1,
-            "abc",
-            Some("x".into()),
-        )
-        .is_err()
-    );
-
+fn assert_load_rejects_artifact_path(path: &str) {
     let (dir, vault) = vault();
     let c = Conversation::new("Traversal");
     vault.create(&c).unwrap();
     let dir = conversation_dir(dir.path(), c.id);
     let mut bad = message("bad");
     bad.content = vec![ContentBlock::Artifact {
-        path: "attachments/../secrets.txt".into(),
+        path: path.to_string(),
         mime_type: "text/plain".into(),
         size: 1,
         sha256: "abc".into(),
@@ -554,10 +748,29 @@ fn artifact_path_traversal_rejected() {
     let raw = serde_json::to_string(&bad).unwrap();
     fs::write(dir.join("messages.jsonl"), format!("{raw}\n")).unwrap();
 
-    assert!(matches!(
-        vault.load(c.id),
-        Err(CoreError::MalformedVault(_))
-    ));
+    assert!(
+        matches!(vault.load(c.id), Err(CoreError::MalformedVault(_))),
+        "load should reject artifact path: {path}"
+    );
+}
+
+#[test]
+fn artifact_path_traversal_rejected() {
+    let bad_paths = [
+        "attachments/../secrets.txt",
+        "/attachments/a.txt",
+        "workdir/report.html",
+        "secrets.txt",
+        "attachments/./a.txt",
+    ];
+
+    for path in bad_paths {
+        assert!(
+            ContentBlock::artifact(path, "text/plain", 1, "abc", Some("x".into())).is_err(),
+            "constructor should reject artifact path: {path}"
+        );
+        assert_load_rejects_artifact_path(path);
+    }
 }
 
 #[test]

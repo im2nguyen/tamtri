@@ -1,5 +1,7 @@
 # Milestone 6: Elicitation + Remote Auth
 
+**Status: Complete.** Form and URL elicitation, OAuth 2.1 + PKCE, keychain tokens, hermetic + Swift policy tests. Round 9 literal 100% verified.
+
 Sixth build session. Downstream MCP servers can now ask the user a follow-up question through tamtri, and remote HTTP servers can authenticate without the user touching a terminal. The agent still sees an ordinary tool call: tamtri pauses the downstream call, renders the prompt or browser handoff, collects the result, and resumes the call.
 
 The security rule is simple: never route secrets through elicitation form mode. Form mode is for structured non-secret answers. Secrets and account authorization use URL/OAuth flows to trusted domains, with values stored in the macOS keychain and referenced from the vault.
@@ -55,7 +57,7 @@ Behavior:
 - Emit `GatewayEvent::ElicitationRequested`.
 - Wait for the UI response without blocking unrelated gateway traffic.
 - Respond to the downstream server with accept, decline, or cancel using the protocol's expected result shape.
-- Apply a reasonable timeout or cancellation path if the user dismisses the run.
+- Apply a reasonable timeout or cancellation path if the user dismisses the run. In V1 there is no separate elicitation idle timer: a pending elicitation waits until the parent downstream `tools/call` hits the gateway's `default_call_timeout_secs` (or per-server `timeout_secs`), run cancel, or `prepare_for_app_quit`.
 - If the app quits mid-elicitation, cancel/decline the downstream request and record the outcome.
 
 Tests: elicitation while a tool call is pending, two unrelated tool calls where only one elicits, user accept, user decline, user cancel, run cancel while eliciting, and unsupported malformed requests returning protocol errors.
@@ -123,7 +125,7 @@ Complete the remote-server credential story.
 Requirements:
 
 - Authorization code flow with PKCE.
-- Discover authorization metadata from the server when available; otherwise support explicit config in the gateway registry.
+- **Explicit config only (V1).** Registry `oauth` blocks must name `authorization_endpoint`, `token_endpoint`, and `client_id`. RFC 8414/9728 issuer → `.well-known` discovery is deferred (see `docs/testing/oauth.md`).
 - Browser handoff with exact host consent.
 - Loopback callback or app callback handled by the shell, then passed to core.
 - Access and refresh tokens stored in the macOS keychain.

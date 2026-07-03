@@ -6,7 +6,7 @@ use std::time::Duration;
 use serde_json::Value;
 use tamtri_core::app::{ConversationObserver, TamtriCore, UiEvent};
 use tamtri_core::config::{GatewayScope, GatewayServerConfig, GatewayTransport};
-use tamtri_core::mcp::app_bridge::APP_BRIDGE_ALLOW_ONCE;
+use tamtri_core::mcp::app_bridge::{APP_BRIDGE_ALLOW_FOR_CONVERSATION, APP_BRIDGE_ALLOW_ONCE};
 
 #[derive(Default)]
 struct RecordingObserver {
@@ -68,26 +68,11 @@ fn app_bridge_allow_routes_through_gateway_and_audits() {
     core.send_message(conversation.id.clone(), "hello".to_string())
         .expect("send");
 
-    let deadline = std::time::Instant::now() + Duration::from_secs(5);
-    loop {
-        if core
-            .submit_app_bridge_request(
-                conversation.id.clone(),
-                "m7-app".to_string(),
-                "ui://m7-app/demo".to_string(),
-                "ui://m7-app/demo".to_string(),
-                r#"{"jsonrpc":"2.0","id":"bridge-allow","method":"tools/call","params":{"name":"show_app","arguments":{}}}"#
-                    .to_string(),
-            )
-            .is_ok()
-        {
-            break;
-        }
-        if std::time::Instant::now() >= deadline {
-            panic!("active run never became available for app bridge");
-        }
-        std::thread::sleep(Duration::from_millis(20));
-    }
+    wait_for_active_run(
+        &core,
+        &conversation.id,
+        r#"{"jsonrpc":"2.0","id":"bridge-allow","method":"tools/call","params":{"name":"show_app","arguments":{}}}"#,
+    );
 
     let request_id = wait_for_bridge_consent(&observer);
     core.respond_app_bridge_consent(
@@ -132,6 +117,124 @@ fn app_bridge_allow_routes_through_gateway_and_audits() {
         .collect();
     assert!(kinds.contains(&"app_bridge_consent_requested"));
     assert!(kinds.contains(&"app_bridge_consent_resolved"));
+}
+
+#[test]
+fn app_bridge_allow_for_conversation_audits_and_skips_second_consent() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let observer = Arc::new(RecordingObserver::default());
+    let core = TamtriCore::new(temp.path().to_string_lossy().into_owned(), observer.clone())
+        .expect("core");
+
+    tamtri_core::config::replace_gateway_servers(
+        temp.path(),
+        vec![m7_app_server(env!("CARGO_BIN_EXE_m7-app-mcp"))],
+    )
+    .expect("gateway config");
+
+    core.register_acp_agent(
+        "mock-acp".to_string(),
+        "Mock ACP".to_string(),
+        env!("CARGO_BIN_EXE_mock-acp-agent").to_string(),
+        Vec::new(),
+    )
+    .expect("agent");
+
+    let conversation = core
+        .create_conversation(
+            "App bridge allow conversation".to_string(),
+            "mock-acp".to_string(),
+            "mock".to_string(),
+        )
+        .expect("conversation");
+
+    core.send_message(conversation.id.clone(), "hello".to_string())
+        .expect("send");
+
+    let first_request_json = r#"{"jsonrpc":"2.0","id":"bridge-conv-1","method":"tools/call","params":{"name":"echo","arguments":{}}}"#;
+    wait_for_active_run(&core, &conversation.id, first_request_json);
+
+    let request_id = wait_for_bridge_consent(&observer);
+    core.respond_app_bridge_consent(
+        conversation.id.clone(),
+        request_id.clone(),
+        APP_BRIDGE_ALLOW_FOR_CONVERSATION.to_string(),
+    )
+    .expect("allow for conversation");
+    wait_for_bridge_resolved(&observer, &request_id);
+
+    let second_request_json = r#"{"jsonrpc":"2.0","id":"bridge-conv-2","method":"tools/call","params":{"name":"echo","arguments":{}}}"#;
+    let second = core
+        .submit_app_bridge_request(
+            conversation.id.clone(),
+            "m7-app".to_string(),
+            "ui://m7-app/demo".to_string(),
+            "ui://m7-app/demo".to_string(),
+            second_request_json.to_string(),
+        )
+        .expect("second bridge request");
+    assert!(
+        !second.needs_consent,
+        "expected second request to skip consent after allow_for_conversation"
+    );
+
+    let consent_prompts = observer
+        .events
+        .lock()
+        .expect("events")
+        .iter()
+        .filter(|event| event.kind == "app_bridge_consent_requested")
+        .count();
+    assert_eq!(consent_prompts, 1, "expected exactly one consent prompt");
+
+    let events_path = find_file(temp.path(), "events.jsonl").expect("events.jsonl");
+    let text = fs::read_to_string(events_path).expect("read events");
+    let events: Vec<Value> = text
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| serde_json::from_str(line).expect("event line"))
+        .collect();
+
+    let consent_requested_count = events
+        .iter()
+        .filter(|event| event["kind"] == "app_bridge_consent_requested")
+        .count();
+    assert_eq!(
+        consent_requested_count, 1,
+        "events.jsonl should contain one consent request"
+    );
+
+    let resolved = events
+        .iter()
+        .find(|event| event["kind"] == "app_bridge_consent_resolved")
+        .expect("consent resolved receipt");
+    assert_eq!(resolved["payload"]["request_id"], request_id);
+    assert_eq!(
+        resolved["payload"]["resolution"],
+        APP_BRIDGE_ALLOW_FOR_CONVERSATION
+    );
+}
+
+fn wait_for_active_run(core: &TamtriCore, conversation_id: &str, request_json: &str) {
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        if core
+            .submit_app_bridge_request(
+                conversation_id.to_string(),
+                "m7-app".to_string(),
+                "ui://m7-app/demo".to_string(),
+                "ui://m7-app/demo".to_string(),
+                request_json.to_string(),
+            )
+            .is_ok()
+        {
+            return;
+        }
+        if std::time::Instant::now() >= deadline {
+            panic!("active run never became available for app bridge");
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
 }
 
 fn wait_for_bridge_consent(observer: &RecordingObserver) -> String {

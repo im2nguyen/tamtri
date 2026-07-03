@@ -33,6 +33,18 @@ actor TamtriBindingClient: CoreClient {
         try record(from: core.forkConversation(id: id, harnessId: harnessId, modelId: modelId))
     }
 
+    func listAcpAgents() async throws -> [HarnessAgentRecord] {
+        try core.listAcpAgents().map {
+            HarnessAgentRecord(id: $0.id, displayName: $0.displayName)
+        }
+    }
+
+    func listAcpAgentModels(agentId: String) async throws -> [ModelInfoRecord] {
+        try core.listAcpAgentModels(agentId: agentId).map {
+            ModelInfoRecord(id: $0.id, displayName: $0.displayName)
+        }
+    }
+
     func sendMessage(conversationId: String, text: String) async throws {
         try core.sendMessage(conversationId: conversationId, text: text)
     }
@@ -150,6 +162,10 @@ actor TamtriBindingClient: CoreClient {
         try core.cancelRun(conversationId: conversationId)
     }
 
+    nonisolated func prepareForAppQuitSync() throws {
+        try core.prepareForAppQuit()
+    }
+
     func cancelTask(conversationId: String, taskId: String) async throws {
         try core.cancelTask(conversationId: conversationId, taskId: taskId)
     }
@@ -179,6 +195,24 @@ actor TamtriBindingClient: CoreClient {
 
     func refreshGatewayCapabilities() async throws -> [GatewayServerRecord] {
         try core.refreshGatewayCapabilities().map(gatewayServerRecord(from:))
+    }
+
+    func listGatewayTools() async throws -> [GatewayToolRecord] {
+        try core.listGatewayTools().map {
+            GatewayToolRecord(
+                exposedName: $0.exposedName,
+                serverId: $0.serverId,
+                originalName: $0.originalName
+            )
+        }
+    }
+
+    func getGatewaySettings() async throws -> UInt64 {
+        try core.getGatewaySettings().defaultCallTimeoutSecs
+    }
+
+    func setGatewayDefaultTimeout(_ seconds: UInt64) async throws {
+        try core.setGatewayDefaultTimeout(defaultCallTimeoutSecs: seconds)
     }
 
     func saveGatewayServers(_ servers: [GatewayServerRecord]) async throws {
@@ -259,6 +293,7 @@ private func record(from dto: ConversationDto) -> ConversationRecord {
         title: dto.title,
         harnessId: dto.activeHarnessId,
         modelId: dto.modelId,
+        forkedFrom: dto.forkedFrom,
         transcriptJSON: dto.transcriptJson
     )
 }
@@ -270,7 +305,11 @@ private func rootRecord(from dto: RootDto, conversationId: String) -> RootRecord
         uri: dto.uri,
         kind: dto.kind,
         scope: dto.scope,
-        bookmarkMissing: !RootBookmarkStore.hasBookmark(conversationId: conversationId, rootId: dto.id)
+        bookmarkMissing: RootBookmarkStatus.isBookmarkMissing(
+            kind: dto.kind,
+            conversationId: conversationId,
+            rootId: dto.id
+        )
     )
 }
 
@@ -300,7 +339,10 @@ private func gatewayServerRecord(from dto: GatewayServerDto) -> GatewayServerRec
         capApps: dto.capApps,
         capTasks: dto.capTasks,
         capRoots: dto.capRoots,
-        capSampling: dto.capSampling
+        capSampling: dto.capSampling,
+        connectionStatus: dto.connectionStatus,
+        lastError: dto.lastError,
+        timeoutSecs: dto.timeoutSecs
     )
 }
 
@@ -330,7 +372,10 @@ private func gatewayServerDto(from record: GatewayServerRecord) -> GatewayServer
         capApps: record.capApps,
         capTasks: record.capTasks,
         capRoots: record.capRoots,
-        capSampling: record.capSampling
+        capSampling: record.capSampling,
+        connectionStatus: record.connectionStatus,
+        lastError: record.lastError,
+        timeoutSecs: record.timeoutSecs
     )
 }
 

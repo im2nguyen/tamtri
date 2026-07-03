@@ -1,0 +1,8 @@
+[
+  {"type": "text", "text": "Starting"},
+  {
+    "type": "tool_result",
+    "call_id": "harness_error",
+    "output": {"error": "agent failed"}
+  }
+]

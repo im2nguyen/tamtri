@@ -82,7 +82,7 @@ struct SidebarView: View {
         .toolbar {
             Button {
                 store.showSettings = true
-                store.refreshGatewayServers()
+                Task { await store.refreshGatewayServers() }
             } label: {
                 Label("Settings", systemImage: "gearshape")
             }
@@ -109,9 +109,21 @@ struct TranscriptView: View {
                         ConversationHeader(conversation: conversation)
                             .padding(.horizontal)
                             .padding(.top, 12)
-                        WebTranscriptView(transcriptJSON: conversation.transcriptJSON)
-                            .id(conversation.id)
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        ScrollView {
+                            LazyVStack(alignment: .leading, spacing: 12) {
+                                ForEach(conversation.parsedMessages) { message in
+                                    MessageRow(
+                                        conversationId: conversation.id,
+                                        message: message
+                                    )
+                                }
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.horizontal)
+                            .padding(.bottom, 16)
+                        }
+                        .id(conversation.id)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                     }
                 } else if switching {
                     VStack(spacing: 12) {
@@ -269,11 +281,9 @@ struct EventRow: View {
         case "elicitation_requested":
             ElicitationCard(event: event)
         case "thought_delta":
-            DisclosureGroup("Thinking") {
-                Text(EventPayload.text(from: event.payloadJSON))
-                    .textSelection(.enabled)
+            if let presentation = ThinkingDisclosurePresentationBuilder.fromLivePayloadJSON(event.payloadJSON) {
+                ThinkingDisclosureView(presentation: presentation)
             }
-            .padding(.vertical, 4)
         case "tool_call_started", "tool_call_progress", "file_changed":
             ToolCard(event: event)
         case "text_delta":
@@ -350,8 +360,18 @@ struct MessageRow: View {
                             .foregroundStyle(.secondary)
                     }
                 }
-                ForEach(Array(message.content.enumerated()), id: \.offset) { _, block in
-                    ContentBlockView(conversationId: conversationId, block: block)
+                ForEach(TranscriptContentGrouping.build(from: message.content)) { group in
+                    if let toolBlock = group.toolBlock {
+                        VStack(alignment: .leading, spacing: 8) {
+                            ContentBlockView(conversationId: conversationId, block: toolBlock)
+                            ForEach(Array(group.nested.enumerated()), id: \.offset) { _, nested in
+                                ContentBlockView(conversationId: conversationId, block: nested)
+                                    .padding(.leading, 16)
+                            }
+                        }
+                    } else if let standalone = group.standalone {
+                        ContentBlockView(conversationId: conversationId, block: standalone)
+                    }
                 }
             }
             .padding(.vertical, 6)
@@ -370,21 +390,18 @@ struct ContentBlockView: View {
             Text(block.text ?? "")
                 .textSelection(.enabled)
         case "thinking":
-            DisclosureGroup("Thinking", isExpanded: .constant(false)) {
-                Text(block.text ?? "")
-                    .textSelection(.enabled)
+            if let presentation = ThinkingDisclosurePresentationBuilder.fromCommittedBlock(block) {
+                ThinkingDisclosureView(presentation: presentation)
             }
         case "tool_call":
-            CompactCard(title: block.name ?? "Tool call", systemImage: "wrench.and.screwdriver") {
-                Text(block.inputSummary)
-                    .font(.body.monospaced())
-                    .textSelection(.enabled)
+            if let presentation = ToolCardPresentationBuilder.fromCommittedCallBlock(block) {
+                ToolCardView(presentation: presentation)
             }
         case "tool_result":
-            CompactCard(title: "Tool result", systemImage: "checkmark.circle") {
-                Text(block.outputSummary)
-                    .font(.body.monospaced())
-                    .textSelection(.enabled)
+            if let permission = PermissionCardPresentationBuilder.fromCommittedPermissionBlock(block) {
+                PermissionCardView(presentation: permission)
+            } else if let presentation = ToolCardPresentationBuilder.fromCommittedResultBlock(block) {
+                ToolCardView(presentation: presentation)
             }
         case "elicitation_request":
             ElicitationHistoryCard(block: block)
@@ -409,9 +426,7 @@ struct ContentBlockView: View {
         case "task_ref":
             TaskRefCard(block: block)
         case "artifact":
-            // Frozen attachments stay in messages.jsonl for replay/export;
-            // live previews belong in the Files inspector, not the transcript.
-            EmptyView()
+            ArtifactCard(conversationId: conversationId, block: block)
         default:
             EmptyView()
         }
@@ -483,6 +498,7 @@ struct AppPanelView: View {
                             bridgeScript: template.bridgeScript,
                             webViewID: webViewID
                         ),
+                        persistedStateJSON: state?.toJSONString(),
                         pendingBridgeResponse: pendingBridgeResponse,
                         onBridgeRequest: { requestJSON, viewID in
                             store.submitAppBridgeRequest(
@@ -509,14 +525,14 @@ struct AppPanelView: View {
                     Text(loadError)
                         .foregroundStyle(.secondary)
                 } else {
-                    Text("App offline — template unavailable without an active gateway run.")
+                    Text(AppPanelViewModel.offlineMessage)
                         .foregroundStyle(.secondary)
                 }
             }
         }
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("MCP App \(appTitle)")
-        .accessibilityValue(template == nil ? "offline" : "loaded")
+        .accessibilityLabel(AppPanelViewModel.accessibilityLabel(title: appTitle))
+        .accessibilityValue(AppPanelViewModel.accessibilityValue(templateLoaded: template != nil))
         .task(id: appLoadKey) {
             await loadTemplate()
         }
@@ -572,6 +588,7 @@ struct TaskLiveCard: View {
     @EnvironmentObject private var store: AppStore
     let conversationId: String
     let state: LiveTaskState
+    @State private var lastAnnouncedAccessibilityStatus: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -586,7 +603,7 @@ struct TaskLiveCard: View {
             if let progress = state.progressMessage, !progress.isEmpty {
                 Text(progress)
             }
-            if !state.isTerminal {
+            if TaskLiveCardViewModel.showsCancelButton(for: state) {
                 Button("Cancel task") {
                     store.cancelTask(conversationId: conversationId, taskId: state.taskId)
                 }
@@ -595,22 +612,32 @@ struct TaskLiveCard: View {
         }
         .padding(10)
         .background(.quaternary, in: RoundedRectangle(cornerRadius: 8))
+        .focusable()
         .accessibilityElement(children: .combine)
         .accessibilityLabel("Task \(taskTitle)")
         .accessibilityValue(accessibilityStatus)
         .accessibilityAddTraits(.updatesFrequently)
+        .accessibilityAction(named: "Cancel task") {
+            guard TaskLiveCardViewModel.showsCancelButton(for: state) else { return }
+            store.cancelTask(conversationId: conversationId, taskId: state.taskId)
+        }
+        .onAppear {
+            announceAccessibilityStatusIfNeeded()
+        }
+        .onChange(of: accessibilityStatus) { _, _ in
+            announceAccessibilityStatusIfNeeded()
+        }
     }
 
     private var taskTitle: String { state.title ?? state.taskId }
-    private var statusIcon: String {
-        switch state.status {
-        case "completed": "checkmark.circle"
-        case "failed": "xmark.circle"
-        default: "clock"
-        }
-    }
-    private var accessibilityStatus: String {
-        [state.status, state.progressMessage].compactMap { $0 }.joined(separator: ", ")
+    private var statusIcon: String { TaskLiveCardViewModel.statusIcon(for: state.status) }
+    private var accessibilityStatus: String { TaskLiveCardViewModel.accessibilityStatus(for: state) }
+
+    private func announceAccessibilityStatusIfNeeded() {
+        let announcement = TaskLiveCardViewModel.accessibilityAnnouncement(for: state)
+        guard lastAnnouncedAccessibilityStatus != announcement else { return }
+        lastAnnouncedAccessibilityStatus = announcement
+        AccessibilityNotification.Announcement(announcement).post()
     }
 }
 
@@ -618,7 +645,7 @@ struct TaskRefCard: View {
     let block: TranscriptContentBlock
 
     var body: some View {
-        CompactCard(title: block.taskTitle ?? block.taskId ?? "Task", systemImage: "checklist") {
+        CompactCard(title: TaskRefCardViewModel.title(block: block), systemImage: "checklist") {
             Text("Status: \(block.taskStatus ?? "unknown")")
             if let summary = block.taskResultSummary, !summary.isEmpty {
                 Text(summary)
@@ -628,7 +655,7 @@ struct TaskRefCard: View {
             }
         }
         .accessibilityLabel("Task \(block.taskId ?? "unknown")")
-        .accessibilityValue([block.taskStatus, block.taskResultSummary].compactMap { $0 }.joined(separator: ", "))
+        .accessibilityValue(TaskRefCardViewModel.accessibilityValue(status: block.taskStatus, resultSummary: block.taskResultSummary))
     }
 }
 
@@ -641,12 +668,12 @@ struct AppBridgeConsentCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Label("App action needs consent", systemImage: "hand.raised")
+            Label(AppBridgeConsentViewModel.headline, systemImage: "hand.raised")
                 .font(.headline)
             if let request {
                 Text(request.summary)
                     .textSelection(.enabled)
-                Text("Server: \(request.serverId) · App: \(request.appId)")
+                Text(AppBridgeConsentViewModel.serverAttribution(serverId: request.serverId, appId: request.appId))
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -682,6 +709,7 @@ struct ArtifactCard: View {
     @State private var verifiedInline: String?
     @State private var verifiedText: String?
     @State private var verifiedImage: NSImage?
+    @State private var verifiedNonPreviewable = false
     @State private var loadError: String?
 
     var body: some View {
@@ -724,9 +752,10 @@ struct ArtifactCard: View {
                         .frame(maxHeight: 360)
                 } else if let verifiedText {
                     preview(for: verifiedText)
-                } else if let loadError {
-                    Text("Integrity check failed: \(loadError)")
-                        .foregroundStyle(.red)
+                } else if verifiedNonPreviewable {
+                    TypedFileCard(path: block.path, mimeType: block.mimeType, size: block.size)
+                } else if loadError != nil {
+                    integrityFailedCard
                 } else if block.inline != nil || hasVerifiedAttachmentMetadata {
                     ProgressView()
                 } else {
@@ -735,7 +764,15 @@ struct ArtifactCard: View {
                 }
             }
         }
+        .accessibilityElement(children: .contain)
         .accessibilityLabel(artifactAccessibilityLabel)
+        .accessibilityValue(artifactAccessibilityValue)
+        .accessibilityAction(named: "Reveal in Finder") {
+            revealAttachment()
+        }
+        .accessibilityAction(named: "Open Artifact") {
+            openAttachment()
+        }
         .task(id: artifactVerificationKey) {
             await loadVerifiedContent()
         }
@@ -746,32 +783,54 @@ struct ArtifactCard: View {
     }
 
     private var artifactAccessibilityLabel: String {
-        let title = block.path ?? "Artifact"
-        let type = block.mimeType ?? "unknown type"
-        let size = block.size.map { "\($0) bytes" } ?? "unknown size"
-        if loadError != nil {
-            return "\(title), integrity check failed"
-        }
-        return "\(title), \(type), \(size)"
+        artifactCardAccessibilityLabel(
+            path: block.path,
+            mimeType: block.mimeType,
+            integrityFailed: loadError != nil
+        )
+    }
+
+    private var artifactAccessibilityValue: String {
+        artifactCardAccessibilityValue(
+            integrityFailed: loadError != nil,
+            size: block.size,
+            previewLoaded: verifiedInline != nil || verifiedText != nil,
+            imageLoaded: verifiedImage != nil,
+            nonPreviewable: verifiedNonPreviewable,
+            loading: block.inline != nil || hasVerifiedAttachmentMetadata
+        )
     }
 
     @ViewBuilder
     private func preview(for content: String) -> some View {
-        switch block.mimeType {
-        case "text/html", "image/svg+xml":
+        if artifactShouldUseWebViewPreview(
+            mimeType: block.mimeType,
+            integrityFailed: loadError != nil,
+            hasVerifiedContent: true
+        ) {
             SandboxedHTMLView(html: content, onBlockedNavigation: logBlockedNavigation)
                 .frame(minHeight: 260)
-        case "text/csv", "text/tab-separated-values":
+                .accessibilityHidden(true)
+        } else if block.mimeType == "text/csv" || block.mimeType == "text/tab-separated-values" {
             CSVPreview(text: content, separator: block.mimeType == "text/tab-separated-values" ? "\t" : ",")
-        case "text/markdown":
-            Text(content)
-                .textSelection(.enabled)
-        default:
+        } else if block.mimeType == "text/markdown" {
+            MarkdownPreview(content: content)
+        } else {
             Text(content)
                 .font(.body.monospaced())
-                .lineLimit(24)
+                .lineLimit(artifactPlainTextPreviewLineLimit)
                 .textSelection(.enabled)
         }
+    }
+
+    @ViewBuilder
+    private var integrityFailedCard: some View {
+        TypedFileCard(
+            path: block.path,
+            mimeType: block.mimeType,
+            size: block.size,
+            integrityStatus: "Integrity check failed"
+        )
     }
 
     private func logBlockedNavigation(_ url: URL) {
@@ -782,6 +841,7 @@ struct ArtifactCard: View {
         guard verifiedInline == nil,
               verifiedText == nil,
               verifiedImage == nil,
+              !verifiedNonPreviewable,
               loadError == nil
         else {
             return
@@ -814,6 +874,8 @@ struct ArtifactCard: View {
                 verifiedImage = image
             } else if artifactIsTextLikeMime(block.mimeType), let text = String(data: data, encoding: .utf8) {
                 verifiedText = text
+            } else {
+                verifiedNonPreviewable = true
             }
         } catch {
             loadError = error.localizedDescription
@@ -835,6 +897,8 @@ struct ArtifactCard: View {
     }
 }
 
+let artifactPlainTextPreviewLineLimit = 24
+
 func artifactIsTextLikeMime(_ mimeType: String?) -> Bool {
     guard let mimeType else { return false }
     return mimeType.hasPrefix("text/")
@@ -848,10 +912,115 @@ func artifactIsImageMime(_ mimeType: String?) -> Bool {
     return ["image/png", "image/jpeg", "image/gif", "image/webp"].contains(mimeType)
 }
 
+func artifactFileIcon(_ mimeType: String?) -> String {
+    switch mimeType {
+    case "text/html": return "doc.richtext"
+    case "text/csv", "text/tab-separated-values": return "tablecells"
+    case "text/markdown": return "text.quote"
+    case "image/png", "image/jpeg", "image/gif", "image/webp", "image/svg+xml": return "photo"
+    case "application/json": return "curlybraces"
+    case "application/pdf": return "doc.fill"
+    default: return "doc"
+    }
+}
+
+func artifactMimeLabel(_ mimeType: String?) -> String {
+    guard let mimeType else { return "File" }
+    switch mimeType {
+    case "text/html": return "HTML"
+    case "text/csv": return "CSV"
+    case "text/tab-separated-values": return "TSV"
+    case "text/markdown": return "Markdown"
+    case "text/plain": return "Text"
+    case "application/json": return "JSON"
+    case "application/pdf": return "PDF"
+    case "image/png": return "PNG"
+    case "image/jpeg": return "JPEG"
+    case "image/gif": return "GIF"
+    case "image/webp": return "WebP"
+    case "image/svg+xml": return "SVG"
+    default: return mimeType
+    }
+}
+
+struct TypedFileCard: View {
+    let path: String?
+    let mimeType: String?
+    let size: UInt64?
+    var integrityStatus: String?
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: artifactFileIcon(mimeType))
+                .font(.title2)
+                .foregroundStyle(integrityStatus == nil ? Color.secondary : Color.red)
+                .frame(width: 28)
+            VStack(alignment: .leading, spacing: 4) {
+                Text((path as NSString?)?.lastPathComponent ?? "Attachment")
+                    .font(.body.weight(.medium))
+                    .lineLimit(1)
+                Text(subtitle)
+                    .font(.caption)
+                    .foregroundStyle(integrityStatus == nil ? Color.secondary : Color.red)
+            }
+            Spacer()
+        }
+        .padding(10)
+        .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(accessibilityLabel)
+    }
+
+    private var subtitle: String {
+        let type = artifactMimeLabel(mimeType)
+        var parts = [type]
+        if let size {
+            let formatted = ByteCountFormatter.string(fromByteCount: Int64(size), countStyle: .file)
+            parts.append(formatted)
+        }
+        if let integrityStatus {
+            parts.append(integrityStatus)
+        }
+        return parts.joined(separator: " · ")
+    }
+
+    private var accessibilityLabel: String {
+        let name = (path as NSString?)?.lastPathComponent ?? "Attachment"
+        let type = artifactMimeLabel(mimeType)
+        if let integrityStatus {
+            if let size {
+                let formatted = ByteCountFormatter.string(fromByteCount: Int64(size), countStyle: .file)
+                return "\(name), \(type), \(formatted), \(integrityStatus)"
+            }
+            return "\(name), \(type), \(integrityStatus)"
+        }
+        if let size {
+            let formatted = ByteCountFormatter.string(fromByteCount: Int64(size), countStyle: .file)
+            return "\(name), \(type), \(formatted). Open or reveal in Finder."
+        }
+        return "\(name), \(type). Open or reveal in Finder."
+    }
+}
+
+struct MarkdownPreview: View {
+    let content: String
+
+    var body: some View {
+        if let attributed = attributedMarkdownPreview(content) {
+            Text(attributed)
+                .textSelection(.enabled)
+        } else {
+            Text(sanitizedMarkdownForPreview(content))
+                .textSelection(.enabled)
+        }
+    }
+}
+
 struct SandboxedHTMLView: NSViewRepresentable {
     let html: String
     var policy: WebContentPolicy = .artifactNoNetwork
     var bridgeContext: AppBridgeContext?
+    var persistedStateJSON: String?
     var pendingBridgeResponse: String?
     var onBridgeRequest: ((String, UUID) -> Void)?
     var onBlockedNavigation: ((URL) -> Void)?
@@ -865,6 +1034,7 @@ struct SandboxedHTMLView: NSViewRepresentable {
         }
         let webView = WKWebView(frame: .zero, configuration: configuration)
         webView.navigationDelegate = context.coordinator
+        webView.uiDelegate = context.coordinator
         context.coordinator.webView = webView
         return webView
     }
@@ -879,7 +1049,15 @@ struct SandboxedHTMLView: NSViewRepresentable {
             context.coordinator.lastDeliveredResponse = pendingBridgeResponse
         }
         let bridgeScript = bridgeContext?.bridgeScript
-        webView.loadHTMLString(sandboxedHTML(for: html, policy: policy, bridgeScript: bridgeScript), baseURL: nil)
+        webView.loadHTMLString(
+            sandboxedHTML(
+                for: html,
+                policy: policy,
+                bridgeScript: bridgeScript,
+                persistedStateJSON: persistedStateJSON
+            ),
+            baseURL: nil
+        )
     }
 
     func makeCoordinator() -> Coordinator {
@@ -891,7 +1069,7 @@ struct SandboxedHTMLView: NSViewRepresentable {
         )
     }
 
-    final class Coordinator: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
+    final class Coordinator: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptMessageHandler {
         var policy: WebContentPolicy
         var bridgeContext: AppBridgeContext?
         var onBridgeRequest: ((String, UUID) -> Void)?
@@ -959,31 +1137,65 @@ struct SandboxedHTMLView: NSViewRepresentable {
                 .replacingOccurrences(of: "'", with: "\\'")
             webView.evaluateJavaScript("window.__tamtriAppBridgeDeliver('\(escaped)');", completionHandler: nil)
         }
+
+        func webView(
+            _ webView: WKWebView,
+            createWebViewWith configuration: WKWebViewConfiguration,
+            for navigationAction: WKNavigationAction,
+            windowFeatures: WKWindowFeatures
+        ) -> WKWebView? {
+            if let url = navigationAction.request.url {
+                onBlockedNavigation?(url)
+            }
+            return nil
+        }
+
+        func webView(
+            _ webView: WKWebView,
+            runJavaScriptAlertPanelWithMessage message: String,
+            initiatedByFrame frame: WKFrameInfo,
+            completionHandler: @escaping @MainActor @Sendable () -> Void
+        ) {
+            completionHandler()
+        }
+
+        func webView(
+            _ webView: WKWebView,
+            runJavaScriptConfirmPanelWithMessage message: String,
+            initiatedByFrame frame: WKFrameInfo,
+            completionHandler: @escaping @MainActor @Sendable (Bool) -> Void
+        ) {
+            completionHandler(false)
+        }
+
+        func webView(
+            _ webView: WKWebView,
+            runJavaScriptTextInputPanelWithPrompt prompt: String,
+            defaultText: String?,
+            initiatedByFrame frame: WKFrameInfo,
+            completionHandler: @escaping @MainActor @Sendable (String?) -> Void
+        ) {
+            completionHandler(nil)
+        }
     }
 }
 
 struct CSVPreview: View {
     let text: String
     let separator: Character
+    var stylesHeaderRow = true
 
     private var rows: [[String]] {
-        text
-            .split(whereSeparator: \.isNewline)
-            .prefix(20)
-            .map { line in
-                line.split(separator: separator, omittingEmptySubsequences: false)
-                    .prefix(8)
-                    .map(String.init)
-            }
+        csvPreviewRows(text: text, separator: separator)
     }
 
     var body: some View {
         Grid(alignment: .leading, horizontalSpacing: 10, verticalSpacing: 6) {
-            ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
+            ForEach(Array(rows.enumerated()), id: \.offset) { rowIndex, row in
                 GridRow {
                     ForEach(Array(row.enumerated()), id: \.offset) { _, cell in
                         Text(cell)
-                            .font(.caption.monospaced())
+                            .font(rowIndex == 0 && stylesHeaderRow ? .caption.bold().monospaced() : .caption.monospaced())
                             .lineLimit(2)
                     }
                 }
@@ -996,23 +1208,14 @@ struct CSVPreview: View {
 
 struct ToolCard: View {
     let event: CoreEvent
-    private var summary: ToolSummary {
-        ToolSummary(event: event)
-    }
 
     var body: some View {
-        CompactCard(title: summary.title, systemImage: "wrench.and.screwdriver") {
-            if !summary.subtitle.isEmpty {
-                Text(summary.subtitle)
-                    .foregroundStyle(.secondary)
-            }
-            if !summary.detail.isEmpty {
-                Text(summary.detail)
-                    .font(.body.monospaced())
-                    .textSelection(.enabled)
-            }
-        }
-        .accessibilityLabel("Tool event")
+        ToolCardView(
+            presentation: ToolCardPresentationBuilder.fromLiveEvent(
+                kind: event.kind,
+                payloadJSON: event.payloadJSON
+            )
+        )
     }
 }
 
@@ -1035,40 +1238,18 @@ struct CompactCard<Content: View>: View {
 struct PermissionCard: View {
     @EnvironmentObject private var store: AppStore
     let event: CoreEvent
-    private var request: PermissionPayload? {
-        try? JSONDecoder().decode(PermissionPayload.self, from: Data(event.payloadJSON.utf8))
-    }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Label("Permission requested", systemImage: "hand.raised")
-                .font(.headline)
-            if let request {
-                Text(request.summary)
-                    .textSelection(.enabled)
+        if let presentation = PermissionCardPresentationBuilder.build(payloadJSON: event.payloadJSON) {
+            PermissionCardView(presentation: presentation) { optionId in
+                store.respondPermission(requestId: presentation.requestId, optionId: optionId)
             }
-            HStack {
-                if let request {
-                    ForEach(request.rejectOptions) { option in
-                        Button(option.label) {
-                            store.respondPermission(requestId: request.requestId, optionId: option.id)
-                        }
-                    }
-                    ForEach(request.allowOptions) { option in
-                        Button(option.label) {
-                            store.respondPermission(requestId: request.requestId, optionId: option.id)
-                        }
-                    }
-                    .keyboardShortcut(.defaultAction)
-                } else {
-                    Text("Unable to parse permission request")
-                        .foregroundStyle(.secondary)
-                }
-            }
+        } else {
+            Text("Unable to parse permission request")
+                .foregroundStyle(.secondary)
+                .padding(10)
+                .background(.yellow.opacity(0.18), in: RoundedRectangle(cornerRadius: 8))
         }
-        .padding(10)
-        .background(.yellow.opacity(0.18), in: RoundedRectangle(cornerRadius: 8))
-        .accessibilityLabel("Permission requested")
     }
 }
 
@@ -1084,28 +1265,31 @@ struct ElicitationCard: View {
     }
 
     var body: some View {
-        if let request, request.mode == "url" {
-            URLConsentCard(
-                request: URLConsentRequest(
-                    requestId: request.requestId,
-                    serverId: request.serverId,
-                    originToolCallId: request.originToolCallId,
-                    message: request.message,
-                    url: request.url
+        switch ElicitationCardRouter.cardKind(mode: request?.mode, schema: request?.schema) {
+        case .urlHandoff:
+            if let request {
+                URLConsentCard(
+                    request: URLConsentRequest(
+                        requestId: request.requestId,
+                        serverId: request.serverId,
+                        originToolCallId: request.originToolCallId,
+                        message: request.message,
+                        url: request.url
+                    )
                 )
-            )
-        } else if ElicitationSchemaPolicy.schemaLooksSecret(request?.schema) {
+            }
+        case .secretBlocked:
             SecretElicitationBlockedCard(
                 onDecline: { respond(action: "decline") },
                 onCancel: { respond(action: "cancel") }
             )
-        } else if !ElicitationSchemaPolicy.schemaIsRenderable(request?.schema) {
+        case .unsupportedSchema:
             UnsupportedElicitationSchemaCard(
                 message: request?.message ?? "The server sent a form tamtri cannot render.",
                 onDecline: { respond(action: "decline") },
                 onCancel: { respond(action: "cancel") }
             )
-        } else {
+        case .form:
             formCard
         }
     }
@@ -1271,82 +1455,6 @@ private struct ElicitationPayload: Decodable {
     }
 }
 
-private struct PermissionPayload: Decodable {
-    let requestId: String
-    let action: String
-    let options: [PermissionOptionPayload]
-    let detail: PermissionDetailPayload?
-
-    enum CodingKeys: String, CodingKey {
-        case requestId = "request_id"
-        case action
-        case options
-        case detail
-    }
-
-    var summary: String {
-        if let detailSummary = detail?.summary, !detailSummary.isEmpty {
-            return detailSummary
-        }
-        return action.isEmpty ? "The agent is asking for permission." : "Action: \(action)"
-    }
-
-    var rejectOptions: [PermissionOptionPayload] {
-        options.filter { $0.isReject }
-    }
-
-    var allowOptions: [PermissionOptionPayload] {
-        options.filter { !$0.isReject }
-    }
-}
-
-private struct PermissionDetailPayload: Decodable {
-    let type: String?
-    let command: String?
-    let diff: DiffPayload?
-
-    var summary: String {
-        if let command {
-            return command
-        }
-        if let diff {
-            return diff.summary
-        }
-        return type ?? ""
-    }
-}
-
-private struct DiffPayload: Decodable {
-    let path: String?
-    let change: String?
-    let oldText: String?
-    let newText: String?
-
-    enum CodingKeys: String, CodingKey {
-        case path
-        case change
-        case oldText = "old_text"
-        case newText = "new_text"
-    }
-
-    var summary: String {
-        var lines = [path, change].compactMap { $0 }
-        if let newText, !newText.isEmpty {
-            lines.append(newText)
-        }
-        return lines.joined(separator: "\n")
-    }
-}
-
-private struct PermissionOptionPayload: Decodable, Identifiable {
-    let id: String
-    let label: String
-
-    var isReject: Bool {
-        id.localizedCaseInsensitiveContains("deny") || id.localizedCaseInsensitiveContains("reject")
-    }
-}
-
 private struct EventPayload: Decodable {
     let text: String?
 
@@ -1356,22 +1464,6 @@ private struct EventPayload: Decodable {
 
     static func string(from json: String, key: String) -> String? {
         JSONValue.from(json: json)?.string(at: key)
-    }
-}
-
-private struct ToolSummary {
-    let title: String
-    let subtitle: String
-    let detail: String
-
-    init(event: CoreEvent) {
-        let json = JSONValue.from(json: event.payloadJSON)
-        let name = json?.string(at: "name") ?? json?.string(at: "title")
-        let path = json?.string(at: "path") ?? json?.value(at: "diff")?.string(at: "path")
-        let status = json?.string(at: "status")
-        self.title = name ?? event.kind.replacingOccurrences(of: "_", with: " ").capitalized
-        self.subtitle = [status, path].compactMap { $0 }.joined(separator: " • ")
-        self.detail = json?.description ?? event.payloadJSON
     }
 }
 
@@ -1396,7 +1488,7 @@ struct FilesSidebarView: View {
             .padding(.top, 12)
             .padding(.bottom, 8)
 
-            if store.workdirFiles.isEmpty {
+            if store.transcriptArtifacts.isEmpty && store.workdirFiles.isEmpty {
                 Spacer()
                 VStack(spacing: 8) {
                     Image(systemName: "doc")
@@ -1412,26 +1504,67 @@ struct FilesSidebarView: View {
                 .padding()
                 Spacer()
             } else {
-                List(store.workdirFiles, selection: selectedFileBinding) { file in
-                    FilesSidebarRow(file: file)
-                        .tag(file.relativePath)
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 0) {
+                        if !store.transcriptArtifacts.isEmpty {
+                            Text("Artifacts")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.secondary)
+                                .padding(.horizontal)
+                                .padding(.bottom, 4)
+                            List(store.transcriptArtifacts, selection: selectedArtifactBinding) { artifact in
+                                TranscriptArtifactRow(artifact: artifact)
+                                    .tag(artifact.id)
+                            }
+                            .listStyle(.sidebar)
+                            .frame(minHeight: 80, maxHeight: 160)
+                        }
+                        if !store.workdirFiles.isEmpty {
+                            Text("Working files")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.secondary)
+                                .padding(.horizontal)
+                                .padding(.top, store.transcriptArtifacts.isEmpty ? 0 : 8)
+                                .padding(.bottom, 4)
+                            List(store.workdirFiles, selection: selectedFileBinding) { file in
+                                FilesSidebarRow(file: file)
+                                    .tag(file.relativePath)
+                            }
+                            .listStyle(.sidebar)
+                            .frame(minHeight: 80, maxHeight: 160)
+                        }
+                    }
                 }
-                .listStyle(.sidebar)
-                .frame(minHeight: 100, maxHeight: 220)
+                .frame(maxHeight: 220)
 
                 Divider()
 
-                if let preview = store.workdirPreview {
+                if let preview = store.attachmentPreview {
+                    AttachmentFilePreviewView(preview: preview)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else if let preview = store.workdirPreview {
                     WorkdirFilePreviewView(preview: preview)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else if store.selectedWorkdirFile != nil {
+                } else if store.selectedTranscriptArtifact != nil || store.selectedWorkdirFile != nil {
                     ProgressView()
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
             }
         }
         .inspectorColumnWidth(min: 260, ideal: 340, max: 520)
-        .accessibilityLabel("Working files")
+        .accessibilityLabel("Working files and artifacts")
+    }
+
+    private var selectedArtifactBinding: Binding<String?> {
+        Binding(
+            get: { store.selectedTranscriptArtifact?.id },
+            set: { id in
+                guard let id,
+                      let artifact = store.transcriptArtifacts.first(where: { $0.id == id })
+                else { return }
+                Task { await store.selectTranscriptArtifact(artifact) }
+            }
+        )
     }
 
     private var selectedFileBinding: Binding<String?> {
@@ -1444,6 +1577,94 @@ struct FilesSidebarView: View {
                 Task { await store.selectWorkdirFile(file) }
             }
         )
+    }
+}
+
+struct TranscriptArtifactRow: View {
+    let artifact: TranscriptArtifactRecord
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: artifactFileIcon(artifact.mimeType))
+                .foregroundStyle(.secondary)
+                .frame(width: 18)
+            VStack(alignment: .leading, spacing: 2) {
+                Text((artifact.path as NSString).lastPathComponent)
+                    .lineLimit(1)
+                Text("Attachment · \(ByteCountFormatter.string(fromByteCount: Int64(artifact.size), countStyle: .file))")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+        }
+        .accessibilityLabel("\((artifact.path as NSString).lastPathComponent), frozen attachment")
+    }
+}
+
+struct AttachmentFilePreviewView: View {
+    @EnvironmentObject private var store: AppStore
+    let preview: AttachmentFilePreview
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                Text((preview.path as NSString).lastPathComponent)
+                    .font(.subheadline.weight(.semibold))
+                    .lineLimit(1)
+                Spacer()
+                if let artifact = store.selectedTranscriptArtifact {
+                    Button {
+                        store.revealTranscriptArtifact(artifact)
+                    } label: {
+                        Label("Reveal in Finder", systemImage: "folder")
+                    }
+                    .labelStyle(.iconOnly)
+                    .help("Reveal frozen attachment in Finder")
+                }
+            }
+            .padding(.horizontal)
+            .padding(.vertical, 8)
+
+            ScrollView {
+                Group {
+                    if let error = preview.error {
+                        Text(error)
+                            .foregroundStyle(.secondary)
+                            .padding()
+                    } else if let text = preview.text {
+                        attachmentTextPreview(text)
+                    } else if let imageData = preview.imageData, let image = NSImage(data: imageData) {
+                        Image(nsImage: image)
+                            .resizable()
+                            .scaledToFit()
+                            .frame(maxWidth: .infinity)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal)
+                .padding(.bottom, 12)
+            }
+        }
+        .background(Color(nsColor: .textBackgroundColor))
+    }
+
+    @ViewBuilder
+    private func attachmentTextPreview(_ text: String) -> some View {
+        switch preview.mimeType {
+        case "text/html", "image/svg+xml":
+            SandboxedHTMLView(html: text, onBlockedNavigation: { url in
+                store.logBlockedNavigation(url: url.absoluteString)
+            })
+                .frame(minHeight: 280)
+        case "text/csv", "text/tab-separated-values":
+            CSVPreview(text: text, separator: preview.mimeType == "text/tab-separated-values" ? "\t" : ",")
+        case "text/markdown":
+            MarkdownPreview(content: text)
+        default:
+            Text(text)
+                .font(.body.monospaced())
+                .textSelection(.enabled)
+        }
     }
 }
 
@@ -1561,8 +1782,7 @@ struct WorkdirFilePreviewView: View {
         case "text/csv", "text/tab-separated-values":
             CSVPreview(text: text, separator: preview.mimeType == "text/tab-separated-values" ? "\t" : ",")
         case "text/markdown":
-            Text(text)
-                .textSelection(.enabled)
+            MarkdownPreview(content: text)
         default:
             Text(text)
                 .font(.body.monospaced())
@@ -1577,6 +1797,14 @@ struct ComposerView: View {
 
     var body: some View {
         HStack(alignment: .bottom, spacing: 8) {
+            Button {
+                store.presentConversationRoots()
+            } label: {
+                Label("Attach Root", systemImage: "folder.badge.plus")
+            }
+            .labelStyle(.iconOnly)
+            .help("Attach a filesystem root for this conversation")
+            .disabled(store.selectedConversation == nil)
             TextField("Message", text: $store.composerText, axis: .vertical)
                 .textFieldStyle(.roundedBorder)
                 .lineLimit(1...5)
@@ -1586,7 +1814,13 @@ struct ComposerView: View {
             } label: {
                 Label("Send", systemImage: "paperplane.fill")
             }
-            .disabled(store.selectedConversation == nil)
+            .disabled(store.selectedConversation == nil || store.isRunActive)
+            Button {
+                store.cancelRun()
+            } label: {
+                Label("Cancel", systemImage: "stop.fill")
+            }
+            .disabled(!store.isRunActive)
         }
         .padding()
         .background(isDropTargeted ? Color.accentColor.opacity(0.12) : Color.clear)
@@ -1646,14 +1880,15 @@ struct NewConversationView: View {
     @State private var title = ""
     @State private var harnessId = defaultHarnessId()
     @State private var modelId = defaultModelId()
+    @State private var availableModels: [ModelInfoRecord] = []
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             Text("New Conversation")
                 .font(.title2.bold())
             TextField("Title", text: $title)
-            TextField("Harness", text: $harnessId)
-            TextField("Model", text: $modelId)
+            HarnessPicker(harnessId: $harnessId, agents: store.harnessAgents)
+            ModelPicker(modelId: $modelId, models: availableModels)
             HStack {
                 Spacer()
                 Button("Cancel") {
@@ -1668,6 +1903,59 @@ struct NewConversationView: View {
         }
         .padding()
         .frame(width: 360)
+        .task {
+            await store.refreshHarnessAgents()
+            if !store.harnessAgents.contains(where: { $0.id == harnessId }),
+               let first = store.harnessAgents.first {
+                harnessId = first.id
+            }
+            await refreshModels()
+        }
+        .onChange(of: harnessId) { _, _ in
+            Task { await refreshModels() }
+        }
+    }
+
+    private func refreshModels() async {
+        availableModels = await store.listAgentModels(agentId: harnessId)
+        if let first = availableModels.first,
+           !availableModels.contains(where: { $0.id == modelId }) {
+            modelId = first.id
+        }
+    }
+}
+
+struct HarnessPicker: View {
+    @Binding var harnessId: String
+    let agents: [HarnessAgentRecord]
+
+    var body: some View {
+        if agents.isEmpty {
+            TextField("Harness", text: $harnessId)
+        } else {
+            Picker("Harness", selection: $harnessId) {
+                ForEach(agents) { agent in
+                    Text(agent.displayName).tag(agent.id)
+                }
+            }
+        }
+    }
+}
+
+struct ModelPicker: View {
+    @Binding var modelId: String
+    let models: [ModelInfoRecord]
+
+    var body: some View {
+        if models.isEmpty {
+            TextField("Model", text: $modelId)
+        } else {
+            Picker("Model", selection: $modelId) {
+                ForEach(models) { model in
+                    Text(model.displayName).tag(model.id)
+                }
+            }
+        }
     }
 }
 
@@ -1676,6 +1964,7 @@ struct ForkConversationView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var harnessId = defaultHarnessId()
     @State private var modelId = defaultModelId()
+    @State private var availableModels: [ModelInfoRecord] = []
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -1684,9 +1973,14 @@ struct ForkConversationView: View {
             if let conversation = store.selectedConversation {
                 Text(conversation.title)
                     .foregroundStyle(.secondary)
+                if let forkedFrom = conversation.forkedFrom {
+                    Text("Fork lineage: branched from \(forkedFrom)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             }
-            TextField("Harness", text: $harnessId)
-            TextField("Model", text: $modelId)
+            HarnessPicker(harnessId: $harnessId, agents: store.harnessAgents)
+            ModelPicker(modelId: $modelId, models: availableModels)
             HStack {
                 Spacer()
                 Button("Cancel") {
@@ -1701,6 +1995,25 @@ struct ForkConversationView: View {
         }
         .padding()
         .frame(width: 360)
+        .task {
+            await store.refreshHarnessAgents()
+            if !store.harnessAgents.contains(where: { $0.id == harnessId }),
+               let first = store.harnessAgents.first {
+                harnessId = first.id
+            }
+            await refreshModels()
+        }
+        .onChange(of: harnessId) { _, _ in
+            Task { await refreshModels() }
+        }
+    }
+
+    private func refreshModels() async {
+        availableModels = await store.listAgentModels(agentId: harnessId)
+        if let first = availableModels.first,
+           !availableModels.contains(where: { $0.id == modelId }) {
+            modelId = first.id
+        }
     }
 }
 
@@ -1711,6 +2024,7 @@ struct SettingsView: View {
     @State private var serverToEdit: GatewayServerRecord?
     @State private var serverToRemove: GatewayServerRecord?
     @State private var pendingRemoveServerId: String?
+    @State private var timeoutDraft = ""
 
     private var vaultConfigPath: String {
         FileManager.default.homeDirectoryForCurrentUser
@@ -1730,7 +2044,7 @@ struct SettingsView: View {
                     Label("Probe capabilities", systemImage: "antenna.radiowaves.left.and.right")
                 }
                 Button {
-                    store.refreshGatewayServers()
+                    Task { await store.refreshGatewayServers() }
                 } label: {
                     Label("Refresh", systemImage: "arrow.clockwise")
                 }
@@ -1739,8 +2053,34 @@ struct SettingsView: View {
                 }
             }
 
-            Text("Tamtri gateway tools")
+            Text(GatewaySettingsCopy.tamtriGatewayToolsHeading)
                 .font(.headline)
+
+            HStack {
+                Text("Default call timeout (seconds)")
+                TextField("300", text: $timeoutDraft)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 80)
+                Button("Save") {
+                    if let seconds = UInt64(timeoutDraft.trimmingCharacters(in: .whitespacesAndNewlines)) {
+                        store.saveGatewayDefaultTimeout(seconds)
+                    }
+                }
+            }
+            .font(.caption)
+
+            if store.gatewayTools.isEmpty {
+                Text("No gateway tools loaded. Add servers and tap Refresh.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else {
+                VStack(alignment: .leading, spacing: 4) {
+                    ForEach(store.gatewayTools) { tool in
+                        Text("\(tool.exposedName) ← \(tool.serverId)/\(tool.originalName)")
+                            .font(.caption.monospaced())
+                    }
+                }
+            }
 
             Text("Servers are stored in \(vaultConfigPath). Edits here and in an external editor both update the same file; use Refresh after external changes.")
                 .font(.caption)
@@ -1781,7 +2121,7 @@ struct SettingsView: View {
                     .font(.caption)
             }
 
-            Text("Agent-native tools are not exposed by this harness yet.")
+            Text(GatewaySettingsCopy.agentNativeToolsDisclaimer)
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
@@ -1793,9 +2133,10 @@ struct SettingsView: View {
                 .font(.caption)
         }
         .padding()
-        .frame(width: 560, height: 480)
+        .frame(width: 560, height: 560)
         .onAppear {
-            store.refreshGatewayServers()
+            timeoutDraft = String(store.defaultCallTimeoutSecs)
+            Task { await store.refreshGatewayServers() }
         }
         .sheet(isPresented: $showAddServer) {
             GatewayServerEditorSheet(
@@ -1875,8 +2216,7 @@ private struct CapabilityBadge: View {
     }
 
     private var effectiveStatus: String {
-        if title == "Sampling" { "declined" }
-        else { status }
+        CapabilityBadgeViewModel.effectiveStatus(title: title, status: status)
     }
 
     private var displayStatus: String {
@@ -1884,11 +2224,7 @@ private struct CapabilityBadge: View {
     }
 
     private var accessibilityText: String {
-        if title == "Sampling" {
-            "Sampling declined by design. The model lives in the harness."
-        } else {
-            "\(title) \(displayStatus)"
-        }
+        CapabilityBadgeViewModel.accessibilityText(title: title, status: status)
     }
 
     private var helpText: String {
@@ -1983,6 +2319,20 @@ struct GatewayServerRow: View {
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
+            HStack(spacing: 8) {
+                connectionStatusIcon(for: server.connectionStatus)
+                Text("Connection: \(server.connectionStatus.replacingOccurrences(of: "_", with: " "))")
+                if let timeout = server.timeoutSecs {
+                    Text("Timeout: \(timeout)s")
+                }
+            }
+            .font(.caption)
+            if !server.lastError.isEmpty {
+                Text(server.lastError)
+                    .font(.caption2)
+                    .foregroundStyle(.red)
+                    .lineLimit(2)
+            }
             GatewayCapabilityBadges(server: server)
             if server.credentialRefs.isEmpty && server.oauthTokenRef.isEmpty {
                 Text("No credentials required")
@@ -1990,16 +2340,17 @@ struct GatewayServerRow: View {
                     .foregroundStyle(.secondary)
             } else {
                 if !server.oauthTokenRef.isEmpty {
+                    let oauthPresentation = GatewayOAuthPresentation.forStatus(server.oauthStatus)
                     HStack {
-                        oauthStatusIcon(for: server.oauthStatus)
-                        Text("OAuth: \(server.oauthStatus.replacingOccurrences(of: "_", with: " "))")
+                        oauthStatusIcon(for: oauthPresentation)
+                        Text("OAuth: \(oauthPresentation.statusLabel)")
                         Spacer()
-                        if server.oauthStatus == "connected" {
-                            Text("Connected").foregroundStyle(.green)
-                        } else {
+                        if oauthPresentation.showsConnectButton {
                             Button("Connect") {
                                 store.connectOAuth(for: server)
                             }
+                        } else {
+                            Text("Connected").foregroundStyle(.green)
                         }
                     }
                     .font(.caption)
@@ -2034,16 +2385,28 @@ struct GatewayServerRow: View {
     }
 
     @ViewBuilder
-    private func oauthStatusIcon(for status: String) -> some View {
+    private func connectionStatusIcon(for status: String) -> some View {
         switch status {
         case "connected":
-            Image(systemName: "checkmark.seal.fill").foregroundStyle(.green)
-        case "reauth_required", "expired":
-            Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
-        case "missing":
-            Image(systemName: "key.slash").foregroundStyle(.secondary)
+            Image(systemName: "circle.fill").foregroundStyle(.green)
+        case "error":
+            Image(systemName: "exclamationmark.circle.fill").foregroundStyle(.red)
+        case "disabled":
+            Image(systemName: "minus.circle").foregroundStyle(.secondary)
         default:
-            Image(systemName: "key").foregroundStyle(.secondary)
+            Image(systemName: "questionmark.circle").foregroundStyle(.secondary)
+        }
+    }
+
+    @ViewBuilder
+    private func oauthStatusIcon(for presentation: GatewayOAuthPresentation) -> some View {
+        switch presentation.iconTone {
+        case .connected:
+            Image(systemName: presentation.iconSystemName).foregroundStyle(.green)
+        case .warning:
+            Image(systemName: presentation.iconSystemName).foregroundStyle(.orange)
+        case .neutral:
+            Image(systemName: presentation.iconSystemName).foregroundStyle(.secondary)
         }
     }
 }

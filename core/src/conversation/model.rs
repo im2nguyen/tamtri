@@ -105,6 +105,8 @@ pub enum ContentBlock {
         title: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         result_summary: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        origin_tool_call_id: Option<String>,
     },
 }
 

@@ -1,0 +1,9 @@
+[
+  {"type": "text_delta", "text": "done"},
+  {
+    "type": "plan_updated",
+    "steps": [{"title": "Step 1", "status": "completed"}]
+  },
+  {"type": "mode_changed", "mode": "plan"},
+  {"type": "turn_ended", "reason": "end_turn"}
+]

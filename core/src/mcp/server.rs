@@ -181,6 +181,7 @@ mod tests {
             .unwrap();
         assert_eq!(result["serverInfo"]["name"], "tamtri-gateway");
         assert_eq!(result["capabilities"]["tools"]["listChanged"], false);
+        assert!(result["capabilities"]["logging"].is_object());
         assert!(result["capabilities"]["sampling"].is_null());
         assert!(result["capabilities"]["tasks"].is_null());
     }

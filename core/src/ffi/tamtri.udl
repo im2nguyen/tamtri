@@ -17,6 +17,7 @@ dictionary ConversationDto {
   string title;
   string? active_harness_id;
   string? model_id;
+  string? forked_from;
   string transcript_json;
 };
 
@@ -52,6 +53,29 @@ dictionary GatewayServerDto {
   string cap_tasks;
   string cap_roots;
   string cap_sampling;
+  string connection_status;
+  string last_error;
+  u64? timeout_secs;
+};
+
+dictionary GatewayToolDto {
+  string exposed_name;
+  string server_id;
+  string original_name;
+};
+
+dictionary GatewaySettingsDto {
+  u64 default_call_timeout_secs;
+};
+
+dictionary AgentRosterEntryDto {
+  string id;
+  string display_name;
+};
+
+dictionary ModelInfoDto {
+  string id;
+  string display_name;
 };
 
 dictionary GatewayEnvVarDto {
@@ -102,6 +126,10 @@ interface TamtriCore {
   [Throws=TamtriError]
   void register_acp_agent(string id, string display_name, string command, sequence<string> args);
   [Throws=TamtriError]
+  sequence<AgentRosterEntryDto> list_acp_agents();
+  [Throws=TamtriError]
+  sequence<ModelInfoDto> list_acp_agent_models(string agent_id);
+  [Throws=TamtriError]
   sequence<ConversationSummaryDto> list_conversations();
   [Throws=TamtriError]
   ConversationDto load_conversation(string id);
@@ -120,6 +148,8 @@ interface TamtriCore {
   [Throws=TamtriError]
   void cancel_run(string conversation_id);
   [Throws=TamtriError]
+  void prepare_for_app_quit();
+  [Throws=TamtriError]
   void cancel_task(string conversation_id, string task_id);
   [Throws=TamtriError]
   sequence<RootDto> list_roots(string conversation_id);
@@ -133,6 +163,12 @@ interface TamtriCore {
   sequence<GatewayServerDto> list_gateway_servers();
   [Throws=TamtriError]
   sequence<GatewayServerDto> refresh_gateway_capabilities();
+  [Throws=TamtriError]
+  sequence<GatewayToolDto> list_gateway_tools();
+  [Throws=TamtriError]
+  GatewaySettingsDto get_gateway_settings();
+  [Throws=TamtriError]
+  void set_gateway_default_timeout(u64 default_call_timeout_secs);
   [Throws=TamtriError]
   void save_gateway_servers(sequence<GatewayServerDto> servers);
   [Throws=TamtriError]

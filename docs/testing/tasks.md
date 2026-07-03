@@ -4,7 +4,7 @@ Verify long-running downstream work surfaces as live task cards with cancellatio
 
 ## Prerequisites
 
-- Built `m7-task-mcp` fixture (`cargo build -p tamtri-core`).
+- Built `m7-task-mcp` and `m7-task-subscribe-mcp` fixtures (`cargo build -p tamtri-core`).
 - Vault gateway config with the tasks fixture registered (`id`: `tasks`).
 - An ACP harness that calls tamtri gateway tools.
 
@@ -14,7 +14,7 @@ Verify long-running downstream work surfaces as live task cards with cancellatio
 cargo build -p tamtri-core
 ```
 
-Binary: `target/debug/m7-task-mcp`
+Binaries: `target/debug/m7-task-mcp`, `target/debug/m7-task-subscribe-mcp`
 
 ## Config example
 
@@ -60,6 +60,6 @@ Coverage lives in `core/tests/gateway_tasks.rs`.
 
 ## Known limitations
 
-- RC task subscribe is gated behind capability checks; polling is the fallback.
+- RC task subscribe is gated behind capability checks; polling is the fallback. `m7-task-subscribe-mcp` exercises the subscribe path (`task_subscribe_updates_live_card`).
 - Mid-task input reuses the M6 elicitation path (form mode).
 - Task cards are non-blocking; the harness may continue other work in parallel.

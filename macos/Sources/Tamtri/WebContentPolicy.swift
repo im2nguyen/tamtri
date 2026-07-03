@@ -71,12 +71,17 @@ private extension URL {
     }
 }
 
-func sandboxedHTML(for html: String, policy: WebContentPolicy, bridgeScript: String? = nil) -> String {
+func sandboxedHTML(for html: String, policy: WebContentPolicy, bridgeScript: String? = nil, persistedStateJSON: String? = nil) -> String {
     switch policy {
     case .artifactNoNetwork:
         return artifactSandboxedHTML(html)
     case .app(let allowedOrigins, _, _, _):
-        return appSandboxedHTML(html: html, allowedOrigins: allowedOrigins, bridgeScript: bridgeScript ?? "")
+        return appSandboxedHTML(
+            html: html,
+            allowedOrigins: allowedOrigins,
+            bridgeScript: bridgeScript ?? "",
+            persistedStateJSON: persistedStateJSON
+        )
     }
 }
 
@@ -90,11 +95,26 @@ func artifactSandboxedHTML(_ html: String) -> String {
     return wrapHTML(html, headInjection: csp)
 }
 
-func appSandboxedHTML(html: String, allowedOrigins: [WebOrigin], bridgeScript: String) -> String {
+func appSandboxedHTML(html: String, allowedOrigins: [WebOrigin], bridgeScript: String, persistedStateJSON: String? = nil) -> String {
     let connect = allowedOrigins.map(\.mcpOriginString).joined(separator: " ")
     let csp = "<meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline' 'self'; connect-src \(connect) about:; img-src data:; base-uri 'none'; form-action 'none'\">"
     let bridge = bridgeScript.isEmpty ? "" : "<script>\(bridgeScript)</script>"
-    return wrapHTML(html, headInjection: csp + bridge)
+    let rehydrate = appStateRehydrationScript(persistedStateJSON: persistedStateJSON)
+    return wrapHTML(html, headInjection: csp + bridge + rehydrate)
+}
+
+func appStateRehydrationScript(persistedStateJSON: String?) -> String {
+    guard let persistedStateJSON,
+          !persistedStateJSON.isEmpty,
+          persistedStateJSON != "{}",
+          persistedStateJSON != "null"
+    else {
+        return ""
+    }
+    return """
+    <script>window.__tamtriAppPersistedState=\(persistedStateJSON);\
+    if(typeof window.__tamtriAppRehydrate==='function'){window.__tamtriAppRehydrate(window.__tamtriAppPersistedState);}</script>
+    """
 }
 
 private func wrapHTML(_ html: String, headInjection: String) -> String {
@@ -117,4 +137,99 @@ enum ArtifactNavigationPolicy {
     static func allows(_ url: URL?) -> Bool {
         WebNavigationPolicy.allows(url, policy: .artifactNoNetwork)
     }
+}
+
+/// Strip raw HTML and dangerous blocks before markdown preview rendering.
+func sanitizedMarkdownForPreview(_ content: String) -> String {
+    var sanitized = content
+    let dangerousBlockPatterns = [
+        "(?is)<script\\b[^>]*>.*?</script>",
+        "(?is)<style\\b[^>]*>.*?</style>",
+        "(?is)<iframe\\b[^>]*>.*?</iframe>",
+        "(?is)<object\\b[^>]*>.*?</object>",
+        "(?is)<embed\\b[^>]*>",
+    ]
+    for pattern in dangerousBlockPatterns {
+        sanitized = sanitized.replacingOccurrences(
+            of: pattern,
+            with: "",
+            options: .regularExpression
+        )
+    }
+    sanitized = sanitized.replacingOccurrences(
+        of: "<[^>]+>",
+        with: "",
+        options: .regularExpression
+    )
+    return sanitized
+}
+
+func attributedMarkdownPreview(_ content: String) -> AttributedString? {
+    let safe = sanitizedMarkdownForPreview(content)
+    var options = AttributedString.MarkdownParsingOptions()
+    options.interpretedSyntax = .inlineOnlyPreservingWhitespace
+    return try? AttributedString(markdown: safe, options: options)
+}
+
+let artifactCSVPreviewMaxRows = 20
+let artifactCSVPreviewMaxColumns = 8
+
+func csvPreviewRows(
+    text: String,
+    separator: Character,
+    maxRows: Int = artifactCSVPreviewMaxRows,
+    maxColumns: Int = artifactCSVPreviewMaxColumns
+) -> [[String]] {
+    text
+        .split(whereSeparator: \.isNewline)
+        .prefix(maxRows)
+        .map { line in
+            line.split(separator: separator, omittingEmptySubsequences: false)
+                .prefix(maxColumns)
+                .map(String.init)
+        }
+}
+
+func artifactCardAccessibilityLabel(path: String?, mimeType: String?, integrityFailed: Bool) -> String {
+    let title = (path as NSString?)?.lastPathComponent ?? "Artifact"
+    let type = artifactMimeLabel(mimeType)
+    if integrityFailed {
+        return "\(title), integrity check failed"
+    }
+    return "\(title), \(type)"
+}
+
+func artifactCardAccessibilityValue(
+    integrityFailed: Bool,
+    size: UInt64?,
+    previewLoaded: Bool,
+    imageLoaded: Bool,
+    nonPreviewable: Bool,
+    loading: Bool
+) -> String {
+    if integrityFailed {
+        return "integrity check failed"
+    }
+    let sizeText = size.map {
+        ByteCountFormatter.string(fromByteCount: Int64($0), countStyle: .file)
+    } ?? "unknown size"
+    if previewLoaded {
+        return "preview loaded, \(sizeText)"
+    }
+    if imageLoaded {
+        return "image preview loaded, \(sizeText)"
+    }
+    if nonPreviewable {
+        return "file attachment, \(sizeText)"
+    }
+    if loading {
+        return "loading preview, \(sizeText)"
+    }
+    return sizeText
+}
+
+/// Active webview previews (HTML/SVG) must not render when integrity verification fails.
+func artifactShouldUseWebViewPreview(mimeType: String?, integrityFailed: Bool, hasVerifiedContent: Bool) -> Bool {
+    guard hasVerifiedContent, !integrityFailed else { return false }
+    return mimeType == "text/html" || mimeType == "image/svg+xml"
 }

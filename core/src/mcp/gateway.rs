@@ -113,6 +113,9 @@ pub enum GatewayEvent {
     ServerConnected {
         server_id: String,
     },
+    ServerDisconnected {
+        server_id: String,
+    },
     ToolRouted {
         server_id: String,
         exposed_name: String,
@@ -188,6 +191,10 @@ pub enum GatewayEvent {
         state: crate::mcp::tasks::TaskState,
         result: Option<Value>,
     },
+    RootsListed {
+        server_id: String,
+        count: usize,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -231,7 +238,7 @@ struct PendingElicitation {
 struct GatewayElicitationService {
     events: Option<mpsc::UnboundedSender<GatewayEvent>>,
     event_broadcast: broadcast::Sender<GatewayEvent>,
-    active_tool_calls: Mutex<HashMap<String, ActiveToolCall>>,
+    active_tool_calls: Mutex<HashMap<String, Vec<ActiveToolCall>>>,
     pending_elicitations: Mutex<HashMap<String, PendingElicitation>>,
 }
 
@@ -358,6 +365,11 @@ impl McpGateway {
         Ok(reports)
     }
 
+    pub async fn check_server_connection(&self, server: &GatewayServerConfig) -> Result<()> {
+        self.client_for(server).await?;
+        Ok(())
+    }
+
     async fn store_capability_report(&self, report: ServerCapabilityReport) {
         self.server_capability_reports
             .lock()
@@ -391,6 +403,13 @@ impl McpGateway {
 
     pub async fn cancel_pending_elicitations(&self) {
         self.elicitation.cancel_all().await;
+    }
+
+    pub async fn disconnect_all_clients(&self) {
+        let server_ids: Vec<String> = self.clients.lock().await.keys().cloned().collect();
+        for server_id in server_ids {
+            self.evict_client(&server_id).await;
+        }
     }
 
     pub fn agent_cancelled(&self, params: Value) {
@@ -445,6 +464,9 @@ impl McpGateway {
                     }
                 }
                 Err(err) => {
+                    if matches!(&err, CoreError::Timeout { .. } | CoreError::TransportClosed) {
+                        self.evict_client(&server.id).await;
+                    }
                     self.emit(GatewayEvent::DownstreamError {
                         server_id: server.id.clone(),
                         message: err.to_string(),
@@ -495,7 +517,7 @@ impl McpGateway {
         let _guard = lock.lock().await;
         let origin_tool_call_id = origin_tool_call_id_from_meta(meta.as_ref());
         self.elicitation
-            .set_active_tool_call(&route.server_id, origin_tool_call_id.clone())
+            .push_active_tool_call(&route.server_id, origin_tool_call_id.clone())
             .await;
         let tasks_enabled = client
             .server_capabilities()
@@ -513,14 +535,19 @@ impl McpGateway {
                 task_param,
                 meta.clone(),
             )
-            .await
-            .inspect_err(|err| {
-                self.emit(GatewayEvent::DownstreamError {
-                    server_id: route.server_id.clone(),
-                    message: err.to_string(),
-                });
+            .await;
+        if let Err(err) = &raw_result {
+            if matches!(err, CoreError::Timeout { .. } | CoreError::TransportClosed) {
+                self.evict_client(&route.server_id).await;
+            }
+            self.emit(GatewayEvent::DownstreamError {
+                server_id: route.server_id.clone(),
+                message: err.to_string(),
             });
-        self.elicitation.clear_active_tool_call(&route.server_id).await;
+        }
+        self.elicitation
+            .pop_active_tool_call(&route.server_id)
+            .await;
         let result = match raw_result {
             Ok(raw) => {
                 if tasks_enabled
@@ -791,6 +818,23 @@ impl McpGateway {
             .ok_or_else(|| CoreError::Protocol(format!("gateway server not found: {server_id}")))
     }
 
+    async fn evict_client(&self, server_id: &str) {
+        let removed = if let Some(client) = self.clients.lock().await.remove(server_id) {
+            if let Ok(client) = Arc::try_unwrap(client) {
+                let _ = client.close().await;
+            }
+            true
+        } else {
+            false
+        };
+        self.task_tracker.unregister_client(server_id).await;
+        if removed {
+            self.emit(GatewayEvent::ServerDisconnected {
+                server_id: server_id.to_string(),
+            });
+        }
+    }
+
     async fn client_for(&self, server: &GatewayServerConfig) -> Result<Arc<McpClient>> {
         if let Some(client) = self.clients.lock().await.get(&server.id).cloned() {
             return Ok(client);
@@ -818,7 +862,10 @@ impl McpGateway {
                 .unwrap_or(self.config.default_call_timeout_secs),
         );
         let client_config = McpClientConfig {
-            init_timeout: Duration::from_secs(30),
+            init_timeout: server
+                .timeout_secs
+                .map(Duration::from_secs)
+                .unwrap_or(Duration::from_secs(30)),
             call_timeout: timeout,
         };
         let client_events = self.client_event_sender(&server.id);
@@ -827,7 +874,10 @@ impl McpGateway {
             service: Arc::clone(&self.elicitation),
         });
         let roots_handler = Arc::new(GatewayRootsHandler {
+            server_id: server.id.clone(),
             roots: Arc::clone(&self.roots),
+            events: self.events.clone(),
+            event_broadcast: self.event_broadcast.clone(),
         });
         match &server.transport {
             GatewayTransport::Stdio { command, args, env } => {
@@ -1094,13 +1144,25 @@ struct GatewayElicitationHandler {
 }
 
 struct GatewayRootsHandler {
+    server_id: String,
     roots: Arc<tokio::sync::RwLock<Vec<Root>>>,
+    events: Option<mpsc::UnboundedSender<GatewayEvent>>,
+    event_broadcast: broadcast::Sender<GatewayEvent>,
 }
 
 #[async_trait]
 impl RootsHandler for GatewayRootsHandler {
     async fn handle_list(&self) -> std::result::Result<Value, JsonRpcError> {
         let roots = self.roots.read().await;
+        let count = roots.len();
+        let event = GatewayEvent::RootsListed {
+            server_id: self.server_id.clone(),
+            count,
+        };
+        let _ = self.event_broadcast.send(event.clone());
+        if let Some(tx) = &self.events {
+            let _ = tx.send(event);
+        }
         Ok(roots_list_result(&roots))
     }
 }
@@ -1122,17 +1184,25 @@ impl GatewayElicitationService {
         }
     }
 
-    async fn set_active_tool_call(&self, server_id: &str, origin_tool_call_id: Option<String>) {
-        self.active_tool_calls.lock().await.insert(
-            server_id.to_string(),
-            ActiveToolCall {
+    async fn push_active_tool_call(&self, server_id: &str, origin_tool_call_id: Option<String>) {
+        self.active_tool_calls
+            .lock()
+            .await
+            .entry(server_id.to_string())
+            .or_default()
+            .push(ActiveToolCall {
                 origin_tool_call_id,
-            },
-        );
+            });
     }
 
-    async fn clear_active_tool_call(&self, server_id: &str) {
-        self.active_tool_calls.lock().await.remove(server_id);
+    async fn pop_active_tool_call(&self, server_id: &str) {
+        let mut map = self.active_tool_calls.lock().await;
+        if let Some(stack) = map.get_mut(server_id) {
+            stack.pop();
+            if stack.is_empty() {
+                map.remove(server_id);
+            }
+        }
     }
 
     async fn respond(
@@ -1219,6 +1289,7 @@ impl GatewayElicitationService {
             .lock()
             .await
             .get(server_id)
+            .and_then(|stack| stack.last())
             .and_then(|call| call.origin_tool_call_id.clone());
         let (response_tx, response_rx) = oneshot::channel();
         let (content_tx, content_rx) = oneshot::channel();
@@ -1253,14 +1324,106 @@ impl GatewayElicitationService {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::sync::Arc;
 
-    #[test]
-    fn gateway_tool_name_collision_is_stable() {
+    use super::*;
+    use crate::config::GatewayScope;
+    use serde_json::json;
+    use tokio::sync::mpsc;
+
+    fn stdio_server(id: &str, command: &str) -> GatewayServerConfig {
+        GatewayServerConfig {
+            id: id.to_string(),
+            display_name: id.to_string(),
+            enabled: true,
+            scope: GatewayScope::Project,
+            transport: GatewayTransport::Stdio {
+                command: command.to_string(),
+                args: Vec::new(),
+                env: Vec::new(),
+            },
+            timeout_secs: None,
+            credentials: Vec::new(),
+            oauth: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn gateway_tool_name_collision_is_stable() {
         assert_eq!(
             exposed_tool_name("my server", "Echo Tool"),
             "my_server__echo_tool"
         );
+
+        let Some(command) = option_env!("CARGO_BIN_EXE_mock-mcp-server") else {
+            return;
+        };
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let gateway = Arc::new(
+            McpGateway::new(
+                GatewayConfig {
+                    default_call_timeout_secs: 300,
+                    servers: vec![stdio_server("alpha", command), stdio_server("beta", command)],
+                },
+                Arc::new(NoCredentials),
+                Some(tx),
+            )
+            .unwrap(),
+        );
+
+        let tools = gateway.list_tools().await.unwrap();
+        let alpha_echo = tools
+            .iter()
+            .find(|tool| tool.server_id == "alpha" && tool.original_name == "echo")
+            .expect("alpha echo");
+        let beta_echo = tools
+            .iter()
+            .find(|tool| tool.server_id == "beta" && tool.original_name == "echo")
+            .expect("beta echo");
+        assert_ne!(alpha_echo.exposed_name, beta_echo.exposed_name);
+        assert_eq!(alpha_echo.exposed_name, "alpha__echo");
+        assert_eq!(beta_echo.exposed_name, "beta__echo");
+
+        gateway
+            .call_tool(
+                &alpha_echo.exposed_name,
+                json!({"server": "alpha", "message": "alpha"}),
+            )
+            .await
+            .unwrap();
+        let alpha_routed = tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                if let Some(GatewayEvent::ToolRouted { server_id, .. }) = rx.recv().await
+                    && server_id == "alpha"
+                {
+                    return server_id;
+                }
+            }
+        })
+        .await
+        .expect("alpha route event");
+
+        gateway
+            .call_tool(
+                &beta_echo.exposed_name,
+                json!({"server": "beta", "message": "beta"}),
+            )
+            .await
+            .unwrap();
+        let beta_routed = tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                if let Some(GatewayEvent::ToolRouted { server_id, .. }) = rx.recv().await
+                    && server_id == "beta"
+                {
+                    return server_id;
+                }
+            }
+        })
+        .await
+        .expect("beta route event");
+
+        assert_eq!(alpha_routed, "alpha");
+        assert_eq!(beta_routed, "beta");
     }
 
     #[tokio::test]

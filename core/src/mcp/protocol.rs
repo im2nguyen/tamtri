@@ -62,6 +62,8 @@ pub struct ServerCapabilities {
     pub tasks: Option<TasksCapability>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub roots: Option<RootsCapability>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub logging: Option<LoggingCapability>,
     /// RC extension map (Apps/Tasks as versioned extensions). Unknown keys are preserved.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub extensions: Option<serde_json::Value>,
@@ -112,6 +114,9 @@ pub struct RootsCapability {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub list_changed: Option<bool>,
 }
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct LoggingCapability {}
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

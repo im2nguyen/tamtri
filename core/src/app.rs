@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
-use std::time::UNIX_EPOCH;
+use std::time::{Duration, UNIX_EPOCH};
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -13,8 +13,8 @@ use uuid::Uuid;
 
 use crate::artifact::{detect_mime, verify_inline_artifact, ArtifactSnapshot, ArtifactSnapshotter, verify_attachment};
 use crate::config::{
-    load_app_config, replace_gateway_servers, GatewayScope, GatewayServerConfig, GatewayTransport,
-    OAuthConfig,
+    load_app_config, replace_gateway_servers, save_app_config, GatewayScope, GatewayServerConfig,
+    GatewayTransport, OAuthConfig,
 };
 use crate::conversation::reduce::TurnReducer;
 use crate::conversation::{
@@ -23,9 +23,12 @@ use crate::conversation::{
 };
 use crate::harness::acp::{AcpAdapter, AgentLaunchSpec};
 use crate::harness::{
-    ContextSeed, ConversationContext, HarnessAdapter, HarnessEvent, RunControl, TurnInput,
+    ContextSeed, ConversationContext, HarnessAdapter, HarnessEvent, RunControl, TurnEndReason,
+    TurnInput,
 };
-use crate::mcp::elicitation::{audit_safe_elicitation_url, sanitize_transcript_data};
+use crate::mcp::elicitation::{
+    audit_safe_elicitation_url, elicitation_request_block, elicitation_response_block,
+};
 use crate::mcp::oauth::{
     PkceChallenge, build_authorization_url, exchange_authorization_code, generate_pkce,
     oauth_connection_status, oauth_status_label, parse_stored_oauth, serialize_stored_oauth,
@@ -34,7 +37,7 @@ use crate::mcp::oauth::{
 use crate::mcp::url_handoff::validate_handoff_url;
 use crate::mcp::app_bridge::{
     execute_action, finish_execution, parse_app_bridge_rpc, shared_app_bridge_coordinator,
-    AppBridgeResolution, SharedAppBridgeCoordinator,
+    AppBridgeBeginResult, AppBridgeResolution, SharedAppBridgeCoordinator,
 };
 use crate::mcp::app::{app_bridge_bootstrap_script, app_sandbox_csp, AppTemplate};
 use crate::mcp::endpoint::{GatewayEndpoint, start_loopback_gateway};
@@ -71,6 +74,7 @@ pub struct ConversationDto {
     pub title: String,
     pub active_harness_id: Option<String>,
     pub model_id: Option<String>,
+    pub forked_from: Option<String>,
     pub transcript_json: String,
 }
 
@@ -110,6 +114,30 @@ pub struct GatewayEnvVarDto {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, uniffi::Record)]
+pub struct AgentRosterEntryDto {
+    pub id: String,
+    pub display_name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, uniffi::Record)]
+pub struct ModelInfoDto {
+    pub id: String,
+    pub display_name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, uniffi::Record)]
+pub struct GatewayToolDto {
+    pub exposed_name: String,
+    pub server_id: String,
+    pub original_name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, uniffi::Record)]
+pub struct GatewaySettingsDto {
+    pub default_call_timeout_secs: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, uniffi::Record)]
 pub struct GatewayServerDto {
     pub id: String,
     pub display_name: String,
@@ -136,6 +164,15 @@ pub struct GatewayServerDto {
     pub cap_tasks: String,
     pub cap_roots: String,
     pub cap_sampling: String,
+    pub connection_status: String,
+    pub last_error: String,
+    pub timeout_secs: Option<u64>,
+}
+
+#[derive(Debug, Clone)]
+struct GatewayServerStatus {
+    connection_status: String,
+    last_error: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, uniffi::Record)]
@@ -210,6 +247,7 @@ pub struct TamtriCore {
     conversation_cache: Arc<Mutex<HashMap<Id, CachedConversationDto>>>,
     pending_oauth: Arc<Mutex<HashMap<String, PendingOAuthFlow>>>,
     gateway_capability_cache: Arc<Mutex<HashMap<String, ServerCapabilityReport>>>,
+    gateway_status_cache: Arc<Mutex<HashMap<String, GatewayServerStatus>>>,
     app_bridge: SharedAppBridgeCoordinator,
     /// Shell-resolved root URIs (security-scoped bookmarks) keyed by conversation id.
     runtime_roots: Arc<Mutex<HashMap<Id, Vec<Root>>>>,
@@ -228,19 +266,94 @@ impl TamtriCore {
 impl TamtriCore {
     pub fn new_inner(vault_path: PathBuf, observer: Arc<dyn ConversationObserver>) -> Result<Self> {
         let runtime = Builder::new_multi_thread().enable_all().build()?;
+        let vault = Arc::new(FilesystemVault::new(vault_path.clone())?);
+        let config = load_app_config(&vault_path)?;
+        let mut adapters: HashMap<String, Arc<dyn HarnessAdapter>> = HashMap::new();
+        for spec in &config.agent_roster {
+            adapters.insert(spec.id.clone(), Arc::new(AcpAdapter::new(spec.clone())));
+        }
         Ok(Self {
-            vault: Arc::new(FilesystemVault::new(vault_path)?),
+            vault,
             runtime,
-            adapters: Arc::new(Mutex::new(HashMap::new())),
+            adapters: Arc::new(Mutex::new(adapters)),
             active_runs: Arc::new(Mutex::new(HashMap::new())),
             credentials: Arc::new(MemoryCredentials::default()),
             observer,
             conversation_cache: Arc::new(Mutex::new(HashMap::new())),
             pending_oauth: Arc::new(Mutex::new(HashMap::new())),
             gateway_capability_cache: Arc::new(Mutex::new(HashMap::new())),
+            gateway_status_cache: Arc::new(Mutex::new(HashMap::new())),
             app_bridge: shared_app_bridge_coordinator(),
             runtime_roots: Arc::new(Mutex::new(HashMap::new())),
         })
+    }
+
+    fn record_gateway_server_status(&self, server_id: &str, connection_status: &str, last_error: &str) {
+        if let Ok(mut cache) = self.gateway_status_cache.lock() {
+            cache.insert(
+                server_id.to_string(),
+                GatewayServerStatus {
+                    connection_status: connection_status.to_string(),
+                    last_error: last_error.to_string(),
+                },
+            );
+        }
+    }
+
+    fn gateway_server_status(&self, server_id: &str) -> GatewayServerStatus {
+        self.gateway_status_cache
+            .lock()
+            .ok()
+            .and_then(|cache| cache.get(server_id).cloned())
+            .unwrap_or(GatewayServerStatus {
+                connection_status: "unknown".to_string(),
+                last_error: String::new(),
+            })
+    }
+
+    fn drain_gateway_events_to_vault(
+        &self,
+        gateway_event_rx: &mut tokio::sync::mpsc::UnboundedReceiver<GatewayEvent>,
+    ) -> Result<()> {
+        while let Ok(event) = gateway_event_rx.try_recv() {
+            append_vault_event_for_gateway_event(&self.vault, &event)?;
+        }
+        Ok(())
+    }
+
+    fn list_acp_agents_inner(&self) -> Result<Vec<AgentRosterEntryDto>> {
+        let mut agents = self
+            .adapters
+            .lock()
+            .map_err(|_| CoreError::Protocol("adapter registry lock poisoned".to_string()))?
+            .iter()
+            .map(|(id, adapter)| AgentRosterEntryDto {
+                id: id.clone(),
+                display_name: adapter.display_name().to_string(),
+            })
+            .collect::<Vec<_>>();
+        agents.sort_by(|left, right| left.display_name.cmp(&right.display_name));
+        Ok(agents)
+    }
+
+    fn list_acp_agent_models_inner(&self, agent_id: &str) -> Result<Vec<ModelInfoDto>> {
+        let adapters = self
+            .adapters
+            .lock()
+            .map_err(|_| CoreError::Protocol("adapter registry lock poisoned".to_string()))?;
+        let adapter = adapters
+            .get(agent_id)
+            .ok_or_else(|| CoreError::Protocol(format!("unknown ACP agent: {agent_id}")))?;
+        let models = self
+            .runtime
+            .block_on(adapter.available_models())?
+            .into_iter()
+            .map(|model| ModelInfoDto {
+                id: model.id,
+                display_name: model.display_name,
+            })
+            .collect();
+        Ok(models)
     }
 
     fn invalidate_conversation_cache(&self, id: Id) {
@@ -291,6 +404,35 @@ impl TamtriCore {
             env: Vec::new(),
         })
         .map_err(ffi_err)
+    }
+
+    pub fn register_acp_agent_with_env(
+        &self,
+        id: String,
+        display_name: String,
+        command: String,
+        args: Vec<String>,
+        env: Vec<GatewayEnvVarDto>,
+    ) -> FfiResult<()> {
+        self.register_acp_agent_spec(AgentLaunchSpec {
+            id,
+            display_name,
+            command,
+            args,
+            env: env
+                .into_iter()
+                .map(|pair| (pair.name, pair.value))
+                .collect(),
+        })
+        .map_err(ffi_err)
+    }
+
+    pub fn list_acp_agents(&self) -> FfiResult<Vec<AgentRosterEntryDto>> {
+        self.list_acp_agents_inner().map_err(ffi_err)
+    }
+
+    pub fn list_acp_agent_models(&self, agent_id: String) -> FfiResult<Vec<ModelInfoDto>> {
+        self.list_acp_agent_models_inner(&agent_id).map_err(ffi_err)
     }
 
     pub fn list_conversations(&self) -> FfiResult<Vec<ConversationSummaryDto>> {
@@ -362,6 +504,10 @@ impl TamtriCore {
         self.cancel_run_inner(&conversation_id).map_err(ffi_err)
     }
 
+    pub fn prepare_for_app_quit(&self) -> FfiResult<()> {
+        self.prepare_for_app_quit_inner().map_err(ffi_err)
+    }
+
     pub fn cancel_task(&self, conversation_id: String, task_id: String) -> FfiResult<()> {
         self.cancel_task_inner(&conversation_id, &task_id)
             .map_err(ffi_err)
@@ -373,6 +519,19 @@ impl TamtriCore {
 
     pub fn refresh_gateway_capabilities(&self) -> FfiResult<Vec<GatewayServerDto>> {
         self.refresh_gateway_capabilities_inner().map_err(ffi_err)
+    }
+
+    pub fn list_gateway_tools(&self) -> FfiResult<Vec<GatewayToolDto>> {
+        self.list_gateway_tools_inner().map_err(ffi_err)
+    }
+
+    pub fn get_gateway_settings(&self) -> FfiResult<GatewaySettingsDto> {
+        self.get_gateway_settings_inner().map_err(ffi_err)
+    }
+
+    pub fn set_gateway_default_timeout(&self, default_call_timeout_secs: u64) -> FfiResult<()> {
+        self.set_gateway_default_timeout_inner(default_call_timeout_secs)
+            .map_err(ffi_err)
     }
 
     pub fn set_gateway_credential(&self, credential_ref: String, value: String) -> FfiResult<()> {
@@ -657,6 +816,7 @@ impl TamtriCore {
             .clone()
             .unwrap_or_else(|| "default".to_string());
         let adapter = self.adapter(&harness_id)?;
+        let harness_display_name = adapter.display_name().to_string();
         let conversation_dir = self.vault.conversation_folder(id)?;
         let workdir_path = self
             .vault
@@ -705,6 +865,11 @@ impl TamtriCore {
             id,
             &Event::new(EventKind::TurnStarted, json!({ "harness_id": harness_id })),
         )?;
+        self.observer.on_event(UiEvent {
+            conversation_id: id.to_string(),
+            kind: "turn_started".to_string(),
+            payload_json: json!({ "harness_id": harness_id }).to_string(),
+        });
 
         let vault = Arc::clone(&self.vault);
         let active_runs = Arc::clone(&self.active_runs);
@@ -713,6 +878,8 @@ impl TamtriCore {
         let gateway_blocks = Arc::new(Mutex::new(Vec::<ContentBlock>::new()));
         let gateway_for_run = Arc::clone(&gateway);
         let runtime_roots = Arc::clone(&self.runtime_roots);
+        let harness_id_for_run = harness_id.clone();
+        let harness_display_for_run = harness_display_name.clone();
         self.runtime.spawn(async move {
             let gateway_vault = Arc::clone(&vault);
             let gateway_observer = Arc::clone(&observer);
@@ -731,6 +898,16 @@ impl TamtriCore {
             let run = adapter.run(ctx, TurnInput { user_message }).await;
             match run {
                 Ok(mut run) => {
+                    let _ = vault.append_event(
+                        id,
+                        &Event::new(
+                            EventKind::HarnessSpawned,
+                            json!({
+                                "harness_id": harness_id_for_run,
+                                "display_name": harness_display_for_run,
+                            }),
+                        ),
+                    );
                     if let Ok(mut runs) = active_runs.lock() {
                         runs.insert(
                             id,
@@ -741,12 +918,20 @@ impl TamtriCore {
                             },
                         );
                     }
-                    let mut reducer = TurnReducer::new(harness_id.clone());
+                    let mut reducer = TurnReducer::new(harness_id_for_run.clone());
                     while let Some(event) = run.events.recv().await {
-                        emit(&observer, id, &event);
-                        let _ = append_event_for_harness_event(&vault, id, &event);
+                        emit(&observer, id, &event, &harness_display_for_run);
+                        let _ = append_event_for_harness_event(
+                            &vault,
+                            id,
+                            &event,
+                            Some(&harness_display_for_run),
+                        );
                         let _ = reducer.apply(&event);
-                        if matches!(event, HarnessEvent::TurnEnded { .. }) {
+                        if let HarnessEvent::TurnEnded { reason } = &event {
+                            if matches!(reason, TurnEndReason::Cancelled) {
+                                break;
+                            }
                             let reduced = reducer.finish();
                             let mut message = reduced.message;
                             let snapshotter =
@@ -776,7 +961,16 @@ impl TamtriCore {
                                     }
                                 }
                             }
-                            match snapshotter.snapshot_renderable_files() {
+                            let mut extra_paths = reduced.referenced_paths.clone();
+                            extra_paths.retain(|path| {
+                                !reduced
+                                    .file_changes
+                                    .iter()
+                                    .any(|change| &change.diff.path == path)
+                            });
+                            match snapshotter
+                                .snapshot_referenced_paths(extra_paths.iter().map(String::as_str))
+                            {
                                 Ok(snapshots) => {
                                     for snapshot in snapshots {
                                         if snapshotted.insert(snapshot.attachment_path.clone()) {
@@ -800,11 +994,14 @@ impl TamtriCore {
                                     );
                                 }
                             }
-                            if !message.content.is_empty() || !gateway_blocks.lock().unwrap().is_empty()
-                            {
-                                message
-                                    .content
-                                    .extend(gateway_blocks.lock().unwrap().drain(..));
+                            let has_gateway_blocks = gateway_blocks
+                                .lock()
+                                .map(|blocks| !blocks.is_empty())
+                                .unwrap_or(false);
+                            if !message.content.is_empty() || has_gateway_blocks {
+                                if let Ok(mut blocks) = gateway_blocks.lock() {
+                                    message.content.extend(blocks.drain(..));
+                                }
                                 let _ = vault.append_message(id, &message);
                                 if let Ok(mut cache) = conversation_cache.lock() {
                                     cache.remove(&id);
@@ -819,6 +1016,13 @@ impl TamtriCore {
                             break;
                         }
                     }
+                    let _ = vault.append_event(
+                        id,
+                        &Event::new(
+                            EventKind::HarnessExited,
+                            json!({ "harness_id": harness_id_for_run }),
+                        ),
+                    );
                     if let Ok(mut runs) = active_runs.lock() {
                         runs.remove(&id);
                     }
@@ -840,6 +1044,8 @@ impl TamtriCore {
             }
             gateway_endpoint.shutdown().await;
             gateway_for_run.cancel_pending_elicitations().await;
+            gateway_for_run.disconnect_all_clients().await;
+            tokio::time::sleep(Duration::from_millis(100)).await;
             gateway_event_task.abort();
         });
         Ok(())
@@ -885,15 +1091,14 @@ impl TamtriCore {
             .ok_or(CoreError::NotFound(id))?;
         self.runtime
             .block_on(run.gateway.respond_elicitation(request_id, action.clone(), data.clone()))?;
-        let response_data = data.map(|value| sanitize_transcript_data(&value));
         run.gateway_blocks
             .lock()
             .map_err(|_| CoreError::Protocol("gateway block lock poisoned".to_string()))?
-            .push(ContentBlock::ElicitationResponse {
-                request_id: request_id.to_string(),
+            .push(elicitation_response_block(
+                request_id.to_string(),
                 action,
-                data: response_data,
-            });
+                data,
+            ));
         Ok(())
     }
 
@@ -938,37 +1143,70 @@ impl TamtriCore {
             return Err(CoreError::NotFound(id));
         }
         let request = parse_app_bridge_rpc(request_json)?;
-        let (consent, _response_rx) = self.app_bridge.begin_request(
+        let gateway = self
+            .active_runs
+            .lock()
+            .map_err(|_| CoreError::Protocol("run registry lock poisoned".to_string()))?
+            .get(&id)
+            .map(|run| Arc::clone(&run.gateway))
+            .ok_or(CoreError::NotFound(id))?;
+        match self.app_bridge.begin_request(
             id,
             server_id,
             app_id,
             template_ref,
             &request,
-        )?;
-        self.vault.append_event(
-            id,
-            &Event::new(
-                EventKind::AppBridgeConsentRequested,
-                json!({
-                    "request_id": consent.request_id,
-                    "server_id": consent.server_id,
-                    "app_id": consent.app_id,
-                    "template_ref": consent.template_ref,
-                    "action": consent.action,
-                    "summary": consent.summary,
-                    "options": consent.options,
-                }),
-            ),
-        )?;
-        self.observer.on_event(UiEvent {
-            conversation_id: id.to_string(),
-            kind: "app_bridge_consent_requested".to_string(),
-            payload_json: serde_json::to_string(&consent).unwrap_or_else(|_| "{}".to_string()),
-        });
-        Ok(AppBridgeSubmissionDto {
-            request_id: consent.request_id,
-            needs_consent: true,
-        })
+        )? {
+            AppBridgeBeginResult::AlreadyGranted(pending) => {
+                let execution = self.runtime.block_on(execute_action(
+                    gateway.as_ref(),
+                    &pending.server_id,
+                    &pending.action,
+                ));
+                let response = finish_execution(pending, execution);
+                self.observer.on_event(UiEvent {
+                    conversation_id: id.to_string(),
+                    kind: "app_bridge_resolved".to_string(),
+                    payload_json: json!({
+                        "request_id": null,
+                        "response_json": response,
+                        "auto_granted": true,
+                    })
+                    .to_string(),
+                });
+                Ok(AppBridgeSubmissionDto {
+                    request_id: String::new(),
+                    needs_consent: false,
+                })
+            }
+            AppBridgeBeginResult::NeedsConsent(consent, _response_rx) => {
+                self.vault.append_event(
+                    id,
+                    &Event::new(
+                        EventKind::AppBridgeConsentRequested,
+                        json!({
+                            "request_id": consent.request_id,
+                            "server_id": consent.server_id,
+                            "app_id": consent.app_id,
+                            "template_ref": consent.template_ref,
+                            "action": consent.action,
+                            "summary": consent.summary,
+                            "options": consent.options,
+                        }),
+                    ),
+                )?;
+                self.observer.on_event(UiEvent {
+                    conversation_id: id.to_string(),
+                    kind: "app_bridge_consent_requested".to_string(),
+                    payload_json: serde_json::to_string(&consent)
+                        .unwrap_or_else(|_| "{}".to_string()),
+                });
+                Ok(AppBridgeSubmissionDto {
+                    request_id: consent.request_id,
+                    needs_consent: true,
+                })
+            }
+        }
     }
 
     pub fn respond_app_bridge_consent_inner(
@@ -1038,8 +1276,26 @@ impl TamtriCore {
             .ok_or(CoreError::NotFound(id))?;
         self.runtime.block_on(async {
             run.gateway.cancel_pending_elicitations().await;
+            run.gateway
+                .agent_cancelled(serde_json::json!({"requestId": "user-cancel"}));
             run.control.cancel().await
         })
+    }
+
+    pub fn prepare_for_app_quit_inner(&self) -> Result<()> {
+        let runs: Vec<_> = self
+            .active_runs
+            .lock()
+            .map_err(|_| CoreError::Protocol("run registry lock poisoned".to_string()))?
+            .values()
+            .map(|run| Arc::clone(&run.gateway))
+            .collect();
+        self.runtime.block_on(async {
+            for gateway in runs {
+                gateway.cancel_pending_elicitations().await;
+            }
+        });
+        Ok(())
     }
 
     pub fn cancel_task_inner(&self, conversation_id: &str, task_id: &str) -> Result<()> {
@@ -1070,21 +1326,78 @@ impl TamtriCore {
                     &server,
                     &self.credentials,
                     cache.get(&server.id),
+                    &self.gateway_server_status(&server.id),
                 )
             })
             .collect()
     }
 
-    pub fn refresh_gateway_capabilities_inner(&self) -> Result<Vec<GatewayServerDto>> {
+    pub fn list_gateway_tools_inner(&self) -> Result<Vec<GatewayToolDto>> {
         let config = load_app_config(self.vault.root())?;
         let gateway = McpGateway::new(
             config.gateway.clone(),
             self.credentials.clone(),
             None,
         )?;
+        let tools = self
+            .runtime
+            .block_on(async { gateway.list_tools().await })?;
+        Ok(tools
+            .into_iter()
+            .map(|tool| GatewayToolDto {
+                exposed_name: tool.exposed_name,
+                server_id: tool.server_id,
+                original_name: tool.original_name,
+            })
+            .collect())
+    }
+
+    pub fn get_gateway_settings_inner(&self) -> Result<GatewaySettingsDto> {
+        let config = load_app_config(self.vault.root())?;
+        Ok(GatewaySettingsDto {
+            default_call_timeout_secs: config.gateway.default_call_timeout_secs,
+        })
+    }
+
+    pub fn set_gateway_default_timeout_inner(
+        &self,
+        default_call_timeout_secs: u64,
+    ) -> Result<()> {
+        if default_call_timeout_secs == 0 {
+            return Err(CoreError::Protocol(
+                "gateway default timeout must be greater than zero".to_string(),
+            ));
+        }
+        let mut config = load_app_config(self.vault.root())?;
+        config.gateway.default_call_timeout_secs = default_call_timeout_secs;
+        save_app_config(self.vault.root(), &config)
+    }
+
+    pub fn refresh_gateway_capabilities_inner(&self) -> Result<Vec<GatewayServerDto>> {
+        let config = load_app_config(self.vault.root())?;
+        let (gateway_event_tx, mut gateway_event_rx) = tokio::sync::mpsc::unbounded_channel();
+        let gateway = McpGateway::new(
+            config.gateway.clone(),
+            self.credentials.clone(),
+            Some(gateway_event_tx),
+        )?;
+        for server in config.gateway.servers.iter().filter(|server| server.enabled) {
+            let server_id = server.id.clone();
+            let outcome = self
+                .runtime
+                .block_on(async { gateway.check_server_connection(server).await });
+            self.drain_gateway_events_to_vault(&mut gateway_event_rx)?;
+            match outcome {
+                Ok(()) => self.record_gateway_server_status(&server_id, "connected", ""),
+                Err(err) => {
+                    self.record_gateway_server_status(&server_id, "error", &err.to_string())
+                }
+            }
+        }
         let reports = self
             .runtime
             .block_on(async { gateway.probe_server_capabilities().await })?;
+        self.drain_gateway_events_to_vault(&mut gateway_event_rx)?;
         {
             let mut cache = self
                 .gateway_capability_cache
@@ -1389,11 +1702,30 @@ impl TamtriCore {
     }
 }
 
-fn emit(observer: &Arc<dyn ConversationObserver>, conversation_id: Id, event: &HarnessEvent) {
+fn emit(
+    observer: &Arc<dyn ConversationObserver>,
+    conversation_id: Id,
+    event: &HarnessEvent,
+    harness_display_name: &str,
+) {
+    let payload_json = match event {
+        HarnessEvent::PermissionRequested { .. } => {
+            let mut value =
+                serde_json::to_value(event).unwrap_or_else(|_| serde_json::Value::Object(Default::default()));
+            if let Some(obj) = value.as_object_mut() {
+                obj.insert(
+                    "harness_display_name".to_string(),
+                    json!(harness_display_name),
+                );
+            }
+            value.to_string()
+        }
+        _ => serde_json::to_string(event).unwrap_or_else(|_| "{}".to_string()),
+    };
     observer.on_event(UiEvent {
         conversation_id: conversation_id.to_string(),
         kind: event_kind(event).to_string(),
-        payload_json: serde_json::to_string(event).unwrap_or_else(|_| "{}".to_string()),
+        payload_json,
     });
 }
 
@@ -1401,6 +1733,7 @@ fn append_event_for_harness_event(
     vault: &FilesystemVault,
     id: Id,
     event: &HarnessEvent,
+    harness_display_name: Option<&str>,
 ) -> Result<()> {
     let (kind, payload) = match event {
         HarnessEvent::ToolCallStarted {
@@ -1422,10 +1755,18 @@ fn append_event_for_harness_event(
             action,
             detail,
             options,
-        } => (
-            EventKind::PermissionRequested,
-            json!({ "request_id": request_id, "action": action, "detail": detail, "options": options }),
-        ),
+        } => {
+            let mut payload = json!({
+                "request_id": request_id,
+                "action": action,
+                "detail": detail,
+                "options": options,
+            });
+            if let Some(name) = harness_display_name {
+                payload["harness_display_name"] = json!(name);
+            }
+            (EventKind::PermissionRequested, payload)
+        }
         HarnessEvent::PermissionResolved {
             request_id,
             option_id,
@@ -1466,9 +1807,26 @@ fn append_event_for_gateway_event(
     id: Id,
     event: &GatewayEvent,
 ) -> Result<()> {
-    let (kind, payload) = match event {
+    let (kind, payload) = gateway_event_to_audit(event);
+    vault.append_event(id, &Event::new(kind, payload))
+}
+
+fn append_vault_event_for_gateway_event(
+    vault: &FilesystemVault,
+    event: &GatewayEvent,
+) -> Result<()> {
+    let (kind, payload) = gateway_event_to_audit(event);
+    vault.append_vault_event(&Event::new(kind, payload))
+}
+
+fn gateway_event_to_audit(event: &GatewayEvent) -> (EventKind, serde_json::Value) {
+    match event {
         GatewayEvent::ServerConnected { server_id } => (
             EventKind::GatewayServerConnected,
+            json!({ "server_id": server_id }),
+        ),
+        GatewayEvent::ServerDisconnected { server_id } => (
+            EventKind::GatewayServerDisconnected,
             json!({ "server_id": server_id }),
         ),
         GatewayEvent::ToolRouted {
@@ -1572,10 +1930,11 @@ fn append_event_for_gateway_event(
         ),
         GatewayEvent::TaskCompleted { state, result } => (
             EventKind::TaskCompleted,
-            json!({
-                "state": state,
-                "result": result,
-            }),
+            json!({"state": state, "result": result}),
+        ),
+        GatewayEvent::RootsListed { server_id, count } => (
+            EventKind::RootsListed,
+            json!({ "server_id": server_id, "count": count }),
         ),
         GatewayEvent::OAuthHandoffStarted {
             server_id,
@@ -1621,8 +1980,7 @@ fn append_event_for_gateway_event(
                 "target_kind": reason
             }),
         ),
-    };
-    vault.append_event(id, &Event::new(kind, payload))
+    }
 }
 
 fn sanitize_gateway_params(value: &serde_json::Value) -> serde_json::Value {
@@ -1687,6 +2045,7 @@ fn event_kind(event: &HarnessEvent) -> &'static str {
 fn gateway_event_kind(event: &GatewayEvent) -> &'static str {
     match event {
         GatewayEvent::ServerConnected { .. } => "gateway_server_connected",
+        GatewayEvent::ServerDisconnected { .. } => "gateway_server_disconnected",
         GatewayEvent::ToolRouted { .. } => "gateway_tool_routed",
         GatewayEvent::CredentialInjected { .. } => "gateway_credential_injected",
         GatewayEvent::CredentialUpdated { .. } => "gateway_credential_updated",
@@ -1700,6 +2059,7 @@ fn gateway_event_kind(event: &GatewayEvent) -> &'static str {
         GatewayEvent::TaskStarted { .. } => "task_started",
         GatewayEvent::TaskUpdated { .. } => "task_updated",
         GatewayEvent::TaskCompleted { .. } => "task_completed",
+        GatewayEvent::RootsListed { .. } => "roots_listed",
         GatewayEvent::OAuthHandoffStarted { .. } => "oauth_handoff_started",
         GatewayEvent::OAuthHandoffCompleted { .. } => "oauth_handoff_completed",
         GatewayEvent::OAuthRefreshFailed { .. } => "oauth_refresh_failed",
@@ -1721,15 +2081,15 @@ fn record_gateway_content_block(blocks: &Mutex<Vec<ContentBlock>>, event: &Gatew
             let Ok(mut blocks) = blocks.lock() else {
                 return;
             };
-            blocks.push(ContentBlock::ElicitationRequest {
-                request_id: request_id.clone(),
-                server_id: Some(server_id.clone()),
-                origin_tool_call_id: origin_tool_call_id.clone(),
-                mode: mode.clone(),
-                message: message.clone(),
-                schema: schema.clone(),
-                url: url.as_ref().map(|value| audit_safe_elicitation_url(value)),
-            });
+            blocks.push(elicitation_request_block(
+                request_id.clone(),
+                server_id.clone(),
+                origin_tool_call_id.clone(),
+                mode.clone(),
+                message.clone(),
+                schema.clone(),
+                url.clone(),
+            ));
         }
         GatewayEvent::AppReturned {
             server_id,
@@ -1758,6 +2118,7 @@ fn record_gateway_content_block(blocks: &Mutex<Vec<ContentBlock>>, event: &Gatew
                 status: state.status.clone(),
                 title: state.title.clone(),
                 result_summary: state.result.as_ref().map(summarize_task_result),
+                origin_tool_call_id: state.origin_tool_call_id.clone(),
             });
         }
         _ => {}
@@ -1790,6 +2151,7 @@ fn gateway_server_to_dto(
     server: &GatewayServerConfig,
     credentials: &MemoryCredentials,
     capability_report: Option<&ServerCapabilityReport>,
+    status: &GatewayServerStatus,
 ) -> Result<GatewayServerDto> {
     let credential_refs = server
         .credentials
@@ -1901,6 +2263,15 @@ fn gateway_server_to_dto(
         cap_tasks: capability_label(capability_report, |report| report.tasks),
         cap_roots: capability_label(capability_report, |report| report.roots),
         cap_sampling: capability_label(capability_report, |report| report.sampling),
+        connection_status: if !server.enabled {
+            "disabled".to_string()
+        } else if status.connection_status == "unknown" && capability_report.is_some() {
+            "connected".to_string()
+        } else {
+            status.connection_status.clone()
+        },
+        last_error: status.last_error.clone(),
+        timeout_secs: server.timeout_secs,
     })
 }
 
@@ -1993,7 +2364,7 @@ fn gateway_server_from_dto(
         enabled: server.enabled,
         scope,
         transport,
-        timeout_secs: existing.and_then(|existing| existing.timeout_secs),
+        timeout_secs: server.timeout_secs.or_else(|| existing.and_then(|existing| existing.timeout_secs)),
         credentials: existing
             .map(|existing| existing.credentials.clone())
             .unwrap_or_default(),
@@ -2177,6 +2548,7 @@ fn conversation_to_dto(conversation: &Conversation) -> Result<ConversationDto> {
         title: conversation.title.clone(),
         active_harness_id: conversation.active_harness_id.clone(),
         model_id: conversation.model_id.clone(),
+        forked_from: conversation.forked_from.map(|id| id.to_string()),
         transcript_json,
     })
 }

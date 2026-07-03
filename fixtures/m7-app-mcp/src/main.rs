@@ -3,6 +3,7 @@ use std::io::{self, BufRead, Write};
 use serde_json::{Value, json};
 
 const TEMPLATE_URI: &str = "ui://m7-app/demo";
+const BAD_ORIGIN_TEMPLATE_URI: &str = "ui://m7-app/bad-origin";
 const MCP_APP_MIME: &str = "text/html;profile=mcp-app";
 
 /// MCP fixture that declares an App template and returns it through a gateway tool.
@@ -45,16 +46,28 @@ fn main() {
             Some("tools/list") => response(
                 &message,
                 json!({
-                    "tools": [{
-                        "name": "show_app",
-                        "description": "Returns a declared MCP App template",
-                        "inputSchema": {"type": "object"},
-                        "_meta": {
-                            "ui": {
-                                "resourceUri": TEMPLATE_URI
+                    "tools": [
+                        {
+                            "name": "show_app",
+                            "description": "Returns a declared MCP App template",
+                            "inputSchema": {"type": "object"},
+                            "_meta": {
+                                "ui": {
+                                    "resourceUri": TEMPLATE_URI
+                                }
+                            }
+                        },
+                        {
+                            "name": "show_bad_origin_app",
+                            "description": "Returns an MCP App template with an invalid declared origin",
+                            "inputSchema": {"type": "object"},
+                            "_meta": {
+                                "ui": {
+                                    "resourceUri": BAD_ORIGIN_TEMPLATE_URI
+                                }
                             }
                         }
-                    }]
+                    ]
                 }),
             ),
             Some("tools/call") => {
@@ -74,6 +87,18 @@ fn main() {
                             }
                         }),
                     )
+                } else if tool_name == "show_bad_origin_app" {
+                    response(
+                        &message,
+                        json!({
+                            "content": [{"type": "text", "text": "Bad origin app"}],
+                            "isError": false,
+                            "structuredContent": {
+                                "title": "Bad Origin App",
+                                "value": 0
+                            }
+                        }),
+                    )
                 } else {
                     response(
                         &message,
@@ -87,12 +112,20 @@ fn main() {
             Some("resources/list") => response(
                 &message,
                 json!({
-                    "resources": [{
-                        "uri": TEMPLATE_URI,
-                        "name": "demo_app",
-                        "description": "Declared MCP App template",
-                        "mimeType": MCP_APP_MIME
-                    }]
+                    "resources": [
+                        {
+                            "uri": TEMPLATE_URI,
+                            "name": "demo_app",
+                            "description": "Declared MCP App template",
+                            "mimeType": MCP_APP_MIME
+                        },
+                        {
+                            "uri": BAD_ORIGIN_TEMPLATE_URI,
+                            "name": "bad_origin_app",
+                            "description": "MCP App template with invalid declared origin",
+                            "mimeType": MCP_APP_MIME
+                        }
+                    ]
                 }),
             ),
             Some("resources/read") => {
@@ -102,6 +135,8 @@ fn main() {
                     .unwrap_or_default();
                 if uri == TEMPLATE_URI {
                     response(&message, template_contents())
+                } else if uri == BAD_ORIGIN_TEMPLATE_URI {
+                    response(&message, bad_origin_template_contents())
                 } else {
                     error_response(&message, -32002, format!("unknown resource: {uri}"))
                 }
@@ -133,6 +168,23 @@ fn template_contents() -> Value {
                 "ui": {
                     "csp": {
                         "connectDomains": ["https://api.example.com"]
+                    }
+                }
+            }
+        }]
+    })
+}
+
+fn bad_origin_template_contents() -> Value {
+    json!({
+        "contents": [{
+            "uri": BAD_ORIGIN_TEMPLATE_URI,
+            "mimeType": MCP_APP_MIME,
+            "text": "<!DOCTYPE html><html><body><h1>Bad Origin App</h1></body></html>",
+            "_meta": {
+                "ui": {
+                    "csp": {
+                        "connectDomains": ["https://bad origin"]
                     }
                 }
             }

@@ -1,6 +1,46 @@
 import Foundation
 import SwiftUI
 
+enum ElicitationCardKind: Equatable {
+    case urlHandoff
+    case secretBlocked
+    case unsupportedSchema
+    case form
+}
+
+enum ElicitationCardRouter {
+    static func cardKind(mode: String?, schema: JSONValue?) -> ElicitationCardKind {
+        if mode == "url" {
+            return .urlHandoff
+        }
+        if ElicitationSchemaPolicy.schemaLooksSecret(schema) {
+            return .secretBlocked
+        }
+        if !ElicitationSchemaPolicy.schemaIsRenderable(schema) {
+            return .unsupportedSchema
+        }
+        return .form
+    }
+}
+
+struct ElicitationFormPresentation: Equatable {
+    let cardAccessibilityLabel: String
+    let fieldAccessibilityLabels: [String]
+    let submitUsesDefaultKeyboardShortcut: Bool
+}
+
+enum ElicitationFormPresentationBuilder {
+    static let cardAccessibilityLabel = "Elicitation requested"
+
+    static func build(fields: [ElicitationSchemaField]) -> ElicitationFormPresentation {
+        ElicitationFormPresentation(
+            cardAccessibilityLabel: cardAccessibilityLabel,
+            fieldAccessibilityLabels: fields.map(\.title),
+            submitUsesDefaultKeyboardShortcut: true
+        )
+    }
+}
+
 enum ElicitationSchemaPolicy {
     static func textLooksSecret(_ text: String) -> Bool {
         let normalized = text.lowercased()
@@ -165,9 +205,31 @@ enum ElicitationSchemaFormBuilder {
             case "boolean":
                 continue
             case "integer", "number":
-                let raw = values[field.id, default: ""]
+                let raw = values[field.id, default: ""].trimmingCharacters(in: .whitespacesAndNewlines)
                 if raw.isEmpty, field.required {
                     return nil
+                }
+                if !raw.isEmpty {
+                    if field.type == "integer" {
+                        guard let number = Int(raw) else {
+                            return ([:], "\(field.title) must be a whole number.")
+                        }
+                        if let minimum = field.minimum, Double(number) < minimum {
+                            return ([:], "\(field.title) must be at least \(formatBound(minimum)).")
+                        }
+                        if let maximum = field.maximum, Double(number) > maximum {
+                            return ([:], "\(field.title) must be at most \(formatBound(maximum)).")
+                        }
+                    } else if let number = Double(raw) {
+                        if let minimum = field.minimum, number < minimum {
+                            return ([:], "\(field.title) must be at least \(formatBound(minimum)).")
+                        }
+                        if let maximum = field.maximum, number > maximum {
+                            return ([:], "\(field.title) must be at most \(formatBound(maximum)).")
+                        }
+                    } else {
+                        return ([:], "\(field.title) must be a number.")
+                    }
                 }
             case "array":
                 let raw = values[field.id, default: ""]
@@ -182,6 +244,9 @@ enum ElicitationSchemaFormBuilder {
                 }
                 if let minLength = field.minLength, raw.count < minLength {
                     return ([:], "\(field.title) must be at least \(minLength) characters.")
+                }
+                if let maxLength = field.maxLength, raw.count > maxLength {
+                    return ([:], "\(field.title) must be at most \(maxLength) characters.")
                 }
             }
         }
@@ -225,6 +290,13 @@ enum ElicitationSchemaFormBuilder {
             }
         }
         return (payload, nil)
+    }
+
+    private static func formatBound(_ value: Double) -> String {
+        if value.rounded() == value {
+            return String(Int(value))
+        }
+        return String(value)
     }
 }
 

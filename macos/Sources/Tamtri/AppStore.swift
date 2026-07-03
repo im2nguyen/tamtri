@@ -1,5 +1,4 @@
 import AppKit
-import AppKit
 import Foundation
 
 @MainActor
@@ -12,16 +11,23 @@ final class AppStore: ObservableObject {
     @Published var workdirFiles: [WorkdirFileRecord] = []
     @Published var selectedWorkdirFile: WorkdirFileRecord?
     @Published var workdirPreview: WorkdirFilePreview?
+    @Published var transcriptArtifacts: [TranscriptArtifactRecord] = []
+    @Published var selectedTranscriptArtifact: TranscriptArtifactRecord?
+    @Published var attachmentPreview: AttachmentFilePreview?
     @Published var showFilesPanel = false
     @Published var showNewConversation = false
     @Published var showSettings = false
     @Published var showForkConversation = false
     @Published var gatewayServers: [GatewayServerRecord] = []
+    @Published var gatewayTools: [GatewayToolRecord] = []
+    @Published var defaultCallTimeoutSecs: UInt64 = 300
+    @Published var harnessAgents: [HarnessAgentRecord] = []
     @Published var errorMessage: String?
     @Published var isLoadingConversation = false
     @Published var bridgeDelivery: BridgeDelivery?
     @Published var liveTaskStates: [String: LiveTaskState] = [:]
     @Published var showConversationRoots = false
+    @Published private(set) var isRunActive = false
 
     private let core: CoreClient
     private var conversationCache: [String: ConversationRecord] = [:]
@@ -49,10 +55,22 @@ final class AppStore: ObservableObject {
             for await event in core.events {
                 await MainActor.run {
                     self.liveEvents.append(event)
+                    if event.kind == "turn_started", event.conversationId == self.selectedConversationId {
+                        self.isRunActive = true
+                    }
                     if event.kind == "turn_ended" || event.kind == "message_committed" {
+                        self.clearLiveEvents(for: event.conversationId)
                         self.conversationCache.removeValue(forKey: event.conversationId)
                         let preferNewest = event.kind == "turn_ended"
                         Task { await self.refreshWorkdirFiles(preferNewest: preferNewest, force: preferNewest) }
+                        if event.conversationId == self.selectedConversationId {
+                            if event.kind == "message_committed" || event.kind == "turn_ended" {
+                                Task { await self.reloadSelectedConversation() }
+                            }
+                        }
+                    }
+                    if event.kind == "turn_ended", event.conversationId == self.selectedConversationId {
+                        self.isRunActive = false
                     }
                     if event.kind == "gateway_credential_updated" {
                         Task { @MainActor in
@@ -134,6 +152,7 @@ final class AppStore: ObservableObject {
             return
         }
 
+        clearLiveEvents()
         selectedConversationId = summary.id
 
         if let cached = conversationCache[summary.id] {
@@ -169,14 +188,39 @@ final class AppStore: ObservableObject {
         }
     }
 
+    private func clearLiveEvents(for conversationId: String? = nil) {
+        if let conversationId {
+            liveEvents.removeAll { $0.conversationId == conversationId }
+        } else {
+            liveEvents.removeAll()
+        }
+        liveTaskStates = [:]
+    }
+
     private func applySelection(_ record: ConversationRecord) {
         selectedWorkdirFile = nil
         workdirPreview = nil
+        selectedTranscriptArtifact = nil
+        attachmentPreview = nil
+        transcriptArtifacts = TranscriptArtifacts.extract(from: record.parsedMessages)
         selectedConversation = record
         if selectedConversationId != record.id {
             selectedConversationId = record.id
         }
         Task { await refreshWorkdirFiles() }
+    }
+
+    private func reloadSelectedConversation() async {
+        guard let id = selectedConversationId else { return }
+        do {
+            let record = try await core.loadConversation(id: id)
+            conversationCache[id] = record
+            guard selectedConversationId == id else { return }
+            selectedConversation = record
+            transcriptArtifacts = TranscriptArtifacts.extract(from: record.parsedMessages)
+        } catch {
+            errorMessage = error.localizedDescription
+        }
     }
 
     private func cacheConversation(_ record: ConversationRecord) {
@@ -217,12 +261,25 @@ final class AppStore: ObservableObject {
         let text = composerText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
         composerText = ""
+        isRunActive = true
         Task {
             do {
                 let roots = try await listRoots(conversationId: conversation.id)
                 let resolved = try RootBookmarkAccess.beginAccess(conversationId: conversation.id, roots: roots)
                 try await core.syncRuntimeRoots(conversationId: conversation.id, roots: resolved)
                 try await core.sendMessage(conversationId: conversation.id, text: text)
+            } catch {
+                isRunActive = false
+                errorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    func cancelRun() {
+        guard let conversation = selectedConversation else { return }
+        Task {
+            do {
+                try await core.cancelRun(conversationId: conversation.id)
             } catch {
                 errorMessage = error.localizedDescription
             }
@@ -258,8 +315,12 @@ final class AppStore: ObservableObject {
             workdirFiles = []
             selectedWorkdirFile = nil
             workdirPreview = nil
+            transcriptArtifacts = []
+            selectedTranscriptArtifact = nil
+            attachmentPreview = nil
             return
         }
+        transcriptArtifacts = TranscriptArtifacts.extract(from: conversation.parsedMessages)
         guard showFilesPanel || force else {
             return
         }
@@ -284,8 +345,63 @@ final class AppStore: ObservableObject {
 
     func selectWorkdirFile(_ file: WorkdirFileRecord) async {
         selectedWorkdirFile = file
+        selectedTranscriptArtifact = nil
+        attachmentPreview = nil
         showFilesPanel = true
         await loadWorkdirPreview(for: file)
+    }
+
+    func selectTranscriptArtifact(_ artifact: TranscriptArtifactRecord) async {
+        selectedTranscriptArtifact = artifact
+        selectedWorkdirFile = nil
+        workdirPreview = nil
+        showFilesPanel = true
+        await loadAttachmentPreview(for: artifact)
+    }
+
+    func loadAttachmentPreview(for artifact: TranscriptArtifactRecord) async {
+        guard let conversation = selectedConversation else { return }
+        do {
+            let data = try await core.readAttachmentVerified(
+                conversationId: conversation.id,
+                path: artifact.path,
+                size: artifact.size,
+                sha256: artifact.sha256
+            )
+            if artifactIsImageMime(artifact.mimeType) {
+                attachmentPreview = AttachmentFilePreview(
+                    path: artifact.path,
+                    mimeType: artifact.mimeType,
+                    text: nil,
+                    imageData: data,
+                    error: nil
+                )
+            } else if artifactIsTextLikeMime(artifact.mimeType), let text = String(data: data, encoding: .utf8) {
+                attachmentPreview = AttachmentFilePreview(
+                    path: artifact.path,
+                    mimeType: artifact.mimeType,
+                    text: text,
+                    imageData: nil,
+                    error: nil
+                )
+            } else {
+                attachmentPreview = AttachmentFilePreview(
+                    path: artifact.path,
+                    mimeType: artifact.mimeType,
+                    text: nil,
+                    imageData: nil,
+                    error: "No in-app preview for this file type."
+                )
+            }
+        } catch {
+            attachmentPreview = AttachmentFilePreview(
+                path: artifact.path,
+                mimeType: artifact.mimeType,
+                text: nil,
+                imageData: nil,
+                error: error.localizedDescription
+            )
+        }
     }
 
     func loadWorkdirPreview(for file: WorkdirFileRecord) async {
@@ -354,6 +470,16 @@ final class AppStore: ObservableObject {
                 errorMessage = error.localizedDescription
             }
         }
+    }
+
+    func revealTranscriptArtifact(_ artifact: TranscriptArtifactRecord) {
+        guard let conversation = selectedConversation else { return }
+        revealAttachment(
+            conversationId: conversation.id,
+            path: artifact.path,
+            size: artifact.size,
+            sha256: artifact.sha256
+        )
     }
 
     func revealAttachment(conversationId: String, path: String, size: UInt64, sha256: String) {
@@ -463,6 +589,10 @@ final class AppStore: ObservableObject {
         try await core.listRoots(conversationId: conversationId)
     }
 
+    func presentConversationRoots() {
+        showConversationRoots = true
+    }
+
     func attachRoot(conversationId: String, name: String, uri: String, kind: String, scope: String) async throws -> RootRecord {
         try await core.attachRoot(conversationId: conversationId, name: name, uri: uri, kind: kind, scope: scope)
     }
@@ -487,16 +617,43 @@ final class AppStore: ObservableObject {
         }
     }
 
-    func refreshGatewayServers() {
-        Task {
-            await reloadGatewayServers()
-        }
+    func refreshGatewayServers() async {
+        await reloadGatewayServers()
     }
 
     func refreshGatewayCapabilities() {
         Task {
             do {
                 gatewayServers = try await core.refreshGatewayCapabilities()
+                gatewayTools = try await core.listGatewayTools()
+            } catch {
+                errorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    func refreshHarnessAgents() async {
+        do {
+            harnessAgents = try await core.listAcpAgents()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    func listAgentModels(agentId: String) async -> [ModelInfoRecord] {
+        do {
+            return try await core.listAcpAgentModels(agentId: agentId)
+        } catch {
+            errorMessage = error.localizedDescription
+            return []
+        }
+    }
+
+    func saveGatewayDefaultTimeout(_ seconds: UInt64) {
+        Task {
+            do {
+                try await core.setGatewayDefaultTimeout(seconds)
+                defaultCallTimeoutSecs = seconds
             } catch {
                 errorMessage = error.localizedDescription
             }
@@ -506,8 +663,19 @@ final class AppStore: ObservableObject {
     private func reloadGatewayServers() async {
         do {
             gatewayServers = try await core.listGatewayServers()
-            for server in gatewayServers where !server.oauthTokenRef.isEmpty {
-                if let stored = OAuthTokenStore.load(for: server.oauthTokenRef) {
+            gatewayTools = try await core.listGatewayTools()
+            defaultCallTimeoutSecs = try await core.getGatewaySettings()
+            for server in gatewayServers {
+                for credentialRef in server.credentialRefs {
+                    if let stored = KeychainCredentialStore.load(for: credentialRef) {
+                        try await core.setGatewayCredential(
+                            credentialRef: credentialRef,
+                            value: stored
+                        )
+                    }
+                }
+                if !server.oauthTokenRef.isEmpty,
+                   let stored = OAuthTokenStore.load(for: server.oauthTokenRef) {
                     try await core.setGatewayCredential(
                         credentialRef: server.oauthTokenRef,
                         value: stored
@@ -541,11 +709,15 @@ final class AppStore: ObservableObject {
         Task {
             do {
                 try await core.setGatewayCredential(credentialRef: credentialRef, value: value)
-                refreshGatewayServers()
+                await refreshGatewayServers()
             } catch {
                 errorMessage = error.localizedDescription
             }
         }
+    }
+
+    func prepareForAppQuitSync() {
+        try? core.prepareForAppQuitSync()
     }
 
     private var oauthListener: OAuthLoopbackListener?
@@ -562,7 +734,7 @@ final class AppStore: ObservableObject {
                         do {
                             _ = try await self.core.completeOAuthCallback(callbackURL: callbackURL)
                             self.oauthListener = nil
-                            self.refreshGatewayServers()
+                            await self.refreshGatewayServers()
                         } catch {
                             self.errorMessage = error.localizedDescription
                         }
