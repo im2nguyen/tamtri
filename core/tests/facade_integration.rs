@@ -38,13 +38,23 @@ fn facade_run_commits_exactly_one_assistant_message() {
 
     core.send_message(conversation.id.clone(), "hello".to_string())
         .expect("send");
-    std::thread::sleep(Duration::from_millis(200));
-    core.respond_permission(
-        conversation.id.clone(),
-        "perm-1".to_string(),
-        "allow_once".to_string(),
-    )
-    .expect("permission");
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        if core
+            .respond_permission(
+                conversation.id.clone(),
+                "perm-1".to_string(),
+                "allow_once".to_string(),
+            )
+            .is_ok()
+        {
+            break;
+        }
+        if std::time::Instant::now() >= deadline {
+            panic!("permission: run never became ready for consent");
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
     std::thread::sleep(Duration::from_millis(500));
 
     let loaded = core.load_conversation(conversation.id).expect("load");

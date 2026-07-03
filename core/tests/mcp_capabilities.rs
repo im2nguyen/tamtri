@@ -64,6 +64,7 @@ async fn rc_extension_capability_gate() {
     assert!(!tasks_available(&caps, TamtriFeatureSupport::milestone_7_pr1()));
     assert!(apps_available(&caps, TamtriFeatureSupport::milestone_7_pr2()));
     assert!(!tasks_available(&caps, TamtriFeatureSupport::milestone_7_pr2()));
+    assert!(tasks_available(&caps, TamtriFeatureSupport::milestone_7_pr4()));
 
     let report = report_from_initialize(
         "rc",
