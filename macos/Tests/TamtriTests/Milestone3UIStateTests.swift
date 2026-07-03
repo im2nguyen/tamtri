@@ -26,12 +26,33 @@ final class Milestone3UIStateTests: XCTestCase {
         """
         let presentation = PermissionCardPresentationBuilder.build(payloadJSON: payload)
 
+        XCTAssertEqual(presentation?.requestId, "perm-1")
         XCTAssertEqual(presentation?.harnessDisplayName, "Mock ACP")
-        XCTAssertEqual(presentation?.diffPath, "report.html")
-        XCTAssertEqual(presentation?.diffNewText, "<h1>ok</h1>")
-        XCTAssertEqual(presentation?.allowOptionLabels, ["Allow once"])
-        XCTAssertEqual(presentation?.rejectOptionLabels, ["Deny"])
+        XCTAssertEqual(presentation?.diff?.path, "report.html")
+        XCTAssertEqual(presentation?.diff?.newText, "<h1>ok</h1>")
+        XCTAssertEqual(presentation?.allowOptions.map(\.label), ["Allow once"])
+        XCTAssertEqual(presentation?.rejectOptions.map(\.label), ["Deny"])
         XCTAssertEqual(presentation?.accessibilityLabel, "Permission requested")
+    }
+
+    func testPermissionCardIncludesConversationScopeOption() {
+        let payload = """
+        {
+          "request_id": "perm-2",
+          "action": "execute",
+          "detail": {"type": "command", "command": "npm test"},
+          "options": [
+            {"id": "allow_once", "label": "Allow once"},
+            {"id": "allow_for_conversation", "label": "Allow for this conversation"},
+            {"id": "deny", "label": "Deny"}
+          ]
+        }
+        """
+        let presentation = PermissionCardPresentationBuilder.build(payloadJSON: payload)
+
+        XCTAssertEqual(presentation?.allowOptions.map(\.id), ["allow_once", "allow_for_conversation"])
+        XCTAssertEqual(presentation?.allowOptions.map(\.label), ["Allow once", "Allow for this conversation"])
+        XCTAssertEqual(presentation?.rejectOptions.map(\.id), ["deny"])
     }
 
     func testPermissionCardFromCommittedPayloadSnapshot() throws {
@@ -51,9 +72,10 @@ final class Milestone3UIStateTests: XCTestCase {
         let block = try JSONDecoder().decode(TranscriptContentBlock.self, from: Data(json.utf8))
         let presentation = PermissionCardPresentationBuilder.fromCommittedPermissionBlock(block)
 
+        XCTAssertEqual(presentation?.requestId, "perm-1")
         XCTAssertEqual(presentation?.summary, "Action: edit")
-        XCTAssertEqual(presentation?.allowOptionLabels, ["Allow once"])
-        XCTAssertTrue(presentation?.rejectOptionLabels.isEmpty ?? false)
+        XCTAssertEqual(presentation?.allowOptions.map(\.label), ["Allow once"])
+        XCTAssertTrue(presentation?.rejectOptions.isEmpty ?? false)
     }
 
     func testThinkingDisclosureFromCommittedPayloadSnapshot() throws {
@@ -113,7 +135,7 @@ final class Milestone3UIStateTests: XCTestCase {
         let presentation = ToolCardPresentationBuilder.fromCommittedResultBlock(block)
 
         XCTAssertEqual(presentation?.title, "Tool result")
-        XCTAssertEqual(presentation?.diffPath, "report.html")
+        XCTAssertEqual(presentation?.diff?.path, "report.html")
         XCTAssertEqual(presentation?.subtitle, "modified • report.html")
     }
 

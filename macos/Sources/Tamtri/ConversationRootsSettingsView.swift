@@ -180,5 +180,18 @@ private struct RootRow: View {
         }
         .padding(10)
         .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 8))
+        .focusable()
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(RootRowViewModel.accessibilityLabel(
+            rootName: root.name,
+            bookmarkMissing: root.bookmarkMissing
+        ))
+        .accessibilityAction(named: "Remove root") {
+            onRemove()
+        }
+        .accessibilityAction(named: "Re-pick Folder") {
+            guard RootRowViewModel.showsRepickButton(bookmarkMissing: root.bookmarkMissing) else { return }
+            onRepick()
+        }
     }
 }

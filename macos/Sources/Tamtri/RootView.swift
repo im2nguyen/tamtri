@@ -281,11 +281,9 @@ struct EventRow: View {
         case "elicitation_requested":
             ElicitationCard(event: event)
         case "thought_delta":
-            DisclosureGroup("Thinking") {
-                Text(EventPayload.text(from: event.payloadJSON))
-                    .textSelection(.enabled)
+            if let presentation = ThinkingDisclosurePresentationBuilder.fromLivePayloadJSON(event.payloadJSON) {
+                ThinkingDisclosureView(presentation: presentation)
             }
-            .padding(.vertical, 4)
         case "tool_call_started", "tool_call_progress", "file_changed":
             ToolCard(event: event)
         case "text_delta":
@@ -392,29 +390,18 @@ struct ContentBlockView: View {
             Text(block.text ?? "")
                 .textSelection(.enabled)
         case "thinking":
-            DisclosureGroup("Thinking", isExpanded: .constant(false)) {
-                Text(block.text ?? "")
-                    .textSelection(.enabled)
+            if let presentation = ThinkingDisclosurePresentationBuilder.fromCommittedBlock(block) {
+                ThinkingDisclosureView(presentation: presentation)
             }
         case "tool_call":
-            CompactCard(title: block.name ?? "Tool call", systemImage: "wrench.and.screwdriver") {
-                if !block.inputSummary.isEmpty {
-                    Text(block.inputSummary)
-                        .font(.body.monospaced())
-                        .textSelection(.enabled)
-                }
+            if let presentation = ToolCardPresentationBuilder.fromCommittedCallBlock(block) {
+                ToolCardView(presentation: presentation)
             }
         case "tool_result":
-            CompactCard(title: "Tool result", systemImage: "checkmark.circle") {
-                if block.toolDiffs.isEmpty {
-                    Text(block.outputSummary)
-                        .font(.body.monospaced())
-                        .textSelection(.enabled)
-                } else {
-                    ForEach(Array(block.toolDiffs.enumerated()), id: \.offset) { _, diff in
-                        FileDiffView(diff: diff)
-                    }
-                }
+            if let permission = PermissionCardPresentationBuilder.fromCommittedPermissionBlock(block) {
+                PermissionCardView(presentation: permission)
+            } else if let presentation = ToolCardPresentationBuilder.fromCommittedResultBlock(block) {
+                ToolCardView(presentation: presentation)
             }
         case "elicitation_request":
             ElicitationHistoryCard(block: block)
@@ -625,10 +612,15 @@ struct TaskLiveCard: View {
         }
         .padding(10)
         .background(.quaternary, in: RoundedRectangle(cornerRadius: 8))
+        .focusable()
         .accessibilityElement(children: .combine)
         .accessibilityLabel("Task \(taskTitle)")
         .accessibilityValue(accessibilityStatus)
         .accessibilityAddTraits(.updatesFrequently)
+        .accessibilityAction(named: "Cancel task") {
+            guard TaskLiveCardViewModel.showsCancelButton(for: state) else { return }
+            store.cancelTask(conversationId: conversationId, taskId: state.taskId)
+        }
         .onAppear {
             announceAccessibilityStatusIfNeeded()
         }
@@ -811,16 +803,19 @@ struct ArtifactCard: View {
 
     @ViewBuilder
     private func preview(for content: String) -> some View {
-        switch block.mimeType {
-        case "text/html", "image/svg+xml":
+        if artifactShouldUseWebViewPreview(
+            mimeType: block.mimeType,
+            integrityFailed: loadError != nil,
+            hasVerifiedContent: true
+        ) {
             SandboxedHTMLView(html: content, onBlockedNavigation: logBlockedNavigation)
                 .frame(minHeight: 260)
                 .accessibilityHidden(true)
-        case "text/csv", "text/tab-separated-values":
+        } else if block.mimeType == "text/csv" || block.mimeType == "text/tab-separated-values" {
             CSVPreview(text: content, separator: block.mimeType == "text/tab-separated-values" ? "\t" : ",")
-        case "text/markdown":
+        } else if block.mimeType == "text/markdown" {
             MarkdownPreview(content: content)
-        default:
+        } else {
             Text(content)
                 .font(.body.monospaced())
                 .lineLimit(artifactPlainTextPreviewLineLimit)
@@ -1188,6 +1183,7 @@ struct SandboxedHTMLView: NSViewRepresentable {
 struct CSVPreview: View {
     let text: String
     let separator: Character
+    var stylesHeaderRow = true
 
     private var rows: [[String]] {
         csvPreviewRows(text: text, separator: separator)
@@ -1195,11 +1191,11 @@ struct CSVPreview: View {
 
     var body: some View {
         Grid(alignment: .leading, horizontalSpacing: 10, verticalSpacing: 6) {
-            ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
+            ForEach(Array(rows.enumerated()), id: \.offset) { rowIndex, row in
                 GridRow {
                     ForEach(Array(row.enumerated()), id: \.offset) { _, cell in
                         Text(cell)
-                            .font(.caption.monospaced())
+                            .font(rowIndex == 0 && stylesHeaderRow ? .caption.bold().monospaced() : .caption.monospaced())
                             .lineLimit(2)
                     }
                 }
@@ -1212,25 +1208,14 @@ struct CSVPreview: View {
 
 struct ToolCard: View {
     let event: CoreEvent
-    private var summary: ToolSummary {
-        ToolSummary(event: event)
-    }
 
     var body: some View {
-        CompactCard(title: summary.title, systemImage: "wrench.and.screwdriver") {
-            if !summary.subtitle.isEmpty {
-                Text(summary.subtitle)
-                    .foregroundStyle(.secondary)
-            }
-            if let diff = summary.diff {
-                FileDiffView(diff: diff)
-            } else if !summary.detail.isEmpty {
-                Text(summary.detail)
-                    .font(.body.monospaced())
-                    .textSelection(.enabled)
-            }
-        }
-        .accessibilityLabel("Tool event")
+        ToolCardView(
+            presentation: ToolCardPresentationBuilder.fromLiveEvent(
+                kind: event.kind,
+                payloadJSON: event.payloadJSON
+            )
+        )
     }
 }
 
@@ -1253,97 +1238,18 @@ struct CompactCard<Content: View>: View {
 struct PermissionCard: View {
     @EnvironmentObject private var store: AppStore
     let event: CoreEvent
-    private var request: PermissionPayload? {
-        try? JSONDecoder().decode(PermissionPayload.self, from: Data(event.payloadJSON.utf8))
-    }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Label("Permission requested", systemImage: "hand.raised")
-                .font(.headline)
-            if let request {
-                if let harnessName = request.harnessDisplayName, !harnessName.isEmpty {
-                    Text("From \(harnessName)")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                }
-                if let command = request.detail?.command, !command.isEmpty {
-                    Text(command)
-                        .font(.body.monospaced())
-                        .textSelection(.enabled)
-                } else if let diff = request.detail?.diff {
-                    PermissionDiffView(diff: diff)
-                } else if !request.summary.isEmpty {
-                    Text(request.summary)
-                        .textSelection(.enabled)
-                }
+        if let presentation = PermissionCardPresentationBuilder.build(payloadJSON: event.payloadJSON) {
+            PermissionCardView(presentation: presentation) { optionId in
+                store.respondPermission(requestId: presentation.requestId, optionId: optionId)
             }
-            HStack {
-                if let request {
-                    ForEach(request.rejectOptions) { option in
-                        Button(option.label, role: .destructive) {
-                            store.respondPermission(requestId: request.requestId, optionId: option.id)
-                        }
-                        .buttonStyle(.borderedProminent)
-                    }
-                    ForEach(request.allowOptions) { option in
-                        Button(option.label) {
-                            store.respondPermission(requestId: request.requestId, optionId: option.id)
-                        }
-                        .buttonStyle(.bordered)
-                    }
-                    .keyboardShortcut(.defaultAction)
-                } else {
-                    Text("Unable to parse permission request")
-                        .foregroundStyle(.secondary)
-                }
-            }
+        } else {
+            Text("Unable to parse permission request")
+                .foregroundStyle(.secondary)
+                .padding(10)
+                .background(.yellow.opacity(0.18), in: RoundedRectangle(cornerRadius: 8))
         }
-        .padding(10)
-        .background(.yellow.opacity(0.18), in: RoundedRectangle(cornerRadius: 8))
-        .accessibilityLabel("Permission requested")
-    }
-}
-
-private struct FileDiffView: View {
-    let diff: DiffPayload
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            if let path = diff.path, !path.isEmpty {
-                Text(path)
-                    .font(.subheadline.bold())
-            }
-            if let change = diff.change, !change.isEmpty {
-                Text(change.capitalized)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-            if let oldText = diff.oldText, !oldText.isEmpty {
-                Text("Before")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                Text(oldText)
-                    .font(.body.monospaced())
-                    .textSelection(.enabled)
-            }
-            if let newText = diff.newText, !newText.isEmpty {
-                Text("After")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                Text(newText)
-                    .font(.body.monospaced())
-                    .textSelection(.enabled)
-            }
-        }
-    }
-}
-
-private struct PermissionDiffView: View {
-    let diff: DiffPayload
-
-    var body: some View {
-        FileDiffView(diff: diff)
     }
 }
 
@@ -1549,62 +1455,6 @@ private struct ElicitationPayload: Decodable {
     }
 }
 
-private struct PermissionPayload: Decodable {
-    let requestId: String
-    let action: String
-    let options: [PermissionOptionPayload]
-    let detail: PermissionDetailPayload?
-    let harnessDisplayName: String?
-
-    enum CodingKeys: String, CodingKey {
-        case requestId = "request_id"
-        case action
-        case options
-        case detail
-        case harnessDisplayName = "harness_display_name"
-    }
-
-    var summary: String {
-        if let detailSummary = detail?.summary, !detailSummary.isEmpty {
-            return detailSummary
-        }
-        return action.isEmpty ? "The agent is asking for permission." : "Action: \(action)"
-    }
-
-    var rejectOptions: [PermissionOptionPayload] {
-        options.filter { $0.isReject }
-    }
-
-    var allowOptions: [PermissionOptionPayload] {
-        options.filter { !$0.isReject }
-    }
-}
-
-private struct PermissionDetailPayload: Decodable {
-    let type: String?
-    let command: String?
-    let diff: DiffPayload?
-
-    var summary: String {
-        if let command {
-            return command
-        }
-        if let diff {
-            return diff.summary
-        }
-        return type ?? ""
-    }
-}
-
-private struct PermissionOptionPayload: Decodable, Identifiable {
-    let id: String
-    let label: String
-
-    var isReject: Bool {
-        id.localizedCaseInsensitiveContains("deny") || id.localizedCaseInsensitiveContains("reject")
-    }
-}
-
 private struct EventPayload: Decodable {
     let text: String?
 
@@ -1614,30 +1464,6 @@ private struct EventPayload: Decodable {
 
     static func string(from json: String, key: String) -> String? {
         JSONValue.from(json: json)?.string(at: key)
-    }
-}
-
-private struct ToolSummary {
-    let title: String
-    let subtitle: String
-    let detail: String
-    let diff: DiffPayload?
-
-    init(event: CoreEvent) {
-        let json = JSONValue.from(json: event.payloadJSON)
-        let name = json?.string(at: "name") ?? json?.string(at: "title")
-        let path = json?.string(at: "path") ?? json?.value(at: "diff")?.string(at: "path")
-        let status = json?.string(at: "status")
-        self.title = name ?? event.kind.replacingOccurrences(of: "_", with: " ").capitalized
-        self.subtitle = [status, path].compactMap { $0 }.joined(separator: " • ")
-        self.diff = ToolDiffParsing.diff(from: json)
-        if self.diff != nil {
-            self.detail = ""
-        } else if let json {
-            self.detail = json.description
-        } else {
-            self.detail = event.payloadJSON
-        }
     }
 }
 

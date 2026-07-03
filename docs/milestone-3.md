@@ -180,6 +180,8 @@ Enumerated tests:
 
 The MCP gateway and any `mcpServers` wiring (M4). Artifact byte snapshotting and the webview (M5). Elicitation (M6). Apps/Tasks/Roots (M7). `ClaudeCodeAdapter` enrichment (post-V1 unless trivially cheap). Harness health screen, search, share UX (M8). Windows/Linux anything.
 
+**Reconciliation note (merged branch):** Milestone 4 gateway work on `reconciliation/milestones-complete` supersedes the M3 stub where `session/new` passed `mcpServers: []`. The merged branch wires tamtri as the agent's MCP server through the gateway; treat empty `mcpServers` here as the original M3 checkpoint only, not current production behavior.
+
 ## Kickoff prompt for Claude Code
 
 > Read CLAUDE.md, docs/milestone-3.md, and docs/tamtri-decisions.md sections 14 and 16. Implement Milestone 3. Start with Task 1 (shared RPC layer + dispatch loop) and Task 2 (HarnessAdapter contract), then stop and show me the dispatch loop design and the adapter trait before building AcpAdapter. The loop is shared with milestone 4's MCP client, so its shape matters most.

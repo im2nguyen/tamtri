@@ -240,7 +240,7 @@ actor MockCoreClient: CoreClient {
 
     func sendMessage(conversationId: String, text: String) async throws {
         continuation.yield(CoreEvent(conversationId: conversationId, kind: "text_delta", payloadJSON: #"{"text":"Thinking about it..."}"#))
-        continuation.yield(CoreEvent(conversationId: conversationId, kind: "permission_requested", payloadJSON: #"{"request_id":"mock-permission","action":"edit","options":[{"id":"allow_once","label":"Allow once"},{"id":"deny","label":"Deny"}]}"#))
+        continuation.yield(CoreEvent(conversationId: conversationId, kind: "permission_requested", payloadJSON: #"{"request_id":"mock-permission","action":"edit","options":[{"id":"allow_once","label":"Allow once"},{"id":"allow_for_conversation","label":"Allow for this conversation"},{"id":"deny","label":"Deny"}]}"#))
     }
 
     func syncRuntimeRoots(conversationId: String, roots: [RootDto]) async throws {}

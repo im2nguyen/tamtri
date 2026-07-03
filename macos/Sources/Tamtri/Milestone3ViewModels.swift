@@ -1,16 +1,29 @@
 import Foundation
 
+struct PermissionOptionPresentation: Equatable, Identifiable {
+    let id: String
+    let label: String
+    let isReject: Bool
+}
+
 struct PermissionCardPresentation: Equatable {
+    let requestId: String
     let harnessDisplayName: String?
     let command: String?
-    let diffPath: String?
-    let diffNewText: String?
+    let diff: DiffPayload?
     let summary: String
-    let allowOptionLabels: [String]
-    let rejectOptionLabels: [String]
+    let options: [PermissionOptionPresentation]
     let accessibilityLabel: String
 
     static let defaultAccessibilityLabel = "Permission requested"
+
+    var allowOptions: [PermissionOptionPresentation] {
+        options.filter { !$0.isReject }
+    }
+
+    var rejectOptions: [PermissionOptionPresentation] {
+        options.filter(\.isReject)
+    }
 }
 
 enum PermissionCardPresentationBuilder {
@@ -19,18 +32,7 @@ enum PermissionCardPresentationBuilder {
         else {
             return nil
         }
-        let allow = payload.options.filter { !$0.isReject }.map(\.label)
-        let reject = payload.options.filter(\.isReject).map(\.label)
-        return PermissionCardPresentation(
-            harnessDisplayName: payload.harnessDisplayName,
-            command: payload.detail?.command,
-            diffPath: payload.detail?.diff?.path,
-            diffNewText: payload.detail?.diff?.newText,
-            summary: payload.summary,
-            allowOptionLabels: allow,
-            rejectOptionLabels: reject,
-            accessibilityLabel: PermissionCardPresentation.defaultAccessibilityLabel
-        )
+        return presentation(from: payload)
     }
 
     static func fromCommittedPermissionBlock(_ block: TranscriptContentBlock) -> PermissionCardPresentation? {
@@ -62,14 +64,19 @@ enum PermissionCardPresentationBuilder {
             detail: nil,
             harnessDisplayName: nil
         )
-        return PermissionCardPresentation(
-            harnessDisplayName: nil,
-            command: nil,
-            diffPath: nil,
-            diffNewText: nil,
+        return presentation(from: payload)
+    }
+
+    private static func presentation(from payload: PermissionPayloadDTO) -> PermissionCardPresentation {
+        PermissionCardPresentation(
+            requestId: payload.requestId,
+            harnessDisplayName: payload.harnessDisplayName,
+            command: payload.detail?.command,
+            diff: payload.detail?.diff,
             summary: payload.summary,
-            allowOptionLabels: options.filter { !$0.isReject }.map(\.label),
-            rejectOptionLabels: options.filter(\.isReject).map(\.label),
+            options: payload.options.map {
+                PermissionOptionPresentation(id: $0.id, label: $0.label, isReject: $0.isReject)
+            },
             accessibilityLabel: PermissionCardPresentation.defaultAccessibilityLabel
         )
     }
@@ -92,7 +99,7 @@ enum ThinkingDisclosurePresentationBuilder {
     }
 
     static func fromLivePayloadJSON(_ payloadJSON: String) -> ThinkingDisclosurePresentation? {
-        let text = EventPayload.text(from: payloadJSON)
+        let text = Milestone3EventPayload.text(from: payloadJSON)
         guard !text.isEmpty else { return nil }
         return ThinkingDisclosurePresentation(
             title: "Thinking",
@@ -106,7 +113,7 @@ struct ToolCardPresentation: Equatable {
     let title: String
     let subtitle: String
     let detail: String
-    let diffPath: String?
+    let diff: DiffPayload?
     let accessibilityLabel: String
 }
 
@@ -117,7 +124,7 @@ enum ToolCardPresentationBuilder {
             title: block.name ?? "Tool call",
             subtitle: block.inputSummary,
             detail: block.inputSummary,
-            diffPath: nil,
+            diff: nil,
             accessibilityLabel: "Tool call"
         )
     }
@@ -133,7 +140,7 @@ enum ToolCardPresentationBuilder {
                 title: "Tool result",
                 subtitle: [diff.change, diff.path].compactMap { $0 }.joined(separator: " • "),
                 detail: "",
-                diffPath: diff.path,
+                diff: diff,
                 accessibilityLabel: "Tool result"
             )
         }
@@ -141,7 +148,7 @@ enum ToolCardPresentationBuilder {
             title: "Tool result",
             subtitle: "",
             detail: block.outputSummary,
-            diffPath: nil,
+            diff: nil,
             accessibilityLabel: "Tool result"
         )
     }
@@ -153,9 +160,9 @@ enum ToolCardPresentationBuilder {
         let status = json?.string(at: "status")
         let title = name ?? kind.replacingOccurrences(of: "_", with: " ").capitalized
         let subtitle = [status, path].compactMap { $0 }.joined(separator: " • ")
-        let diffPath = ToolDiffParsing.diff(from: json)?.path
+        let diff = ToolDiffParsing.diff(from: json)
         let detail: String
-        if diffPath != nil {
+        if diff != nil {
             detail = ""
         } else if let json {
             detail = json.description
@@ -166,9 +173,18 @@ enum ToolCardPresentationBuilder {
             title: title,
             subtitle: subtitle,
             detail: detail,
-            diffPath: diffPath,
+            diff: diff,
             accessibilityLabel: "Tool event"
         )
+    }
+}
+
+enum Milestone3EventPayload {
+    static func text(from json: String) -> String {
+        struct Payload: Decodable {
+            let text: String?
+        }
+        return (try? JSONDecoder().decode(Payload.self, from: Data(json.utf8)).text) ?? ""
     }
 }
 
@@ -217,14 +233,6 @@ private struct PermissionOptionDTO: Decodable {
 
     var isReject: Bool {
         id.localizedCaseInsensitiveContains("deny") || id.localizedCaseInsensitiveContains("reject")
-    }
-}
-
-private struct EventPayload: Decodable {
-    let text: String?
-
-    static func text(from json: String) -> String {
-        (try? JSONDecoder().decode(EventPayload.self, from: Data(json.utf8)).text) ?? ""
     }
 }
 
