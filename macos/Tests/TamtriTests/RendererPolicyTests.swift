@@ -21,12 +21,30 @@ final class RendererPolicyTests: XCTestCase {
 
     func testAppPolicyBlocksUndeclaredOrigin() {
         let policy = WebContentPolicy.app(
-            allowedOrigins: [WebOrigin(scheme: "https", host: "cdn.example.com")],
+            allowedOrigins: [WebOrigin(mcpOrigin: "https://cdn.example.com")],
             appId: "demo",
-            serverId: "fixture"
+            serverId: "fixture",
+            templateRef: "ui://fixture/demo"
         )
         XCTAssertFalse(WebNavigationPolicy.allows(URL(string: "https://evil.example"), policy: policy))
         XCTAssertTrue(WebNavigationPolicy.allows(URL(string: "https://cdn.example.com/app.js"), policy: policy))
+    }
+
+    func testAppTemplateDeclaredOriginLoads() {
+        let html = appSandboxedHTML(
+            html: "<!doctype html><html><head></head><body>App</body></html>",
+            allowedOrigins: [WebOrigin(mcpOrigin: "https://api.example.com")],
+            bridgeScript: "(function(){window.__tamtriAppBridgeInstalled=true;})();"
+        )
+        XCTAssertTrue(html.contains("connect-src https://api.example.com"))
+        XCTAssertTrue(html.contains("__tamtriAppBridgeInstalled"))
+        XCTAssertTrue(html.contains("script-src 'unsafe-inline'"))
+    }
+
+    func testArtifactWebviewStillHasNoBridge() {
+        let html = artifactSandboxedHTML("<html><body><h1>Report</h1></body></html>")
+        XCTAssertFalse(artifactHTMLHasBridge(html))
+        XCTAssertTrue(html.contains("script-src 'none'"))
     }
 
     func testArtifactMimeRouting() {

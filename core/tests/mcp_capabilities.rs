@@ -5,7 +5,7 @@ use tamtri_core::config::{GatewayConfig, GatewayServerConfig, GatewayTransport};
 use tamtri_core::mcp::capabilities::{
     FeatureStatus, TamtriFeatureSupport, apps_available, report_from_initialize,
     server_advertises_apps, server_advertises_tasks, tasks_available,
-    upstream_gateway_capabilities,
+    upstream_gateway_capabilities_for,
 };
 use tamtri_core::mcp::gateway::{McpGateway, NoCredentials};
 use tamtri_core::mcp::client::McpClient;
@@ -62,6 +62,8 @@ async fn rc_extension_capability_gate() {
     assert!(server_advertises_tasks(&caps));
     assert!(!apps_available(&caps, TamtriFeatureSupport::milestone_7_pr1()));
     assert!(!tasks_available(&caps, TamtriFeatureSupport::milestone_7_pr1()));
+    assert!(apps_available(&caps, TamtriFeatureSupport::milestone_7_pr2()));
+    assert!(!tasks_available(&caps, TamtriFeatureSupport::milestone_7_pr2()));
 
     let report = report_from_initialize(
         "rc",
@@ -120,7 +122,7 @@ fn unknown_extension_ignored_in_capability_report() {
 
 #[test]
 fn upstream_gateway_does_not_advertise_rc_features() {
-    let caps = upstream_gateway_capabilities();
+    let caps = upstream_gateway_capabilities_for(TamtriFeatureSupport::milestone_7_pr1());
     assert!(caps.tools.is_some());
     assert!(caps.elicitation.is_some());
     assert!(caps.sampling.is_none());
@@ -141,11 +143,11 @@ async fn gateway_probe_records_per_server_capability_report() {
     let reports = gateway.probe_server_capabilities().await.expect("probe");
     assert_eq!(reports.len(), 1);
     assert_eq!(reports[0].server_id, "rc");
-    assert_eq!(reports[0].apps, FeatureStatus::ServerOnly);
+    assert_eq!(reports[0].apps, FeatureStatus::Supported);
 
     let cached = gateway
         .capability_report("rc")
         .await
         .expect("cached capability report");
-    assert_eq!(cached.tasks, FeatureStatus::ServerOnly);
+    assert_eq!(cached.tasks, FeatureStatus::Supported);
 }

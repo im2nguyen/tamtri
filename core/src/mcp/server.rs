@@ -144,11 +144,10 @@ pub(crate) async fn handle_gateway_request(
             message: "sampling is not supported".to_string(),
             data: None,
         }),
-        "roots/list" => Err(JsonRpcError {
-            code: crate::rpc::jsonrpc::METHOD_NOT_FOUND,
-            message: "roots are not supported yet".to_string(),
-            data: None,
-        }),
+        "roots/list" => gateway
+            .list_roots()
+            .await
+            .map_err(to_jsonrpc_error),
         _ => Err(JsonRpcError {
             code: crate::rpc::jsonrpc::METHOD_NOT_FOUND,
             message: "method not found".to_string(),

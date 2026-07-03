@@ -61,6 +61,13 @@ struct TranscriptContentBlock: Decodable, Equatable {
     let action: String?
     let data: JSONValue?
 
+    let uri: String?
+    let templateRef: String?
+    let state: JSONValue?
+
+    let taskId: String?
+    let taskStatus: String?
+
     enum CodingKeys: String, CodingKey {
         case type
         case text
@@ -82,6 +89,11 @@ struct TranscriptContentBlock: Decodable, Equatable {
         case url
         case action
         case data
+        case uri
+        case templateRef = "template_ref"
+        case state
+        case taskId = "task_id"
+        case taskStatus = "status"
     }
 
     var inputSummary: String {

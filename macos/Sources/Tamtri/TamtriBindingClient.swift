@@ -94,6 +94,38 @@ actor TamtriBindingClient: CoreClient {
         try core.logArtifactNavigationBlocked(conversationId: conversationId, url: url)
     }
 
+    func resolveAppTemplate(conversationId: String, serverId: String, templateRef: String) async throws -> AppTemplateRecord? {
+        try core.resolveAppTemplate(conversationId: conversationId, serverId: serverId, templateRef: templateRef).map(appTemplateRecord(from:))
+    }
+
+    func submitAppBridgeRequest(conversationId: String, serverId: String, appId: String, templateRef: String, requestJSON: String) async throws -> AppBridgeSubmission {
+        let dto = try core.submitAppBridgeRequest(
+            conversationId: conversationId,
+            serverId: serverId,
+            appId: appId,
+            templateRef: templateRef,
+            requestJson: requestJSON
+        )
+        return AppBridgeSubmission(requestId: dto.requestId, needsConsent: dto.needsConsent)
+    }
+
+    func respondAppBridgeConsent(conversationId: String, requestId: String, optionId: String) async throws {
+        try core.respondAppBridgeConsent(conversationId: conversationId, requestId: requestId, optionId: optionId)
+    }
+
+    func logAppNavigationBlocked(conversationId: String, serverId: String, templateRef: String, url: String) async throws {
+        try core.logAppNavigationBlocked(
+            conversationId: conversationId,
+            serverId: serverId,
+            templateRef: templateRef,
+            url: url
+        )
+    }
+
+    nonisolated     nonisolated func appBridgeBootstrapScript() -> String {
+        core.appBridgeBootstrapScript()
+    }
+
     func readAttachmentVerified(conversationId: String, path: String, size: UInt64, sha256: String) async throws -> Data {
         try core.readAttachmentVerified(conversationId: conversationId, path: path, size: size, sha256: sha256)
     }
@@ -112,6 +144,29 @@ actor TamtriBindingClient: CoreClient {
 
     func cancelRun(conversationId: String) async throws {
         try core.cancelRun(conversationId: conversationId)
+    }
+
+    func cancelTask(conversationId: String, taskId: String) async throws {
+        try core.cancelTask(conversationId: conversationId, taskId: taskId)
+    }
+
+    func listRoots(conversationId: String) async throws -> [RootRecord] {
+        try core.listRoots(conversationId: conversationId).map { rootRecord(from: $0, conversationId: conversationId) }
+    }
+
+    func attachRoot(conversationId: String, name: String, uri: String, kind: String, scope: String) async throws -> RootRecord {
+        let dto = try core.attachRoot(
+            conversationId: conversationId,
+            name: name,
+            uri: uri,
+            kind: kind,
+            scope: scope
+        )
+        return rootRecord(from: dto, conversationId: conversationId)
+    }
+
+    func removeRoot(conversationId: String, rootId: String) async throws {
+        try core.removeRoot(conversationId: conversationId, rootId: rootId)
     }
 
     func listGatewayServers() async throws -> [GatewayServerRecord] {
@@ -204,6 +259,17 @@ private func record(from dto: ConversationDto) -> ConversationRecord {
     )
 }
 
+private func rootRecord(from dto: RootDto, conversationId: String) -> RootRecord {
+    RootRecord(
+        id: dto.id,
+        name: dto.name,
+        uri: dto.uri,
+        kind: dto.kind,
+        scope: dto.scope,
+        bookmarkMissing: !RootBookmarkStore.hasBookmark(conversationId: conversationId, rootId: dto.id)
+    )
+}
+
 private func gatewayServerRecord(from dto: GatewayServerDto) -> GatewayServerRecord {
     GatewayServerRecord(
         id: dto.id,
@@ -261,6 +327,17 @@ private func gatewayServerDto(from record: GatewayServerRecord) -> GatewayServer
         capTasks: record.capTasks,
         capRoots: record.capRoots,
         capSampling: record.capSampling
+    )
+}
+
+private func appTemplateRecord(from dto: AppTemplateDto) -> AppTemplateRecord {
+    AppTemplateRecord(
+        templateRef: dto.templateRef,
+        serverId: dto.serverId,
+        html: dto.html,
+        allowedOrigins: dto.allowedOrigins,
+        bridgeScript: dto.bridgeScript,
+        contentSecurityPolicy: dto.contentSecurityPolicy
     )
 }
 

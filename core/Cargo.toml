@@ -24,6 +24,18 @@ path = "../fixtures/twenty-questions-mcp/src/main.rs"
 name = "m7-rc-mcp"
 path = "../fixtures/m7-rc-mcp/src/main.rs"
 
+[[bin]]
+name = "m7-roots-mcp"
+path = "../fixtures/m7-roots-mcp/src/main.rs"
+
+[[bin]]
+name = "m7-task-mcp"
+path = "../fixtures/m7-task-mcp/src/main.rs"
+
+[[bin]]
+name = "m7-app-mcp"
+path = "../fixtures/m7-app-mcp/src/main.rs"
+
 [dependencies]
 async-trait = "0.1"
 base64 = "0.22"

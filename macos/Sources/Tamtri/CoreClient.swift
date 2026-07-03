@@ -6,6 +6,15 @@ struct ConversationSummary: Identifiable, Equatable {
     let updatedAt: String
 }
 
+struct RootRecord: Identifiable, Equatable {
+    let id: String
+    let name: String
+    let uri: String
+    let kind: String
+    let scope: String
+    let bookmarkMissing: Bool
+}
+
 struct ConversationRecord: Equatable {
     let id: String
     let title: String
@@ -99,11 +108,20 @@ protocol CoreClient: Sendable {
     func readWorkdirFile(conversationId: String, relativePath: String) async throws -> WorkdirFilePreview
     func verifyArtifactInline(size: UInt64, sha256: String, inlineContent: String) async throws
     func logArtifactNavigationBlocked(conversationId: String, url: String) async throws
+    func resolveAppTemplate(conversationId: String, serverId: String, templateRef: String) async throws -> AppTemplateRecord?
+    func submitAppBridgeRequest(conversationId: String, serverId: String, appId: String, templateRef: String, requestJSON: String) async throws -> AppBridgeSubmission
+    func respondAppBridgeConsent(conversationId: String, requestId: String, optionId: String) async throws
+    func logAppNavigationBlocked(conversationId: String, serverId: String, templateRef: String, url: String) async throws
+    nonisolated func appBridgeBootstrapScript() -> String
     func readAttachmentVerified(conversationId: String, path: String, size: UInt64, sha256: String) async throws -> Data
     func verifiedAttachmentPath(conversationId: String, path: String, size: UInt64, sha256: String) async throws -> String
     func respondPermission(conversationId: String, requestId: String, optionId: String) async throws
     func respondElicitation(conversationId: String, requestId: String, action: String, dataJSON: String?) async throws
     func cancelRun(conversationId: String) async throws
+    func cancelTask(conversationId: String, taskId: String) async throws
+    func listRoots(conversationId: String) async throws -> [RootRecord]
+    func attachRoot(conversationId: String, name: String, uri: String, kind: String, scope: String) async throws -> RootRecord
+    func removeRoot(conversationId: String, rootId: String) async throws
     func listGatewayServers() async throws -> [GatewayServerRecord]
     func refreshGatewayCapabilities() async throws -> [GatewayServerRecord]
     func saveGatewayServers(_ servers: [GatewayServerRecord]) async throws
@@ -198,6 +216,23 @@ actor MockCoreClient: CoreClient {
 
     func logArtifactNavigationBlocked(conversationId: String, url: String) async throws {}
 
+    func resolveAppTemplate(conversationId: String, serverId: String, templateRef: String) async throws -> AppTemplateRecord? { nil }
+
+    func submitAppBridgeRequest(conversationId: String, serverId: String, appId: String, templateRef: String, requestJSON: String) async throws -> AppBridgeSubmission {
+        continuation.yield(CoreEvent(conversationId: conversationId, kind: "app_bridge_consent_requested", payloadJSON: #"{"request_id":"mock-bridge","server_id":"mock","app_id":"demo","template_ref":"ui://demo","summary":"Mock app wants to call echo","options":[{"id":"deny","label":"Deny"},{"id":"allow_once","label":"Allow once"}]}"#))
+        return AppBridgeSubmission(requestId: "mock-bridge", needsConsent: true)
+    }
+
+    func respondAppBridgeConsent(conversationId: String, requestId: String, optionId: String) async throws {
+        continuation.yield(CoreEvent(conversationId: conversationId, kind: "app_bridge_resolved", payloadJSON: #"{"request_id":"mock-bridge","response_json":"{\"jsonrpc\":\"2.0\",\"id\":\"1\",\"result\":{}}"}"#))
+    }
+
+    func logAppNavigationBlocked(conversationId: String, serverId: String, templateRef: String, url: String) async throws {}
+
+    nonisolated func appBridgeBootstrapScript() -> String {
+        "(function(){window.__tamtriAppBridgeInstalled=true;})();"
+    }
+
     func readAttachmentVerified(conversationId: String, path: String, size: UInt64, sha256: String) async throws -> Data {
         Data()
     }
@@ -218,6 +253,16 @@ actor MockCoreClient: CoreClient {
     func cancelRun(conversationId: String) async throws {
         continuation.yield(CoreEvent(conversationId: conversationId, kind: "turn_ended", payloadJSON: #"{"reason":"cancelled"}"#))
     }
+
+    func cancelTask(conversationId: String, taskId: String) async throws {}
+
+    func listRoots(conversationId: String) async throws -> [RootRecord] { [] }
+
+    func attachRoot(conversationId: String, name: String, uri: String, kind: String, scope: String) async throws -> RootRecord {
+        RootRecord(id: UUID().uuidString, name: name, uri: uri, kind: kind, scope: scope, bookmarkMissing: true)
+    }
+
+    func removeRoot(conversationId: String, rootId: String) async throws {}
 
     func listGatewayServers() async throws -> [GatewayServerRecord] {
         [

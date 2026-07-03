@@ -97,6 +97,12 @@ pub struct SamplingCapability {}
 #[serde(rename_all = "camelCase")]
 pub struct TasksCapability {
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub list: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cancel: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub requests: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub list_changed: Option<bool>,
 }
 
@@ -114,6 +120,8 @@ pub struct Tool {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
     pub input_schema: serde_json::Value,
+    #[serde(rename = "_meta", default, skip_serializing_if = "Option::is_none")]
+    pub meta: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -136,6 +144,8 @@ pub struct ListToolsResult {
 pub struct CallToolParams {
     pub name: String,
     pub arguments: serde_json::Value,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub task: Option<serde_json::Value>,
     #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
     pub meta: Option<serde_json::Value>,
 }

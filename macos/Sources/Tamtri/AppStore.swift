@@ -19,10 +19,14 @@ final class AppStore: ObservableObject {
     @Published var gatewayServers: [GatewayServerRecord] = []
     @Published var errorMessage: String?
     @Published var isLoadingConversation = false
+    @Published var bridgeDelivery: BridgeDelivery?
+    @Published var liveTaskStates: [String: LiveTaskState] = [:]
+    @Published var showConversationRoots = false
 
     private let core: CoreClient
     private var conversationCache: [String: ConversationRecord] = [:]
     private var pendingSelectionId: String?
+    private var pendingBridgeTargets: [String: UUID] = [:]
 
     var isSwitchingConversation: Bool {
         guard let targetId = selectedConversationId else { return false }
@@ -55,9 +59,35 @@ final class AppStore: ObservableObject {
                             await self.persistUpdatedCredentialToKeychain(payloadJSON: event.payloadJSON)
                         }
                     }
+                    if event.kind == "app_bridge_resolved" {
+                        self.handleAppBridgeResolved(payloadJSON: event.payloadJSON)
+                    }
+                    if event.kind == "task_started" || event.kind == "task_updated" {
+                        let state = LiveTaskState(payloadJSON: event.payloadJSON)
+                        self.liveTaskStates[state.taskId] = state
+                    }
+                    if event.kind == "task_completed" {
+                        let state = LiveTaskState(payloadJSON: event.payloadJSON)
+                        self.liveTaskStates[state.taskId] = state
+                    }
+                    if event.kind == "turn_ended" {
+                        self.liveTaskStates = [:]
+                    }
                 }
             }
         }
+    }
+
+    private func handleAppBridgeResolved(payloadJSON: String) {
+        guard let data = payloadJSON.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let requestId = object["request_id"] as? String,
+              let responseJSON = object["response_json"] as? String,
+              let webViewID = pendingBridgeTargets.removeValue(forKey: requestId)
+        else {
+            return
+        }
+        bridgeDelivery = BridgeDelivery(webViewID: webViewID, responseJSON: responseJSON)
     }
 
     private func persistUpdatedCredentialToKeychain(payloadJSON: String) async {
@@ -353,6 +383,88 @@ final class AppStore: ObservableObject {
                 errorMessage = error.localizedDescription
             }
         }
+    }
+
+    func resolveAppTemplate(conversationId: String, serverId: String, templateRef: String) async throws -> AppTemplateRecord? {
+        try await core.resolveAppTemplate(conversationId: conversationId, serverId: serverId, templateRef: templateRef)
+    }
+
+    func submitAppBridgeRequest(
+        conversationId: String,
+        serverId: String,
+        appId: String,
+        templateRef: String,
+        requestJSON: String,
+        webViewID: UUID
+    ) {
+        Task {
+            do {
+                let submission = try await core.submitAppBridgeRequest(
+                    conversationId: conversationId,
+                    serverId: serverId,
+                    appId: appId,
+                    templateRef: templateRef,
+                    requestJSON: requestJSON
+                )
+                if submission.needsConsent {
+                    pendingBridgeTargets[submission.requestId] = webViewID
+                }
+            } catch {
+                errorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    func respondAppBridgeConsent(requestId: String, optionId: String) {
+        guard let conversation = selectedConversation else { return }
+        Task {
+            do {
+                try await core.respondAppBridgeConsent(
+                    conversationId: conversation.id,
+                    requestId: requestId,
+                    optionId: optionId
+                )
+            } catch {
+                errorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    func logAppNavigationBlocked(conversationId: String, serverId: String, templateRef: String, url: String) {
+        Task {
+            do {
+                try await core.logAppNavigationBlocked(
+                    conversationId: conversationId,
+                    serverId: serverId,
+                    templateRef: templateRef,
+                    url: url
+                )
+            } catch {
+                errorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    func cancelTask(conversationId: String, taskId: String) {
+        Task {
+            do {
+                try await core.cancelTask(conversationId: conversationId, taskId: taskId)
+            } catch {
+                errorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    func listRoots(conversationId: String) async throws -> [RootRecord] {
+        try await core.listRoots(conversationId: conversationId)
+    }
+
+    func attachRoot(conversationId: String, name: String, uri: String, kind: String, scope: String) async throws -> RootRecord {
+        try await core.attachRoot(conversationId: conversationId, name: name, uri: uri, kind: kind, scope: scope)
+    }
+
+    func removeRoot(conversationId: String, rootId: String) async throws {
+        try await core.removeRoot(conversationId: conversationId, rootId: rootId)
     }
 
     func respondElicitation(requestId: String, action: String, dataJSON: String?) {

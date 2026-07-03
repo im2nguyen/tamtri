@@ -24,6 +24,38 @@ impl TamtriFeatureSupport {
             roots: false,
         }
     }
+
+    /// Milestone 7 PR2: Apps model and gateway intercept are wired.
+    pub const fn milestone_7_pr2() -> Self {
+        Self {
+            apps: true,
+            tasks: false,
+            roots: false,
+        }
+    }
+
+    /// Milestone 7 PR4: tasks wired end-to-end (apps remain enabled from PR2/3).
+    pub const fn milestone_7_pr4() -> Self {
+        Self {
+            apps: true,
+            tasks: true,
+            roots: false,
+        }
+    }
+
+    /// Milestone 7 PR5: roots wired end-to-end.
+    pub const fn milestone_7_pr5() -> Self {
+        Self {
+            apps: true,
+            tasks: true,
+            roots: true,
+        }
+    }
+
+    /// Current M7 build support level.
+    pub const fn current() -> Self {
+        Self::milestone_7_pr2()
+    }
 }
 
 /// Per-feature availability for settings/debug surfaces.
@@ -189,8 +221,15 @@ pub fn report_from_initialize(
 
 /// Capabilities tamtri advertises to agents on the upstream gateway surface.
 pub fn upstream_gateway_capabilities() -> ServerCapabilities {
+    upstream_gateway_capabilities_for(TamtriFeatureSupport::current())
+}
+
+pub fn upstream_gateway_capabilities_for(
+    support: TamtriFeatureSupport,
+) -> ServerCapabilities {
     use super::protocol::{
-        ElicitationCapability, PromptsCapability, ResourcesCapability, ToolsCapability,
+        ElicitationCapability, PromptsCapability, ResourcesCapability, RootsCapability,
+        ToolsCapability,
     };
 
     ServerCapabilities {
@@ -210,7 +249,13 @@ pub fn upstream_gateway_capabilities() -> ServerCapabilities {
         }),
         sampling: None,
         tasks: None,
-        roots: None,
+        roots: if support.roots {
+            Some(RootsCapability {
+                list_changed: Some(false),
+            })
+        } else {
+            None
+        },
         extensions: None,
     }
 }

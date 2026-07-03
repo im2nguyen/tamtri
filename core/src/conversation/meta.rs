@@ -46,10 +46,15 @@ impl ConversationMeta {
     }
 
     pub fn from_json(input: &str) -> Result<Self> {
-        let meta: Self = serde_json::from_str(input)?;
+        let mut meta: Self = serde_json::from_str(input)?;
         if meta.schema_version > SCHEMA_VERSION {
             return Err(CoreError::UnsupportedSchemaVersion(meta.schema_version));
         }
+        meta.roots = meta
+            .roots
+            .into_iter()
+            .map(crate::conversation::Root::normalize_legacy)
+            .collect();
         Ok(meta)
     }
 }

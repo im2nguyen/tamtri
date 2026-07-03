@@ -1,6 +1,6 @@
 import Foundation
 
-/// Declared network origin for MCP App sandbox policy (PR3 will enforce fetch/connect).
+/// Declared network origin for MCP App sandbox policy.
 struct WebOrigin: Equatable, Hashable {
     let scheme: String
     let host: String
@@ -11,14 +11,29 @@ struct WebOrigin: Equatable, Hashable {
         self.host = host.lowercased()
         self.port = port
     }
+
+    init(mcpOrigin: String) {
+        if let url = URL(string: mcpOrigin), let host = url.host {
+            self.init(scheme: url.scheme ?? "https", host: host, port: url.port)
+        } else {
+            self.init(scheme: "https", host: mcpOrigin.lowercased(), port: nil)
+        }
+    }
+
+    var mcpOriginString: String {
+        if let port {
+            return "\(scheme)://\(host):\(port)"
+        }
+        return "\(scheme)://\(host)"
+    }
 }
 
 /// Sandbox policy for WKWebView renderer islands.
 enum WebContentPolicy: Equatable {
     /// Harness artifacts: no network, no host bridge, strict CSP.
     case artifactNoNetwork
-    /// MCP Apps (PR3): declared origins only, consent-gated JSON-RPC bridge.
-    case app(allowedOrigins: [WebOrigin], appId: String, serverId: String)
+    /// MCP Apps: declared origins only, consent-gated JSON-RPC bridge.
+    case app(allowedOrigins: [WebOrigin], appId: String, serverId: String, templateRef: String)
 }
 
 enum WebNavigationPolicy {
@@ -26,28 +41,42 @@ enum WebNavigationPolicy {
         switch policy {
         case .artifactNoNetwork:
             return artifactNavigationAllows(url)
-        case .app(let allowedOrigins, _, _):
+        case .app(let allowedOrigins, _, _, _):
             guard let url else { return true }
-            guard let scheme = url.scheme?.lowercased(), let host = url.host?.lowercased() else {
-                return url.scheme == "about" || url.scheme == nil
-            }
-            let port = url.port
-            let origin = WebOrigin(scheme: scheme, host: host, port: port)
-            if allowedOrigins.contains(origin) {
+            if url.scheme == "about" || url.scheme == nil {
                 return true
             }
-            return url.scheme == "about" || url.scheme == nil
+            let origin = url.originString
+            return allowedOrigins.contains { $0.matches(url: url) || $0.mcpOriginString == origin }
         }
     }
 }
 
-func sandboxedHTML(for html: String, policy: WebContentPolicy) -> String {
+extension WebOrigin {
+    func matches(url: URL) -> Bool {
+        guard let scheme = url.scheme?.lowercased(), let host = url.host?.lowercased() else {
+            return false
+        }
+        return self.scheme == scheme && self.host == host && self.port == url.port
+    }
+}
+
+private extension URL {
+    var originString: String {
+        guard let host else { return absoluteString }
+        if let port {
+            return "\(scheme ?? "https")://\(host):\(port)"
+        }
+        return "\(scheme ?? "https")://\(host)"
+    }
+}
+
+func sandboxedHTML(for html: String, policy: WebContentPolicy, bridgeScript: String? = nil) -> String {
     switch policy {
     case .artifactNoNetwork:
         return artifactSandboxedHTML(html)
-    case .app:
-        // PR3 will widen CSP connect-src to declared origins and enable the bridge.
-        return artifactSandboxedHTML(html)
+    case .app(let allowedOrigins, _, _, _):
+        return appSandboxedHTML(html: html, allowedOrigins: allowedOrigins, bridgeScript: bridgeScript ?? "")
     }
 }
 
@@ -58,13 +87,29 @@ private func artifactNavigationAllows(_ url: URL?) -> Bool {
 
 func artifactSandboxedHTML(_ html: String) -> String {
     let csp = "<meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; img-src data:; style-src 'unsafe-inline'; script-src 'none'; base-uri 'none'; form-action 'none'\">"
+    return wrapHTML(html, headInjection: csp)
+}
+
+func appSandboxedHTML(html: String, allowedOrigins: [WebOrigin], bridgeScript: String) -> String {
+    let connect = allowedOrigins.map(\.mcpOriginString).joined(separator: " ")
+    let csp = "<meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline' 'self'; connect-src \(connect) about:; img-src data:; base-uri 'none'; form-action 'none'\">"
+    let bridge = bridgeScript.isEmpty ? "" : "<script>\(bridgeScript)</script>"
+    return wrapHTML(html, headInjection: csp + bridge)
+}
+
+private func wrapHTML(_ html: String, headInjection: String) -> String {
     if let headRange = html.range(of: "<head", options: [.caseInsensitive]),
        let close = html[headRange.upperBound...].firstIndex(of: ">") {
         var copy = html
-        copy.insert(contentsOf: csp, at: html.index(after: close))
+        copy.insert(contentsOf: headInjection, at: html.index(after: close))
         return copy
     }
-    return "<!doctype html><html><head>\(csp)</head><body>\(html)</body></html>"
+    return "<!doctype html><html><head>\(headInjection)</head><body>\(html)</body></html>"
+}
+
+/// Artifacts must never expose the MCP App bridge bootstrap.
+func artifactHTMLHasBridge(_ html: String) -> Bool {
+    html.contains("__tamtriAppBridgeInstalled") || html.contains("tamtriAppBridge")
 }
 
 /// Back-compat alias used by existing tests.

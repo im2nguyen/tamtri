@@ -775,7 +775,13 @@ public func FfiConverterTypeConversationObserver_lower(_ value: ConversationObse
 
 public protocol TamtriCoreProtocol: AnyObject, Sendable {
     
+    func appBridgeBootstrapScript()  -> String
+    
+    func attachRoot(conversationId: String, name: String, uri: String, kind: String, scope: String) throws  -> RootDto
+    
     func cancelRun(conversationId: String) throws 
+    
+    func cancelTask(conversationId: String, taskId: String) throws 
     
     func completeOauthCallback(callbackUrl: String) throws  -> OAuthCompletionDto
     
@@ -795,9 +801,13 @@ public protocol TamtriCoreProtocol: AnyObject, Sendable {
     
     func listGatewayServers() throws  -> [GatewayServerDto]
     
+    func listRoots(conversationId: String) throws  -> [RootDto]
+    
     func listWorkdirFiles(conversationId: String) throws  -> [WorkdirFileDto]
     
     func loadConversation(id: String) throws  -> ConversationDto
+    
+    func logAppNavigationBlocked(conversationId: String, serverId: String, templateRef: String, url: String) throws 
     
     func logArtifactNavigationBlocked(conversationId: String, url: String) throws 
     
@@ -808,6 +818,12 @@ public protocol TamtriCoreProtocol: AnyObject, Sendable {
     func refreshGatewayCapabilities() throws  -> [GatewayServerDto]
     
     func registerAcpAgent(id: String, displayName: String, command: String, args: [String]) throws 
+    
+    func removeRoot(conversationId: String, rootId: String) throws 
+    
+    func resolveAppTemplate(conversationId: String, serverId: String, templateRef: String) throws  -> AppTemplateDto?
+    
+    func respondAppBridgeConsent(conversationId: String, requestId: String, optionId: String) throws 
     
     func respondElicitation(conversationId: String, requestId: String, action: String, dataJson: String?) throws 
     
@@ -820,6 +836,8 @@ public protocol TamtriCoreProtocol: AnyObject, Sendable {
     func setGatewayCredential(credentialRef: String, value: String) throws 
     
     func startOauthFlow(serverId: String, redirectUri: String) throws  -> OAuthHandoffDto
+    
+    func submitAppBridgeRequest(conversationId: String, serverId: String, appId: String, templateRef: String, requestJson: String) throws  -> AppBridgeSubmissionDto
     
     func verifiedAttachmentPath(conversationId: String, path: String, size: UInt64, sha256: String) throws  -> String
     
@@ -889,11 +907,44 @@ public convenience init(vaultPath: String, observer: ConversationObserver)throws
     
 
     
+open func appBridgeBootstrapScript() -> String  {
+    return try!  FfiConverterString.lift(try! rustCall() {
+        uniffiCallStatus in
+    uniffi_tamtri_core_fn_method_tamtricore_app_bridge_bootstrap_script(
+            self.uniffiCloneHandle(),uniffiCallStatus
+    )
+})
+}
+    
+open func attachRoot(conversationId: String, name: String, uri: String, kind: String, scope: String)throws  -> RootDto  {
+    return try  FfiConverterTypeRootDto_lift(try rustCallWithError(FfiConverterTypeTamtriError_lift) {
+        uniffiCallStatus in
+    uniffi_tamtri_core_fn_method_tamtricore_attach_root(
+            self.uniffiCloneHandle(),
+        FfiConverterString.lower(conversationId),
+        FfiConverterString.lower(name),
+        FfiConverterString.lower(uri),
+        FfiConverterString.lower(kind),
+        FfiConverterString.lower(scope),uniffiCallStatus
+    )
+})
+}
+    
 open func cancelRun(conversationId: String)throws   {try rustCallWithError(FfiConverterTypeTamtriError_lift) {
         uniffiCallStatus in
     uniffi_tamtri_core_fn_method_tamtricore_cancel_run(
             self.uniffiCloneHandle(),
         FfiConverterString.lower(conversationId),uniffiCallStatus
+    )
+}
+}
+    
+open func cancelTask(conversationId: String, taskId: String)throws   {try rustCallWithError(FfiConverterTypeTamtriError_lift) {
+        uniffiCallStatus in
+    uniffi_tamtri_core_fn_method_tamtricore_cancel_task(
+            self.uniffiCloneHandle(),
+        FfiConverterString.lower(conversationId),
+        FfiConverterString.lower(taskId),uniffiCallStatus
     )
 }
 }
@@ -990,6 +1041,16 @@ open func listGatewayServers()throws  -> [GatewayServerDto]  {
 })
 }
     
+open func listRoots(conversationId: String)throws  -> [RootDto]  {
+    return try  FfiConverterSequenceTypeRootDto.lift(try rustCallWithError(FfiConverterTypeTamtriError_lift) {
+        uniffiCallStatus in
+    uniffi_tamtri_core_fn_method_tamtricore_list_roots(
+            self.uniffiCloneHandle(),
+        FfiConverterString.lower(conversationId),uniffiCallStatus
+    )
+})
+}
+    
 open func listWorkdirFiles(conversationId: String)throws  -> [WorkdirFileDto]  {
     return try  FfiConverterSequenceTypeWorkdirFileDto.lift(try rustCallWithError(FfiConverterTypeTamtriError_lift) {
         uniffiCallStatus in
@@ -1008,6 +1069,18 @@ open func loadConversation(id: String)throws  -> ConversationDto  {
         FfiConverterString.lower(id),uniffiCallStatus
     )
 })
+}
+    
+open func logAppNavigationBlocked(conversationId: String, serverId: String, templateRef: String, url: String)throws   {try rustCallWithError(FfiConverterTypeTamtriError_lift) {
+        uniffiCallStatus in
+    uniffi_tamtri_core_fn_method_tamtricore_log_app_navigation_blocked(
+            self.uniffiCloneHandle(),
+        FfiConverterString.lower(conversationId),
+        FfiConverterString.lower(serverId),
+        FfiConverterString.lower(templateRef),
+        FfiConverterString.lower(url),uniffiCallStatus
+    )
+}
 }
     
 open func logArtifactNavigationBlocked(conversationId: String, url: String)throws   {try rustCallWithError(FfiConverterTypeTamtriError_lift) {
@@ -1061,6 +1134,39 @@ open func registerAcpAgent(id: String, displayName: String, command: String, arg
         FfiConverterString.lower(displayName),
         FfiConverterString.lower(command),
         FfiConverterSequenceString.lower(args),uniffiCallStatus
+    )
+}
+}
+    
+open func removeRoot(conversationId: String, rootId: String)throws   {try rustCallWithError(FfiConverterTypeTamtriError_lift) {
+        uniffiCallStatus in
+    uniffi_tamtri_core_fn_method_tamtricore_remove_root(
+            self.uniffiCloneHandle(),
+        FfiConverterString.lower(conversationId),
+        FfiConverterString.lower(rootId),uniffiCallStatus
+    )
+}
+}
+    
+open func resolveAppTemplate(conversationId: String, serverId: String, templateRef: String)throws  -> AppTemplateDto?  {
+    return try  FfiConverterOptionTypeAppTemplateDto.lift(try rustCallWithError(FfiConverterTypeTamtriError_lift) {
+        uniffiCallStatus in
+    uniffi_tamtri_core_fn_method_tamtricore_resolve_app_template(
+            self.uniffiCloneHandle(),
+        FfiConverterString.lower(conversationId),
+        FfiConverterString.lower(serverId),
+        FfiConverterString.lower(templateRef),uniffiCallStatus
+    )
+})
+}
+    
+open func respondAppBridgeConsent(conversationId: String, requestId: String, optionId: String)throws   {try rustCallWithError(FfiConverterTypeTamtriError_lift) {
+        uniffiCallStatus in
+    uniffi_tamtri_core_fn_method_tamtricore_respond_app_bridge_consent(
+            self.uniffiCloneHandle(),
+        FfiConverterString.lower(conversationId),
+        FfiConverterString.lower(requestId),
+        FfiConverterString.lower(optionId),uniffiCallStatus
     )
 }
 }
@@ -1124,6 +1230,20 @@ open func startOauthFlow(serverId: String, redirectUri: String)throws  -> OAuthH
             self.uniffiCloneHandle(),
         FfiConverterString.lower(serverId),
         FfiConverterString.lower(redirectUri),uniffiCallStatus
+    )
+})
+}
+    
+open func submitAppBridgeRequest(conversationId: String, serverId: String, appId: String, templateRef: String, requestJson: String)throws  -> AppBridgeSubmissionDto  {
+    return try  FfiConverterTypeAppBridgeSubmissionDto_lift(try rustCallWithError(FfiConverterTypeTamtriError_lift) {
+        uniffiCallStatus in
+    uniffi_tamtri_core_fn_method_tamtricore_submit_app_bridge_request(
+            self.uniffiCloneHandle(),
+        FfiConverterString.lower(conversationId),
+        FfiConverterString.lower(serverId),
+        FfiConverterString.lower(appId),
+        FfiConverterString.lower(templateRef),
+        FfiConverterString.lower(requestJson),uniffiCallStatus
     )
 })
 }
@@ -1198,6 +1318,134 @@ public func FfiConverterTypeTamtriCore_lower(_ value: TamtriCore) -> UInt64 {
 }
 
 
+
+
+public struct AppBridgeSubmissionDto: Equatable, Hashable {
+    public var requestId: String
+    public var needsConsent: Bool
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(requestId: String, needsConsent: Bool) {
+        self.requestId = requestId
+        self.needsConsent = needsConsent
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension AppBridgeSubmissionDto: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeAppBridgeSubmissionDto: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> AppBridgeSubmissionDto {
+        return
+            try AppBridgeSubmissionDto(
+                requestId: FfiConverterString.read(from: &buf), 
+                needsConsent: FfiConverterBool.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: AppBridgeSubmissionDto, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.requestId, into: &buf)
+        FfiConverterBool.write(value.needsConsent, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeAppBridgeSubmissionDto_lift(_ buf: RustBuffer) throws -> AppBridgeSubmissionDto {
+    return try FfiConverterTypeAppBridgeSubmissionDto.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeAppBridgeSubmissionDto_lower(_ value: AppBridgeSubmissionDto) -> RustBuffer {
+    return FfiConverterTypeAppBridgeSubmissionDto.lower(value)
+}
+
+
+public struct AppTemplateDto: Equatable, Hashable {
+    public var templateRef: String
+    public var serverId: String
+    public var html: String
+    public var allowedOrigins: [String]
+    public var metadataJson: String
+    public var bridgeScript: String
+    public var contentSecurityPolicy: String
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(templateRef: String, serverId: String, html: String, allowedOrigins: [String], metadataJson: String, bridgeScript: String, contentSecurityPolicy: String) {
+        self.templateRef = templateRef
+        self.serverId = serverId
+        self.html = html
+        self.allowedOrigins = allowedOrigins
+        self.metadataJson = metadataJson
+        self.bridgeScript = bridgeScript
+        self.contentSecurityPolicy = contentSecurityPolicy
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension AppTemplateDto: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeAppTemplateDto: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> AppTemplateDto {
+        return
+            try AppTemplateDto(
+                templateRef: FfiConverterString.read(from: &buf), 
+                serverId: FfiConverterString.read(from: &buf), 
+                html: FfiConverterString.read(from: &buf), 
+                allowedOrigins: FfiConverterSequenceString.read(from: &buf), 
+                metadataJson: FfiConverterString.read(from: &buf), 
+                bridgeScript: FfiConverterString.read(from: &buf), 
+                contentSecurityPolicy: FfiConverterString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: AppTemplateDto, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.templateRef, into: &buf)
+        FfiConverterString.write(value.serverId, into: &buf)
+        FfiConverterString.write(value.html, into: &buf)
+        FfiConverterSequenceString.write(value.allowedOrigins, into: &buf)
+        FfiConverterString.write(value.metadataJson, into: &buf)
+        FfiConverterString.write(value.bridgeScript, into: &buf)
+        FfiConverterString.write(value.contentSecurityPolicy, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeAppTemplateDto_lift(_ buf: RustBuffer) throws -> AppTemplateDto {
+    return try FfiConverterTypeAppTemplateDto.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeAppTemplateDto_lower(_ value: AppTemplateDto) -> RustBuffer {
+    return FfiConverterTypeAppTemplateDto.lower(value)
+}
 
 
 public struct ConversationDto: Equatable, Hashable {
@@ -1640,6 +1888,72 @@ public func FfiConverterTypeOAuthHandoffDto_lower(_ value: OAuthHandoffDto) -> R
 }
 
 
+public struct RootDto: Equatable, Hashable {
+    public var id: String
+    public var name: String
+    public var uri: String
+    public var kind: String
+    public var scope: String
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(id: String, name: String, uri: String, kind: String, scope: String) {
+        self.id = id
+        self.name = name
+        self.uri = uri
+        self.kind = kind
+        self.scope = scope
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension RootDto: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeRootDto: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> RootDto {
+        return
+            try RootDto(
+                id: FfiConverterString.read(from: &buf), 
+                name: FfiConverterString.read(from: &buf), 
+                uri: FfiConverterString.read(from: &buf), 
+                kind: FfiConverterString.read(from: &buf), 
+                scope: FfiConverterString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: RootDto, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.id, into: &buf)
+        FfiConverterString.write(value.name, into: &buf)
+        FfiConverterString.write(value.uri, into: &buf)
+        FfiConverterString.write(value.kind, into: &buf)
+        FfiConverterString.write(value.scope, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeRootDto_lift(_ buf: RustBuffer) throws -> RootDto {
+    return try FfiConverterTypeRootDto.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeRootDto_lower(_ value: RootDto) -> RustBuffer {
+    return FfiConverterTypeRootDto.lower(value)
+}
+
+
 public struct UiEvent: Equatable, Hashable {
     public var conversationId: String
     public var kind: String
@@ -1915,6 +2229,30 @@ fileprivate struct FfiConverterOptionString: FfiConverterRustBuffer {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterOptionTypeAppTemplateDto: FfiConverterRustBuffer {
+    typealias SwiftType = AppTemplateDto?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterTypeAppTemplateDto.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterTypeAppTemplateDto.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterSequenceString: FfiConverterRustBuffer {
     typealias SwiftType = [String]
 
@@ -2015,6 +2353,31 @@ fileprivate struct FfiConverterSequenceTypeGatewayServerDto: FfiConverterRustBuf
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterSequenceTypeRootDto: FfiConverterRustBuffer {
+    typealias SwiftType = [RootDto]
+
+    public static func write(_ value: [RootDto], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeRootDto.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [RootDto] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [RootDto]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeRootDto.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterSequenceTypeWorkdirFileDto: FfiConverterRustBuffer {
     typealias SwiftType = [WorkdirFileDto]
 
@@ -2055,7 +2418,16 @@ private let initializationResult: InitializationResult = {
     if (uniffi_tamtri_core_checksum_method_conversationobserver_on_event() != 45272) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_tamtri_core_checksum_method_tamtricore_app_bridge_bootstrap_script() != 29834) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tamtri_core_checksum_method_tamtricore_attach_root() != 11598) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_tamtri_core_checksum_method_tamtricore_cancel_run() != 38316) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tamtri_core_checksum_method_tamtricore_cancel_task() != 56335) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_tamtri_core_checksum_method_tamtricore_complete_oauth_callback() != 30265) {
@@ -2085,10 +2457,16 @@ private let initializationResult: InitializationResult = {
     if (uniffi_tamtri_core_checksum_method_tamtricore_list_gateway_servers() != 49649) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_tamtri_core_checksum_method_tamtricore_list_roots() != 10237) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_tamtri_core_checksum_method_tamtricore_list_workdir_files() != 42205) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_tamtri_core_checksum_method_tamtricore_load_conversation() != 24394) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tamtri_core_checksum_method_tamtricore_log_app_navigation_blocked() != 36544) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_tamtri_core_checksum_method_tamtricore_log_artifact_navigation_blocked() != 955) {
@@ -2104,6 +2482,15 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_tamtri_core_checksum_method_tamtricore_register_acp_agent() != 43935) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tamtri_core_checksum_method_tamtricore_remove_root() != 56826) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tamtri_core_checksum_method_tamtricore_resolve_app_template() != 63474) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tamtri_core_checksum_method_tamtricore_respond_app_bridge_consent() != 39132) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_tamtri_core_checksum_method_tamtricore_respond_elicitation() != 13195) {
@@ -2122,6 +2509,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_tamtri_core_checksum_method_tamtricore_start_oauth_flow() != 16366) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tamtri_core_checksum_method_tamtricore_submit_app_bridge_request() != 45041) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_tamtri_core_checksum_method_tamtricore_verified_attachment_path() != 25850) {

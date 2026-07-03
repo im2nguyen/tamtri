@@ -16,8 +16,9 @@ use crate::mcp::protocol::{
     GetPromptParams, GetPromptResult, Implementation, InitializeParams, InitializeResult,
     ListPromptsParams, ListPromptsResult, ListResourcesParams, ListResourcesResult,
     ListToolsParams, ListToolsResult, MCP_PROTOCOL_VERSION, Prompt, ReadResourceParams,
-    ReadResourceResult, Resource, ServerCapabilities, Tool,
+    ReadResourceResult, Resource, RootsCapability, ServerCapabilities, Tool,
 };
+use crate::mcp::roots::RootsHandler;
 use crate::rpc::dispatch::{InboundMessage, RpcConnection, RpcHandle};
 use crate::rpc::transport::Transport;
 use crate::rpc::transport::http::HttpTransport;
@@ -28,6 +29,7 @@ pub enum McpClientEvent {
     Progress { params: Value },
     Log { params: Value },
     Cancelled { params: Value },
+    TaskStatus { params: Value },
 }
 
 #[async_trait]
@@ -65,7 +67,7 @@ impl McpClient {
         config: McpClientConfig,
     ) -> Result<Self> {
         let transport = StdioTransport::spawn(command, args, env).await?;
-        let mut client = Self::with_transport(Box::new(transport), config, None, None);
+        let mut client = Self::with_transport(Box::new(transport), config, None, None, None);
         client.initialize().await?;
         client.send_initialized_notification().await?;
         Ok(client)
@@ -78,9 +80,16 @@ impl McpClient {
         config: McpClientConfig,
         events: mpsc::UnboundedSender<McpClientEvent>,
         elicitation: Option<Arc<dyn ElicitationHandler>>,
+        roots: Option<Arc<dyn RootsHandler>>,
     ) -> Result<Self> {
         let transport = StdioTransport::spawn(command, args, env).await?;
-        let mut client = Self::with_transport(Box::new(transport), config, Some(events), elicitation);
+        let mut client = Self::with_transport(
+            Box::new(transport),
+            config,
+            Some(events),
+            elicitation,
+            roots,
+        );
         client.initialize().await?;
         client.send_initialized_notification().await?;
         Ok(client)
@@ -92,7 +101,7 @@ impl McpClient {
         config: McpClientConfig,
     ) -> Result<Self> {
         let transport = HttpTransport::new(endpoint, headers)?;
-        let mut client = Self::with_transport(Box::new(transport), config, None, None);
+        let mut client = Self::with_transport(Box::new(transport), config, None, None, None);
         client.initialize().await?;
         client.send_initialized_notification().await?;
         Ok(client)
@@ -104,9 +113,16 @@ impl McpClient {
         config: McpClientConfig,
         events: mpsc::UnboundedSender<McpClientEvent>,
         elicitation: Option<Arc<dyn ElicitationHandler>>,
+        roots: Option<Arc<dyn RootsHandler>>,
     ) -> Result<Self> {
         let transport = HttpTransport::new(endpoint, headers)?;
-        let mut client = Self::with_transport(Box::new(transport), config, Some(events), elicitation);
+        let mut client = Self::with_transport(
+            Box::new(transport),
+            config,
+            Some(events),
+            elicitation,
+            roots,
+        );
         client.initialize().await?;
         client.send_initialized_notification().await?;
         Ok(client)
@@ -117,6 +133,7 @@ impl McpClient {
         config: McpClientConfig,
         events: Option<mpsc::UnboundedSender<McpClientEvent>>,
         elicitation: Option<Arc<dyn ElicitationHandler>>,
+        roots: Option<Arc<dyn RootsHandler>>,
     ) -> Self {
         let (handle, inbound) = RpcConnection::start(transport);
         let inbound_driver = tokio::spawn(run_inbound_driver(
@@ -124,6 +141,7 @@ impl McpClient {
             inbound,
             events,
             elicitation,
+            roots,
         ));
         Self {
             handle,
@@ -141,6 +159,9 @@ impl McpClient {
                 elicitation: Some(ElicitationCapability {
                     form: Some(serde_json::json!({})),
                     url: Some(serde_json::json!({})),
+                }),
+                roots: Some(RootsCapability {
+                    list_changed: Some(false),
                 }),
                 ..Default::default()
             },
@@ -196,14 +217,75 @@ impl McpClient {
         arguments: serde_json::Value,
         meta: Option<serde_json::Value>,
     ) -> Result<CallToolResult> {
+        self.call_tool_with_task(name, arguments, None, meta).await
+    }
+
+    pub async fn call_tool_with_task(
+        &self,
+        name: &str,
+        arguments: serde_json::Value,
+        task: Option<serde_json::Value>,
+        meta: Option<serde_json::Value>,
+    ) -> Result<CallToolResult> {
+        let raw = self
+            .call_tool_raw(name, arguments, task, meta)
+            .await?;
+        if raw.get("task").is_some() {
+            return Ok(CallToolResult {
+                content: vec![json!({
+                    "type": "text",
+                    "text": "Task started"
+                })],
+                is_error: Some(false),
+                structured_content: Some(raw),
+            });
+        }
+        Ok(serde_json::from_value(raw)?)
+    }
+
+    pub async fn call_tool_raw(
+        &self,
+        name: &str,
+        arguments: serde_json::Value,
+        task: Option<serde_json::Value>,
+        meta: Option<serde_json::Value>,
+    ) -> Result<serde_json::Value> {
         let params = CallToolParams {
             name: name.to_string(),
             arguments,
+            task,
             meta,
         };
-        self.request(
+        self.request_value(
             "tools/call",
             Some(serde_json::to_value(params)?),
+            self.config.call_timeout,
+        )
+        .await
+    }
+
+    pub async fn get_task(&self, task_id: &str) -> Result<serde_json::Value> {
+        self.request_value(
+            "tasks/get",
+            Some(json!({ "taskId": task_id })),
+            self.config.call_timeout,
+        )
+        .await
+    }
+
+    pub async fn cancel_task(&self, task_id: &str) -> Result<serde_json::Value> {
+        self.request_value(
+            "tasks/cancel",
+            Some(json!({ "taskId": task_id })),
+            self.config.call_timeout,
+        )
+        .await
+    }
+
+    pub async fn get_task_result(&self, task_id: &str) -> Result<serde_json::Value> {
+        self.request_value(
+            "tasks/result",
+            Some(json!({ "taskId": task_id })),
             self.config.call_timeout,
         )
         .await
@@ -325,6 +407,7 @@ async fn run_inbound_driver(
     mut inbound: crate::rpc::dispatch::InboundRequests,
     events: Option<mpsc::UnboundedSender<McpClientEvent>>,
     elicitation: Option<Arc<dyn ElicitationHandler>>,
+    roots: Option<Arc<dyn RootsHandler>>,
 ) {
     while let Some(message) = inbound.recv().await {
         match message {
@@ -340,6 +423,18 @@ async fn run_inbound_driver(
                     Err(JsonRpcError {
                         code: METHOD_NOT_FOUND,
                         message: "elicitation is not supported".to_string(),
+                        data: None,
+                    })
+                };
+                let _ = handle.respond(req.id, result).await;
+            }
+            InboundMessage::Request(req) if req.method == "roots/list" => {
+                let result = if let Some(handler) = &roots {
+                    handler.handle_list().await
+                } else {
+                    Err(JsonRpcError {
+                        code: METHOD_NOT_FOUND,
+                        message: "roots are not supported".to_string(),
                         data: None,
                     })
                 };
@@ -389,6 +484,13 @@ async fn run_inbound_driver(
                     "notifications/cancelled" | "$/cancelRequest" => {
                         if let Some(tx) = &events {
                             let _ = tx.send(McpClientEvent::Cancelled {
+                                params: note.params.unwrap_or_else(|| json!({})),
+                            });
+                        }
+                    }
+                    "notifications/tasks/status" => {
+                        if let Some(tx) = &events {
+                            let _ = tx.send(McpClientEvent::TaskStatus {
                                 params: note.params.unwrap_or_else(|| json!({})),
                             });
                         }
@@ -526,7 +628,7 @@ mod tests {
     ) -> (McpClient, Arc<TokioMutex<Vec<Sent>>>) {
         let (transport, sent) = MockTransport::new(incoming);
         (
-            McpClient::with_transport(Box::new(transport), config, None, None),
+            McpClient::with_transport(Box::new(transport), config, None, None, None),
             sent,
         )
     }
@@ -578,7 +680,7 @@ mod tests {
     async fn sends_initialized_notification() {
         let (transport, sent) = MockTransport::new(vec![init_response()]);
         let mut client =
-            McpClient::with_transport(Box::new(transport), McpClientConfig::default(), None, None);
+            McpClient::with_transport(Box::new(transport), McpClientConfig::default(), None, None, None);
         client.initialize().await.unwrap();
         client.send_initialized_notification().await.unwrap();
         let sent = wait_for_sent_len(&sent, 2).await;
@@ -758,6 +860,7 @@ mod tests {
             McpClientConfig::default(),
             Some(events_tx),
             None,
+            None,
         );
         assert!(client.list_tools().await.unwrap().is_empty());
 
@@ -900,6 +1003,7 @@ mod tests {
                 init_timeout: Duration::from_millis(5),
                 call_timeout: Duration::from_millis(5),
             },
+            None,
             None,
             None,
         );
