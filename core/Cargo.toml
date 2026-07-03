@@ -16,6 +16,10 @@ path = "../fixtures/mock-mcp-server/src/main.rs"
 name = "mock-acp-agent"
 path = "../fixtures/mock-acp-agent/src/main.rs"
 
+[[bin]]
+name = "twenty-questions-mcp"
+path = "../fixtures/twenty-questions-mcp/src/main.rs"
+
 [dependencies]
 async-trait = "0.1"
 chrono = { version = "0.4", features = ["serde"] }

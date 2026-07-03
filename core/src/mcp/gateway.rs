@@ -5,15 +5,22 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use serde_json::Value;
-use tokio::sync::{Mutex, broadcast, mpsc};
+use tokio::sync::{Mutex, broadcast, mpsc, oneshot};
+use uuid::Uuid;
 
 use crate::config::{
     CredentialTarget, GatewayConfig, GatewayServerConfig, GatewayTransport, validate_app_config,
 };
-use crate::mcp::client::{McpClient, McpClientConfig, McpClientEvent};
+use crate::conversation::{ElicitationAction, ElicitationMode};
+use crate::mcp::client::{ElicitationHandler, McpClient, McpClientConfig, McpClientEvent};
+use crate::mcp::elicitation::{
+    elicitation_mode, elicitation_request_id, origin_tool_call_id_from_meta, parse_create_params,
+    result_for_action, schema_looks_secret,
+};
 use crate::mcp::protocol::{
     CallToolResult, GetPromptResult, Prompt, ReadResourceResult, Resource, Tool,
 };
+use crate::rpc::jsonrpc::{JsonRpcError, METHOD_NOT_FOUND};
 use crate::{CoreError, Result};
 
 #[async_trait]
@@ -97,6 +104,20 @@ pub enum GatewayEvent {
         server_id: String,
         message: String,
     },
+    ElicitationRequested {
+        origin_tool_call_id: Option<String>,
+        server_id: String,
+        request_id: String,
+        mode: ElicitationMode,
+        message: String,
+        schema: Option<Value>,
+        url: Option<String>,
+    },
+    ElicitationResolved {
+        server_id: String,
+        request_id: String,
+        action: ElicitationAction,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -112,10 +133,30 @@ pub struct McpGateway {
     credentials: Arc<dyn CredentialResolver>,
     events: Option<mpsc::UnboundedSender<GatewayEvent>>,
     event_broadcast: broadcast::Sender<GatewayEvent>,
+    elicitation: Arc<GatewayElicitationService>,
     clients: Mutex<HashMap<String, Arc<McpClient>>>,
     routes: Mutex<HashMap<String, ToolRoute>>,
     resource_routes: Mutex<HashMap<String, ResourceRoute>>,
     prompt_routes: Mutex<HashMap<String, PromptRoute>>,
+}
+
+#[derive(Debug, Clone)]
+struct ActiveToolCall {
+    origin_tool_call_id: Option<String>,
+}
+
+#[derive(Debug)]
+struct PendingElicitation {
+    server_id: String,
+    response_tx: oneshot::Sender<ElicitationAction>,
+    content_tx: oneshot::Sender<Option<Value>>,
+}
+
+struct GatewayElicitationService {
+    events: Option<mpsc::UnboundedSender<GatewayEvent>>,
+    event_broadcast: broadcast::Sender<GatewayEvent>,
+    active_tool_calls: Mutex<HashMap<String, ActiveToolCall>>,
+    pending_elicitations: Mutex<HashMap<String, PendingElicitation>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -163,16 +204,38 @@ impl McpGateway {
             ..Default::default()
         })?;
         let (event_broadcast, _) = broadcast::channel(256);
+        let elicitation = Arc::new(GatewayElicitationService {
+            events: events.clone(),
+            event_broadcast: event_broadcast.clone(),
+            active_tool_calls: Mutex::new(HashMap::new()),
+            pending_elicitations: Mutex::new(HashMap::new()),
+        });
         Ok(Self {
             config,
             credentials,
             events,
             event_broadcast,
+            elicitation,
             clients: Mutex::new(HashMap::new()),
             routes: Mutex::new(HashMap::new()),
             resource_routes: Mutex::new(HashMap::new()),
             prompt_routes: Mutex::new(HashMap::new()),
         })
+    }
+
+    pub async fn respond_elicitation(
+        &self,
+        request_id: &str,
+        action: ElicitationAction,
+        data: Option<Value>,
+    ) -> Result<()> {
+        self.elicitation
+            .respond(request_id, action, data)
+            .await
+    }
+
+    pub async fn cancel_pending_elicitations(&self) {
+        self.elicitation.cancel_all().await;
     }
 
     pub fn agent_cancelled(&self, params: Value) {
@@ -257,7 +320,11 @@ impl McpGateway {
             exposed_name: exposed_name.to_string(),
             original_name: route.original_name.clone(),
         });
-        client
+        let origin_tool_call_id = origin_tool_call_id_from_meta(meta.as_ref());
+        self.elicitation
+            .set_active_tool_call(&route.server_id, origin_tool_call_id)
+            .await;
+        let result = client
             .call_tool(&route.original_name, arguments, meta)
             .await
             .inspect_err(|err| {
@@ -265,7 +332,9 @@ impl McpGateway {
                     server_id: route.server_id.clone(),
                     message: err.to_string(),
                 });
-            })
+            });
+        self.elicitation.clear_active_tool_call(&route.server_id).await;
+        result
     }
 
     pub async fn list_resources(&self) -> Result<Vec<GatewayResource>> {
@@ -404,6 +473,10 @@ impl McpGateway {
             call_timeout: timeout,
         };
         let client_events = self.client_event_sender(&server.id);
+        let elicitation_handler = Arc::new(GatewayElicitationHandler {
+            server_id: server.id.clone(),
+            service: Arc::clone(&self.elicitation),
+        });
         match &server.transport {
             GatewayTransport::Stdio { command, args, env } => {
                 let mut resolved_env = env.clone();
@@ -426,6 +499,7 @@ impl McpGateway {
                     &resolved_env,
                     client_config,
                     client_events,
+                    Some(elicitation_handler),
                 )
                 .await
             }
@@ -453,6 +527,7 @@ impl McpGateway {
                     &resolved_headers,
                     client_config,
                     client_events,
+                    Some(elicitation_handler),
                 )
                 .await
             }
@@ -517,6 +592,149 @@ fn slug(value: &str) -> String {
         out = out.replace("__", "_");
     }
     out.trim_matches('_').to_string()
+}
+
+struct GatewayElicitationHandler {
+    server_id: String,
+    service: Arc<GatewayElicitationService>,
+}
+
+#[async_trait]
+impl ElicitationHandler for GatewayElicitationHandler {
+    async fn handle_create(&self, params: Value) -> std::result::Result<Value, JsonRpcError> {
+        self.service
+            .handle_create(&self.server_id, params)
+            .await
+    }
+}
+
+impl GatewayElicitationService {
+    fn emit(&self, event: GatewayEvent) {
+        let _ = self.event_broadcast.send(event.clone());
+        if let Some(tx) = &self.events {
+            let _ = tx.send(event);
+        }
+    }
+
+    async fn set_active_tool_call(&self, server_id: &str, origin_tool_call_id: Option<String>) {
+        self.active_tool_calls.lock().await.insert(
+            server_id.to_string(),
+            ActiveToolCall {
+                origin_tool_call_id,
+            },
+        );
+    }
+
+    async fn clear_active_tool_call(&self, server_id: &str) {
+        self.active_tool_calls.lock().await.remove(server_id);
+    }
+
+    async fn respond(
+        &self,
+        request_id: &str,
+        action: ElicitationAction,
+        data: Option<Value>,
+    ) -> Result<()> {
+        let pending = {
+            let mut map = self.pending_elicitations.lock().await;
+            map.remove(request_id)
+        };
+        let Some(pending) = pending else {
+            return Err(CoreError::Protocol(format!(
+                "unknown elicitation request: {request_id}"
+            )));
+        };
+        if matches!(action, ElicitationAction::Accept)
+            && let Some(data) = data
+        {
+            let _ = pending.content_tx.send(Some(data));
+        } else {
+            let _ = pending.content_tx.send(None);
+        }
+        pending
+            .response_tx
+            .send(action.clone())
+            .map_err(|_| CoreError::Protocol("elicitation waiter dropped".to_string()))?;
+        self.emit(GatewayEvent::ElicitationResolved {
+            server_id: pending.server_id,
+            request_id: request_id.to_string(),
+            action,
+        });
+        Ok(())
+    }
+
+    async fn cancel_all(&self) {
+        let pending: Vec<_> = self.pending_elicitations.lock().await.drain().collect();
+        for (request_id, entry) in pending {
+            let _ = entry.content_tx.send(None);
+            let _ = entry.response_tx.send(ElicitationAction::Cancel);
+            self.emit(GatewayEvent::ElicitationResolved {
+                server_id: entry.server_id,
+                request_id,
+                action: ElicitationAction::Cancel,
+            });
+        }
+    }
+
+    async fn handle_create(
+        &self,
+        server_id: &str,
+        params: Value,
+    ) -> std::result::Result<Value, JsonRpcError> {
+        let parsed = parse_create_params(params).map_err(|err| JsonRpcError {
+            code: -32602,
+            message: err.to_string(),
+            data: None,
+        })?;
+        let mode = elicitation_mode(&parsed);
+        if matches!(mode, ElicitationMode::Url) {
+            return Err(JsonRpcError {
+                code: METHOD_NOT_FOUND,
+                message: "url elicitation is not supported yet".to_string(),
+                data: None,
+            });
+        }
+        if let Some(schema) = parsed.requested_schema.as_ref()
+            && schema_looks_secret(schema)
+        {
+            return Ok(result_for_action(ElicitationAction::Decline, None));
+        }
+        let request_id = elicitation_request_id(&parsed, &Uuid::now_v7().to_string());
+        let origin_tool_call_id = self
+            .active_tool_calls
+            .lock()
+            .await
+            .get(server_id)
+            .and_then(|call| call.origin_tool_call_id.clone());
+        let (response_tx, response_rx) = oneshot::channel();
+        let (content_tx, content_rx) = oneshot::channel();
+        self.pending_elicitations.lock().await.insert(
+            request_id.clone(),
+            PendingElicitation {
+                server_id: server_id.to_string(),
+                response_tx,
+                content_tx,
+            },
+        );
+        self.emit(GatewayEvent::ElicitationRequested {
+            origin_tool_call_id,
+            server_id: server_id.to_string(),
+            request_id: request_id.clone(),
+            mode: mode.clone(),
+            message: parsed.message.clone(),
+            schema: parsed.requested_schema.clone(),
+            url: parsed.url.clone(),
+        });
+        let action = response_rx
+            .await
+            .unwrap_or(ElicitationAction::Cancel);
+        let content = if matches!(action, ElicitationAction::Accept) {
+            content_rx.await.ok().flatten()
+        } else {
+            None
+        };
+        Ok(result_for_action(action, content))
+    }
 }
 
 #[cfg(test)]

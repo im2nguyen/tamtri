@@ -48,6 +48,8 @@ interface TamtriCore {
   [Throws=TamtriError]
   void respond_permission(string conversation_id, string request_id, string option_id);
   [Throws=TamtriError]
+  void respond_elicitation(string conversation_id, string request_id, string action, string? data_json);
+  [Throws=TamtriError]
   void cancel_run(string conversation_id);
 };
 

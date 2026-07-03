@@ -1,5 +1,6 @@
 pub mod bridge;
 pub mod client;
+pub mod elicitation;
 pub mod endpoint;
 pub mod gateway;
 pub mod jsonrpc;

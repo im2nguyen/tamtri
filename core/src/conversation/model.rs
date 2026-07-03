@@ -77,6 +77,10 @@ pub enum ContentBlock {
     },
     ElicitationRequest {
         request_id: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        server_id: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        origin_tool_call_id: Option<String>,
         mode: ElicitationMode,
         message: String,
         #[serde(skip_serializing_if = "Option::is_none")]

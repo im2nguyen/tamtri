@@ -1,0 +1,223 @@
+use std::sync::Arc;
+use std::time::Duration;
+
+use serde_json::json;
+use tamtri_core::config::{GatewayConfig, GatewayScope, GatewayServerConfig, GatewayTransport};
+use tamtri_core::conversation::ElicitationAction;
+use tamtri_core::mcp::gateway::{GatewayEvent, McpGateway, NoCredentials};
+use tokio::sync::mpsc;
+
+fn stdio_server(id: &str, command: &str) -> GatewayServerConfig {
+    stdio_server_with_env(id, command, Vec::new())
+}
+
+fn stdio_server_with_env(
+    id: &str,
+    command: &str,
+    env: Vec<(String, String)>,
+) -> GatewayServerConfig {
+    GatewayServerConfig {
+        id: id.to_string(),
+        display_name: id.to_string(),
+        enabled: true,
+        scope: GatewayScope::Project,
+        transport: GatewayTransport::Stdio {
+            command: command.to_string(),
+            args: Vec::new(),
+            env,
+        },
+        timeout_secs: None,
+        credentials: Vec::new(),
+    }
+}
+
+#[tokio::test]
+async fn gateway_elicitation_form_accept_round_trip() {
+    let command = env!("CARGO_BIN_EXE_mock-mcp-server");
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    let gateway = Arc::new(
+        McpGateway::new(
+            GatewayConfig {
+                default_call_timeout_secs: 300,
+                servers: vec![stdio_server("mock", command)],
+            },
+            Arc::new(NoCredentials),
+            Some(tx),
+        )
+        .unwrap(),
+    );
+
+    let tools = gateway.list_tools().await.unwrap();
+    let exposed = tools
+        .iter()
+        .find(|tool| tool.original_name == "elicit")
+        .map(|tool| tool.exposed_name.clone())
+        .expect("elicit tool");
+
+    let gateway_for_call = Arc::clone(&gateway);
+    let call_task = tokio::spawn(async move {
+        gateway_for_call
+            .call_tool_with_meta(
+                &exposed,
+                json!({}),
+                Some(json!({"toolCallId": "tool-42"})),
+            )
+            .await
+    });
+
+    let requested = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let event = rx.recv().await.expect("gateway event");
+            if let GatewayEvent::ElicitationRequested {
+                request_id,
+                origin_tool_call_id,
+                message,
+                ..
+            } = event
+            {
+                return (request_id, origin_tool_call_id, message);
+            }
+        }
+    })
+    .await
+    .expect("elicitation request timed out");
+
+    assert_eq!(requested.1.as_deref(), Some("tool-42"));
+    assert!(requested.2.contains("name"));
+
+    gateway
+        .respond_elicitation(
+            &requested.0,
+            ElicitationAction::Accept,
+            Some(json!({"name": "tamtri"})),
+        )
+        .await
+        .unwrap();
+
+    let result = call_task.await.unwrap().unwrap();
+    assert_eq!(result.structured_content.unwrap()["name"], "tamtri");
+}
+
+#[tokio::test]
+async fn gateway_elicitation_decline_round_trip() {
+    let command = env!("CARGO_BIN_EXE_mock-mcp-server");
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    let gateway = Arc::new(
+        McpGateway::new(
+            GatewayConfig {
+                default_call_timeout_secs: 300,
+                servers: vec![stdio_server("mock", command)],
+            },
+            Arc::new(NoCredentials),
+            Some(tx),
+        )
+        .unwrap(),
+    );
+
+    let exposed = gateway
+        .list_tools()
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|tool| tool.original_name == "elicit")
+        .map(|tool| tool.exposed_name)
+        .expect("elicit tool");
+
+    let gateway_for_call = Arc::clone(&gateway);
+    let call_task = tokio::spawn(async move { gateway_for_call.call_tool(&exposed, json!({})).await });
+
+    let request_id = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if let Some(GatewayEvent::ElicitationRequested { request_id, .. }) = rx.recv().await {
+                return request_id;
+            }
+        }
+    })
+    .await
+    .expect("elicitation request timed out");
+
+    gateway
+        .respond_elicitation(&request_id, ElicitationAction::Decline, None)
+        .await
+        .unwrap();
+
+    let result = call_task.await.unwrap().unwrap();
+    assert!(
+        result.content[0]["text"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("decline")
+    );
+}
+
+#[tokio::test]
+async fn gateway_elicitation_twenty_questions_form_accept_round_trip() {
+    let command = env!("CARGO_BIN_EXE_twenty-questions-mcp");
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    let gateway = Arc::new(
+        McpGateway::new(
+            GatewayConfig {
+                default_call_timeout_secs: 300,
+                servers: vec![stdio_server_with_env(
+                    "twenty_questions",
+                    command,
+                    vec![("TWENTY_QUESTIONS_SEED".to_string(), "42".to_string())],
+                )],
+            },
+            Arc::new(NoCredentials),
+            Some(tx),
+        )
+        .unwrap(),
+    );
+
+    let start = gateway
+        .call_tool("twenty_questions__start_game", json!({}))
+        .await
+        .unwrap();
+    let game_id = start.structured_content.unwrap()["gameId"]
+        .as_u64()
+        .expect("game id");
+
+    let gateway_for_call = Arc::clone(&gateway);
+    let call_task = tokio::spawn(async move {
+        gateway_for_call
+            .call_tool(
+                "twenty_questions__submit_question",
+                json!({ "gameId": game_id }),
+            )
+            .await
+    });
+
+    let request_id = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if let Some(GatewayEvent::ElicitationRequested {
+                request_id,
+                message,
+                schema,
+                ..
+            }) = rx.recv().await
+            {
+                assert!(message.contains("yes/no"));
+                assert!(schema.is_some());
+                return request_id;
+            }
+        }
+    })
+    .await
+    .expect("elicitation request timed out");
+
+    gateway
+        .respond_elicitation(
+            &request_id,
+            ElicitationAction::Accept,
+            Some(json!({ "question": "Is it an animal?" })),
+        )
+        .await
+        .unwrap();
+
+    let result = call_task.await.unwrap().unwrap();
+    let structured = result.structured_content.unwrap();
+    assert_eq!(structured["answer"], "no");
+    assert_eq!(structured["question"], "Is it an animal?");
+    assert_eq!(structured["turnsRemaining"], 19);
+}

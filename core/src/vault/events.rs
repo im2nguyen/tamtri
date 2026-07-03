@@ -38,6 +38,8 @@ pub enum EventKind {
     GatewayCancellation,
     GatewayCredentialInjected,
     GatewayDownstreamError,
+    ElicitationRequested,
+    ElicitationResolved,
     HarnessSpawned,
     HarnessExited,
     Error,

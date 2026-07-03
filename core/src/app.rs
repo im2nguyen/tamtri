@@ -13,12 +13,13 @@ use crate::artifact::{detect_mime, verify_inline_artifact, ArtifactSnapshot, Art
 use crate::config::load_app_config;
 use crate::conversation::reduce::TurnReducer;
 use crate::conversation::{
-    ContentBlock, Conversation, Id, McpServerRef, Message, Role, WorkingDir,
+    ContentBlock, Conversation, ElicitationAction, Id, McpServerRef, Message, Role, WorkingDir,
 };
 use crate::harness::acp::{AcpAdapter, AgentLaunchSpec};
 use crate::harness::{
     ContextSeed, ConversationContext, HarnessAdapter, HarnessEvent, RunControl, TurnInput,
 };
+use crate::mcp::elicitation::sanitize_transcript_data;
 use crate::mcp::endpoint::{GatewayEndpoint, start_loopback_gateway};
 use crate::mcp::gateway::{GatewayEvent, McpGateway, MemoryCredentials};
 use crate::vault::events::{Event, EventKind};
@@ -101,12 +102,19 @@ impl From<CoreError> for TamtriError {
     }
 }
 
+#[derive(Clone)]
+struct ActiveRun {
+    control: RunControl,
+    gateway: Arc<McpGateway>,
+    gateway_blocks: Arc<Mutex<Vec<ContentBlock>>>,
+}
+
 #[derive(uniffi::Object)]
 pub struct TamtriCore {
     vault: Arc<FilesystemVault>,
     runtime: Runtime,
     adapters: Arc<Mutex<HashMap<String, Arc<dyn HarnessAdapter>>>>,
-    active_runs: Arc<Mutex<HashMap<Id, RunControl>>>,
+    active_runs: Arc<Mutex<HashMap<Id, ActiveRun>>>,
     credentials: Arc<MemoryCredentials>,
     observer: Arc<dyn ConversationObserver>,
     conversation_cache: Arc<Mutex<HashMap<Id, CachedConversationDto>>>,
@@ -237,6 +245,17 @@ impl TamtriCore {
         option_id: String,
     ) -> FfiResult<()> {
         self.respond_permission_inner(&conversation_id, &request_id, &option_id)
+            .map_err(ffi_err)
+    }
+
+    pub fn respond_elicitation(
+        &self,
+        conversation_id: String,
+        request_id: String,
+        action: String,
+        data_json: Option<String>,
+    ) -> FfiResult<()> {
+        self.respond_elicitation_inner(&conversation_id, &request_id, &action, data_json.as_deref())
             .map_err(ffi_err)
     }
 
@@ -455,12 +474,19 @@ impl TamtriCore {
         let active_runs = Arc::clone(&self.active_runs);
         let observer = Arc::clone(&self.observer);
         let conversation_cache = Arc::clone(&self.conversation_cache);
+        let gateway_blocks = Arc::new(Mutex::new(Vec::<ContentBlock>::new()));
+        let gateway_for_run = Arc::clone(&gateway);
         self.runtime.spawn(async move {
             let gateway_vault = Arc::clone(&vault);
             let gateway_observer = Arc::clone(&observer);
+            let gateway_blocks_for_events = Arc::clone(&gateway_blocks);
             let mut gateway_event_rx = gateway_event_rx;
             let gateway_event_task = tokio::spawn(async move {
                 while let Some(event) = gateway_event_rx.recv().await {
+                    record_gateway_content_block(
+                        &gateway_blocks_for_events,
+                        &event,
+                    );
                     let _ = append_event_for_gateway_event(&gateway_vault, id, &event);
                     observer_emit_gateway(&gateway_observer, id, &event);
                 }
@@ -469,7 +495,14 @@ impl TamtriCore {
             match run {
                 Ok(mut run) => {
                     if let Ok(mut runs) = active_runs.lock() {
-                        runs.insert(id, run.control.clone());
+                        runs.insert(
+                            id,
+                            ActiveRun {
+                                control: run.control.clone(),
+                                gateway: Arc::clone(&gateway_for_run),
+                                gateway_blocks: Arc::clone(&gateway_blocks),
+                            },
+                        );
                     }
                     let mut reducer = TurnReducer::new(harness_id.clone());
                     while let Some(event) = run.events.recv().await {
@@ -530,7 +563,11 @@ impl TamtriCore {
                                     );
                                 }
                             }
-                            if !message.content.is_empty() {
+                            if !message.content.is_empty() || !gateway_blocks.lock().unwrap().is_empty()
+                            {
+                                message
+                                    .content
+                                    .extend(gateway_blocks.lock().unwrap().drain(..));
                                 let _ = vault.append_message(id, &message);
                                 if let Ok(mut cache) = conversation_cache.lock() {
                                     cache.remove(&id);
@@ -562,6 +599,7 @@ impl TamtriCore {
                 }
             }
             gateway_endpoint.shutdown().await;
+            gateway_for_run.cancel_pending_elicitations().await;
             gateway_event_task.abort();
         });
         Ok(())
@@ -579,22 +617,59 @@ impl TamtriCore {
             .lock()
             .map_err(|_| CoreError::Protocol("run registry lock poisoned".to_string()))?
             .get(&id)
-            .cloned()
+            .map(|run| run.control.clone())
             .ok_or(CoreError::NotFound(id))?;
         self.runtime
             .block_on(control.respond_permission(request_id, option_id))
     }
 
-    pub fn cancel_run_inner(&self, conversation_id: &str) -> Result<()> {
+    pub fn respond_elicitation_inner(
+        &self,
+        conversation_id: &str,
+        request_id: &str,
+        action: &str,
+        data_json: Option<&str>,
+    ) -> Result<()> {
         let id = parse_id(conversation_id)?;
-        let control = self
+        let action = parse_elicitation_action(action)?;
+        let data = match data_json {
+            Some(raw) if !raw.trim().is_empty() => Some(serde_json::from_str(raw)?),
+            _ => None,
+        };
+        let run = self
             .active_runs
             .lock()
             .map_err(|_| CoreError::Protocol("run registry lock poisoned".to_string()))?
             .get(&id)
             .cloned()
             .ok_or(CoreError::NotFound(id))?;
-        self.runtime.block_on(control.cancel())
+        self.runtime
+            .block_on(run.gateway.respond_elicitation(request_id, action.clone(), data.clone()))?;
+        let response_data = data.map(|value| sanitize_transcript_data(&value));
+        run.gateway_blocks
+            .lock()
+            .map_err(|_| CoreError::Protocol("gateway block lock poisoned".to_string()))?
+            .push(ContentBlock::ElicitationResponse {
+                request_id: request_id.to_string(),
+                action,
+                data: response_data,
+            });
+        Ok(())
+    }
+
+    pub fn cancel_run_inner(&self, conversation_id: &str) -> Result<()> {
+        let id = parse_id(conversation_id)?;
+        let run = self
+            .active_runs
+            .lock()
+            .map_err(|_| CoreError::Protocol("run registry lock poisoned".to_string()))?
+            .get(&id)
+            .cloned()
+            .ok_or(CoreError::NotFound(id))?;
+        self.runtime.block_on(async {
+            run.gateway.cancel_pending_elicitations().await;
+            run.control.cancel().await
+        })
     }
 
     pub fn list_gateway_servers_inner(&self) -> Result<Vec<GatewayServerDto>> {
@@ -856,6 +931,38 @@ fn append_event_for_gateway_event(
             EventKind::GatewayDownstreamError,
             json!({ "server_id": server_id, "message": message }),
         ),
+        GatewayEvent::ElicitationRequested {
+            server_id,
+            request_id,
+            mode,
+            message,
+            schema,
+            url,
+            origin_tool_call_id,
+        } => (
+            EventKind::ElicitationRequested,
+            json!({
+                "server_id": server_id,
+                "request_id": request_id,
+                "mode": mode,
+                "message": message,
+                "schema": schema,
+                "url": url,
+                "origin_tool_call_id": origin_tool_call_id,
+            }),
+        ),
+        GatewayEvent::ElicitationResolved {
+            server_id,
+            request_id,
+            action,
+        } => (
+            EventKind::ElicitationResolved,
+            json!({
+                "server_id": server_id,
+                "request_id": request_id,
+                "action": action,
+            }),
+        ),
     };
     vault.append_event(id, &Event::new(kind, payload))
 }
@@ -928,6 +1035,47 @@ fn gateway_event_kind(event: &GatewayEvent) -> &'static str {
         GatewayEvent::Log { .. } => "gateway_log",
         GatewayEvent::Cancellation { .. } => "gateway_cancellation",
         GatewayEvent::DownstreamError { .. } => "gateway_downstream_error",
+        GatewayEvent::ElicitationRequested { .. } => "elicitation_requested",
+        GatewayEvent::ElicitationResolved { .. } => "elicitation_resolved",
+    }
+}
+
+fn record_gateway_content_block(blocks: &Mutex<Vec<ContentBlock>>, event: &GatewayEvent) {
+    let GatewayEvent::ElicitationRequested {
+        request_id,
+        server_id,
+        origin_tool_call_id,
+        mode,
+        message,
+        schema,
+        url,
+        ..
+    } = event
+    else {
+        return;
+    };
+    let Ok(mut blocks) = blocks.lock() else {
+        return;
+    };
+    blocks.push(ContentBlock::ElicitationRequest {
+        request_id: request_id.clone(),
+        server_id: Some(server_id.clone()),
+        origin_tool_call_id: origin_tool_call_id.clone(),
+        mode: mode.clone(),
+        message: message.clone(),
+        schema: schema.clone(),
+        url: url.clone(),
+    });
+}
+
+fn parse_elicitation_action(action: &str) -> Result<ElicitationAction> {
+    match action {
+        "accept" => Ok(ElicitationAction::Accept),
+        "decline" => Ok(ElicitationAction::Decline),
+        "cancel" => Ok(ElicitationAction::Cancel),
+        _ => Err(CoreError::Protocol(format!(
+            "unknown elicitation action: {action}"
+        ))),
     }
 }
 
