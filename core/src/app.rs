@@ -13,8 +13,7 @@ use uuid::Uuid;
 
 use crate::artifact::{detect_mime, verify_inline_artifact, ArtifactSnapshot, ArtifactSnapshotter, verify_attachment};
 use crate::config::{
-    load_app_config, replace_gateway_servers, save_app_config, seed_agent_roster_if_empty,
-    GatewayScope, GatewayServerConfig,
+    load_app_config, replace_gateway_servers, save_app_config, GatewayScope, GatewayServerConfig,
     GatewayTransport, OAuthConfig,
 };
 use crate::harness::health::{health_entries_from_roster, it_admin_checklist, HarnessHealthStatus};
@@ -300,7 +299,6 @@ impl TamtriCore {
     pub fn new_inner(vault_path: PathBuf, observer: Arc<dyn ConversationObserver>) -> Result<Self> {
         let runtime = Builder::new_multi_thread().enable_all().build()?;
         let vault = Arc::new(FilesystemVault::new(vault_path.clone())?);
-        seed_agent_roster_if_empty(&vault_path)?;
         let config = load_app_config(&vault_path)?;
         let mut adapters: HashMap<String, Arc<dyn HarnessAdapter>> = HashMap::new();
         for spec in &config.agent_roster {
@@ -1803,21 +1801,9 @@ impl TamtriCore {
             .collect())
     }
 
-    fn registered_agent_launch_specs(&self) -> Result<Vec<AgentLaunchSpec>> {
-        let adapters = self
-            .adapters
-            .lock()
-            .map_err(|_| CoreError::Protocol("adapter registry lock poisoned".to_string()))?;
-        let mut specs = adapters
-            .values()
-            .filter_map(|adapter| adapter.agent_launch_spec())
-            .collect::<Vec<_>>();
-        specs.sort_by(|left, right| left.display_name.cmp(&right.display_name));
-        Ok(specs)
-    }
-
     pub fn list_harness_health_inner(&self) -> Result<Vec<HarnessHealthEntryDto>> {
-        Ok(health_entries_from_roster(&self.registered_agent_launch_specs()?)
+        let config = load_app_config(self.vault.root())?;
+        Ok(health_entries_from_roster(&config.agent_roster)
             .into_iter()
             .map(|entry| HarnessHealthEntryDto {
                 id: entry.id,
@@ -1834,8 +1820,9 @@ impl TamtriCore {
     }
 
     pub fn harness_health_checklist_inner(&self) -> Result<String> {
+        let config = load_app_config(self.vault.root())?;
         Ok(it_admin_checklist(&health_entries_from_roster(
-            &self.registered_agent_launch_specs()?,
+            &config.agent_roster,
         )))
     }
 
