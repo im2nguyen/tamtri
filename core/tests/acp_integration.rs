@@ -2,6 +2,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
+use tamtri_core::app::{ConversationObserver, TamtriCore, UiEvent};
 use tamtri_core::config::GatewayConfig;
 use tamtri_core::conversation::{ContentBlock, Message, Role, WorkingDir};
 use tamtri_core::harness::acp::{AcpAdapter, AgentLaunchSpec};
@@ -176,7 +177,7 @@ async fn cancel_sends_session_cancel() {
 #[test]
 fn mock_acp_agent_calls_gateway_tool() {
     let temp = tempfile::tempdir().expect("tempdir");
-    let observer = Arc::new(RecordingObserver::default());
+    let observer = Arc::new(RecordingObserver);
     let core = TamtriCore::new(temp.path().to_string_lossy().into_owned(), observer)
         .expect("core");
 

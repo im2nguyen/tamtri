@@ -15,7 +15,10 @@ extension TranscriptContentBlock {
         sha256: String? = nil,
         serverId: String? = nil,
         templateRef: String? = nil,
-        uri: String? = nil
+        uri: String? = nil,
+        taskId: String? = nil,
+        taskStatus: String? = nil,
+        taskTitle: String? = nil
     ) -> TranscriptContentBlock {
         TranscriptContentBlock(
             type: type,
@@ -41,9 +44,9 @@ extension TranscriptContentBlock {
             uri: uri,
             templateRef: templateRef,
             state: nil,
-            taskId: nil,
-            taskStatus: nil,
-            taskTitle: nil,
+            taskId: taskId,
+            taskStatus: taskStatus,
+            taskTitle: taskTitle,
             taskResultSummary: nil
         )
     }
@@ -117,6 +120,24 @@ final class Milestone7StateTests: XCTestCase {
         XCTAssertEqual(groups.count, 1)
         XCTAssertEqual(groups[0].nested.count, 1)
         XCTAssertEqual(groups[0].nested[0].type, "app_resource")
+    }
+
+    func testTranscriptContentGroupingNestsTaskRefUnderToolCall() {
+        let blocks = [
+            TranscriptContentBlock.fixture(type: "tool_call", name: "run_task", callId: "tool-2"),
+            TranscriptContentBlock.fixture(
+                type: "task_ref",
+                originToolCallId: "tool-2",
+                taskId: "task-1",
+                taskStatus: "completed",
+                taskTitle: "Import CSV"
+            ),
+        ]
+
+        let groups = TranscriptContentGrouping.build(from: blocks)
+        XCTAssertEqual(groups.count, 1)
+        XCTAssertEqual(groups[0].nested.count, 1)
+        XCTAssertEqual(groups[0].nested[0].taskId, "task-1")
     }
 
     func testTranscriptContentGroupingNestsArtifactUnderToolCall() {

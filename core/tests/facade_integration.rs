@@ -119,7 +119,7 @@ fn facade_run_commits_exactly_one_assistant_message() {
         "turn_ended",
     ] {
         assert!(
-            kinds.iter().any(|kind| *kind == expected),
+            kinds.contains(&expected),
             "missing events.jsonl receipt: {expected}"
         );
     }
@@ -186,7 +186,7 @@ fn events_jsonl_full_run_receipts() {
         "turn_ended",
     ] {
         assert!(
-            kinds.iter().any(|kind| *kind == expected),
+            kinds.contains(&expected),
             "missing events.jsonl receipt: {expected}"
         );
     }
