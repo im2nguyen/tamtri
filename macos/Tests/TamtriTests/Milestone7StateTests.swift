@@ -76,6 +76,25 @@ final class Milestone7StateTests: XCTestCase {
             bookmarkMissing: true
         )
         XCTAssertTrue(root.bookmarkMissing)
+        XCTAssertTrue(RootRowViewModel.showsRepickButton(bookmarkMissing: root.bookmarkMissing))
+        XCTAssertEqual(
+            RootRowViewModel.warningMessage(bookmarkMissing: true),
+            RootBookmarkStatus.missingBookmarkWarning
+        )
+        XCTAssertEqual(
+            RootBookmarkStatus.missingBookmarkError(rootName: root.name),
+            "Missing access bookmark for root \"Reports\". Re-pick the folder in conversation settings."
+        )
+    }
+
+    func testKnowledgeBaseRootNeverMarkedBookmarkMissing() {
+        XCTAssertFalse(
+            RootBookmarkStatus.isBookmarkMissing(
+                kind: "knowledge_base",
+                conversationId: "conv-1",
+                rootId: "kb-1"
+            )
+        )
     }
 
     func testRootBookmarkDeletedSurfacesMissingFlag() throws {
@@ -84,25 +103,127 @@ final class Milestone7StateTests: XCTestCase {
         defer { try? RootBookmarkStore.deleteBookmark(conversationId: conversationId, rootId: rootId) }
 
         try RootBookmarkStore.saveBookmark(data: Data("mock-bookmark".utf8), conversationId: conversationId, rootId: rootId)
-        XCTAssertTrue(RootBookmarkStore.hasBookmark(conversationId: conversationId, rootId: rootId))
+        XCTAssertFalse(
+            RootBookmarkStatus.isBookmarkMissing(kind: "filesystem", conversationId: conversationId, rootId: rootId)
+        )
 
         try RootBookmarkStore.deleteBookmark(conversationId: conversationId, rootId: rootId)
-        XCTAssertFalse(RootBookmarkStore.hasBookmark(conversationId: conversationId, rootId: rootId))
+        XCTAssertTrue(
+            RootBookmarkStatus.isBookmarkMissing(kind: "filesystem", conversationId: conversationId, rootId: rootId)
+        )
+    }
 
-        let bookmarkMissing = !RootBookmarkStore.hasBookmark(conversationId: conversationId, rootId: rootId)
-        XCTAssertTrue(bookmarkMissing, "deleted bookmark should map to bookmarkMissing in the roots UI")
+    func testFilesystemRootAttachFlowClearsMissingFlagAfterBookmarkSave() throws {
+        let conversationId = "conv-\(UUID().uuidString)"
+        let rootId = "root-\(UUID().uuidString)"
+        defer { try? RootBookmarkStore.deleteBookmark(conversationId: conversationId, rootId: rootId) }
+
+        XCTAssertTrue(
+            RootBookmarkStatus.isBookmarkMissing(kind: "filesystem", conversationId: conversationId, rootId: rootId)
+        )
+        try RootBookmarkStore.saveBookmark(data: Data("attach-flow".utf8), conversationId: conversationId, rootId: rootId)
+        XCTAssertFalse(
+            RootBookmarkStatus.isBookmarkMissing(kind: "filesystem", conversationId: conversationId, rootId: rootId)
+        )
+    }
+
+    @MainActor
+    func testComposerAttachRootOpensRootsSheet() async throws {
+        let store = AppStore(core: MockCoreClient())
+        let summary = ConversationSummary(id: "sample", title: "Report from CSV", updatedAt: "now")
+        store.selectConversation(summary)
+        XCTAssertFalse(store.showConversationRoots)
+        store.presentConversationRoots()
+        XCTAssertTrue(store.showConversationRoots)
+    }
+
+    func testAppPanelViewModelOfflineAndLoadedSnapshots() {
+        XCTAssertEqual(AppPanelViewModel.accessibilityValue(templateLoaded: false), "offline")
+        XCTAssertEqual(AppPanelViewModel.accessibilityValue(templateLoaded: true), "loaded")
+        XCTAssertEqual(AppPanelViewModel.accessibilityLabel(title: "ui://demo"), "MCP App ui://demo")
+        XCTAssertTrue(AppPanelViewModel.offlineMessage.contains("offline"))
+        XCTAssertTrue(AppPanelViewModel.offlineMessage.contains("gateway"))
+    }
+
+    func testAppBridgeConsentViewModelSnapshot() throws {
+        let payload = #"{"request_id":"bridge-1","server_id":"m7-app","app_id":"ui://demo","template_ref":"ui://demo","summary":"Call echo","options":[{"id":"deny","label":"Deny"}]}"#
+        let request = try JSONDecoder().decode(AppBridgeConsentPayload.self, from: Data(payload.utf8))
+        XCTAssertEqual(AppBridgeConsentViewModel.headline, "App action needs consent")
+        XCTAssertEqual(
+            AppBridgeConsentViewModel.serverAttribution(serverId: request.serverId, appId: request.appId),
+            "Server: m7-app · App: ui://demo"
+        )
+    }
+
+    func testTaskLiveCardViewModelRunningCompletedFailedSnapshots() {
+        let running = LiveTaskState(payloadJSON: #"{"state":{"task_id":"t-1","server_id":"tasks","status":"running","title":"Import CSV","progress":{"message":"Reading rows"}}}"#)
+        XCTAssertEqual(TaskLiveCardViewModel.statusIcon(for: running.status), "clock")
+        XCTAssertTrue(TaskLiveCardViewModel.showsCancelButton(for: running))
+        XCTAssertEqual(TaskLiveCardViewModel.accessibilityStatus(for: running), "running, Reading rows")
+
+        let completed = LiveTaskState(payloadJSON: #"{"state":{"task_id":"t-1","status":"completed","title":"Import CSV"}}"#)
+        XCTAssertEqual(TaskLiveCardViewModel.statusIcon(for: completed.status), "checkmark.circle")
+        XCTAssertFalse(TaskLiveCardViewModel.showsCancelButton(for: completed))
+
+        let failed = LiveTaskState(payloadJSON: #"{"state":{"task_id":"t-2","status":"failed","title":"Import CSV"}}"#)
+        XCTAssertEqual(TaskLiveCardViewModel.statusIcon(for: failed.status), "xmark.circle")
+        XCTAssertFalse(TaskLiveCardViewModel.showsCancelButton(for: failed))
+    }
+
+    func testTaskRefCardViewModelCompletedSnapshot() {
+        let block = TranscriptContentBlock.fixture(
+            type: "task_ref",
+            taskId: "task-42",
+            taskStatus: "completed",
+            taskTitle: "Build report"
+        )
+        XCTAssertEqual(TaskRefCardViewModel.title(block: block), "Build report")
+        XCTAssertEqual(
+            TaskRefCardViewModel.accessibilityValue(status: "completed", resultSummary: "Done"),
+            "completed, Done"
+        )
+    }
+
+    func testRootRowViewModelAttachedAndMissingSnapshots() {
+        let attached = RootRecord(
+            id: "root-1",
+            name: "Data",
+            uri: "file:///tmp/data",
+            kind: "filesystem",
+            scope: "conversation",
+            bookmarkMissing: false
+        )
+        XCTAssertFalse(RootRowViewModel.showsRepickButton(bookmarkMissing: attached.bookmarkMissing))
+        XCTAssertNil(RootRowViewModel.warningMessage(bookmarkMissing: attached.bookmarkMissing))
+
+        let missing = RootRecord(
+            id: "root-2",
+            name: "Reports",
+            uri: "file:///tmp/reports",
+            kind: "filesystem",
+            scope: "conversation",
+            bookmarkMissing: true
+        )
+        XCTAssertTrue(RootRowViewModel.showsRepickButton(bookmarkMissing: missing.bookmarkMissing))
+        XCTAssertEqual(RootRowViewModel.warningMessage(bookmarkMissing: true), RootBookmarkStatus.missingBookmarkWarning)
+    }
+
+    func testCapabilityBadgeSamplingDeclinedSnapshot() {
+        XCTAssertEqual(CapabilityBadgeViewModel.effectiveStatus(title: "Sampling", status: "supported"), "declined")
+        XCTAssertEqual(
+            CapabilityBadgeViewModel.accessibilityText(title: "Sampling", status: "supported"),
+            "Sampling declined by design. The model lives in the harness."
+        )
+        XCTAssertEqual(CapabilityBadgeViewModel.effectiveStatus(title: "Apps", status: "supported"), "supported")
+        XCTAssertEqual(
+            CapabilityBadgeViewModel.accessibilityText(title: "Apps", status: "server_only"),
+            "Apps server only"
+        )
     }
 
     func testAppOfflineAccessibilitySemantics() {
-        func accessibilityValue(templateLoaded: Bool) -> String {
-            templateLoaded ? "loaded" : "offline"
-        }
-        XCTAssertEqual(accessibilityValue(templateLoaded: false), "offline")
-        XCTAssertEqual(accessibilityValue(templateLoaded: true), "loaded")
-
-        let offlineCopy = "App offline — template unavailable without an active gateway run."
-        XCTAssertTrue(offlineCopy.contains("offline"))
-        XCTAssertTrue(offlineCopy.contains("gateway"))
+        XCTAssertEqual(AppPanelViewModel.accessibilityValue(templateLoaded: false), "offline")
+        XCTAssertEqual(AppPanelViewModel.accessibilityValue(templateLoaded: true), "loaded")
     }
 
     func testLiveEventGroupingNestsTaskUnderToolCall() {

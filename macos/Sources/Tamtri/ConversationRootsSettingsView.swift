@@ -158,7 +158,7 @@ private struct RootRow: View {
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
-                if root.bookmarkMissing {
+                if RootRowViewModel.showsRepickButton(bookmarkMissing: root.bookmarkMissing) {
                     Button("Re-pick Folder", action: onRepick)
                         .help("Restore security-scoped access to this root")
                 }
@@ -168,14 +168,14 @@ private struct RootRow: View {
                 .labelStyle(.iconOnly)
                 .help("Remove root")
             }
-            if root.bookmarkMissing {
+            if let warning = RootRowViewModel.warningMessage(bookmarkMissing: root.bookmarkMissing) {
                 Label(
-                    "Missing access bookmark. Re-pick the folder to restore gateway access.",
+                    warning,
                     systemImage: "exclamationmark.triangle.fill"
                 )
                 .font(.callout)
                 .foregroundStyle(.orange)
-                .accessibilityLabel("Missing bookmark for root \(root.name)")
+                .accessibilityLabel(RootRowViewModel.accessibilityLabel(rootName: root.name, bookmarkMissing: true))
             }
         }
         .padding(10)

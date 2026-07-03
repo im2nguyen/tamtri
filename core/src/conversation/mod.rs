@@ -9,4 +9,7 @@ pub use model::{
     ARTIFACT_INLINE_MAX_BYTES, ContentBlock, Conversation, ElicitationAction, ElicitationMode, Id,
     McpServerRef, Message, Role, Root, RootKind, RootScope, TaskStatus, WorkingDir,
 };
-pub use roots::{attach_root, is_path_under_any_root, is_path_under_root, remove_root, validate_root};
+pub use roots::{
+    attach_root, filesystem_root_requires_bookmark, is_path_under_any_root, is_path_under_root,
+    missing_bookmark_error_state, remove_root, validate_root,
+};

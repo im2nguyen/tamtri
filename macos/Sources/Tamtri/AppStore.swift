@@ -589,6 +589,10 @@ final class AppStore: ObservableObject {
         try await core.listRoots(conversationId: conversationId)
     }
 
+    func presentConversationRoots() {
+        showConversationRoots = true
+    }
+
     func attachRoot(conversationId: String, name: String, uri: String, kind: String, scope: String) async throws -> RootRecord {
         try await core.attachRoot(conversationId: conversationId, name: name, uri: uri, kind: kind, scope: scope)
     }

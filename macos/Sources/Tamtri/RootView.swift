@@ -538,14 +538,14 @@ struct AppPanelView: View {
                     Text(loadError)
                         .foregroundStyle(.secondary)
                 } else {
-                    Text("App offline — template unavailable without an active gateway run.")
+                    Text(AppPanelViewModel.offlineMessage)
                         .foregroundStyle(.secondary)
                 }
             }
         }
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("MCP App \(appTitle)")
-        .accessibilityValue(template == nil ? "offline" : "loaded")
+        .accessibilityLabel(AppPanelViewModel.accessibilityLabel(title: appTitle))
+        .accessibilityValue(AppPanelViewModel.accessibilityValue(templateLoaded: template != nil))
         .task(id: appLoadKey) {
             await loadTemplate()
         }
@@ -615,7 +615,7 @@ struct TaskLiveCard: View {
             if let progress = state.progressMessage, !progress.isEmpty {
                 Text(progress)
             }
-            if !state.isTerminal {
+            if TaskLiveCardViewModel.showsCancelButton(for: state) {
                 Button("Cancel task") {
                     store.cancelTask(conversationId: conversationId, taskId: state.taskId)
                 }
@@ -631,23 +631,15 @@ struct TaskLiveCard: View {
     }
 
     private var taskTitle: String { state.title ?? state.taskId }
-    private var statusIcon: String {
-        switch state.status {
-        case "completed": "checkmark.circle"
-        case "failed": "xmark.circle"
-        default: "clock"
-        }
-    }
-    private var accessibilityStatus: String {
-        [state.status, state.progressMessage].compactMap { $0 }.joined(separator: ", ")
-    }
+    private var statusIcon: String { TaskLiveCardViewModel.statusIcon(for: state.status) }
+    private var accessibilityStatus: String { TaskLiveCardViewModel.accessibilityStatus(for: state) }
 }
 
 struct TaskRefCard: View {
     let block: TranscriptContentBlock
 
     var body: some View {
-        CompactCard(title: block.taskTitle ?? block.taskId ?? "Task", systemImage: "checklist") {
+        CompactCard(title: TaskRefCardViewModel.title(block: block), systemImage: "checklist") {
             Text("Status: \(block.taskStatus ?? "unknown")")
             if let summary = block.taskResultSummary, !summary.isEmpty {
                 Text(summary)
@@ -657,7 +649,7 @@ struct TaskRefCard: View {
             }
         }
         .accessibilityLabel("Task \(block.taskId ?? "unknown")")
-        .accessibilityValue([block.taskStatus, block.taskResultSummary].compactMap { $0 }.joined(separator: ", "))
+        .accessibilityValue(TaskRefCardViewModel.accessibilityValue(status: block.taskStatus, resultSummary: block.taskResultSummary))
     }
 }
 
@@ -670,12 +662,12 @@ struct AppBridgeConsentCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Label("App action needs consent", systemImage: "hand.raised")
+            Label(AppBridgeConsentViewModel.headline, systemImage: "hand.raised")
                 .font(.headline)
             if let request {
                 Text(request.summary)
                     .textSelection(.enabled)
-                Text("Server: \(request.serverId) · App: \(request.appId)")
+                Text(AppBridgeConsentViewModel.serverAttribution(serverId: request.serverId, appId: request.appId))
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -1361,12 +1353,12 @@ struct ElicitationCard: View {
                     url: request.url
                 )
             )
-        } else if ElicitationSchemaPolicy.schemaLooksSecret(request?.schema) {
+        } else if ElicitationCardRouter.cardKind(mode: request?.mode, schema: request?.schema) == .secretBlocked {
             SecretElicitationBlockedCard(
                 onDecline: { respond(action: "decline") },
                 onCancel: { respond(action: "cancel") }
             )
-        } else if !ElicitationSchemaPolicy.schemaIsRenderable(request?.schema) {
+        } else if ElicitationCardRouter.cardKind(mode: request?.mode, schema: request?.schema) == .unsupportedSchema {
             UnsupportedElicitationSchemaCard(
                 message: request?.message ?? "The server sent a form tamtri cannot render.",
                 onDecline: { respond(action: "decline") },
@@ -1961,7 +1953,7 @@ struct ComposerView: View {
     var body: some View {
         HStack(alignment: .bottom, spacing: 8) {
             Button {
-                store.showConversationRoots = true
+                store.presentConversationRoots()
             } label: {
                 Label("Attach Root", systemImage: "folder.badge.plus")
             }
@@ -2379,8 +2371,7 @@ private struct CapabilityBadge: View {
     }
 
     private var effectiveStatus: String {
-        if title == "Sampling" { "declined" }
-        else { status }
+        CapabilityBadgeViewModel.effectiveStatus(title: title, status: status)
     }
 
     private var displayStatus: String {
@@ -2388,11 +2379,7 @@ private struct CapabilityBadge: View {
     }
 
     private var accessibilityText: String {
-        if title == "Sampling" {
-            "Sampling declined by design. The model lives in the harness."
-        } else {
-            "\(title) \(displayStatus)"
-        }
+        CapabilityBadgeViewModel.accessibilityText(title: title, status: status)
     }
 
     private var helpText: String {
@@ -2508,16 +2495,17 @@ struct GatewayServerRow: View {
                     .foregroundStyle(.secondary)
             } else {
                 if !server.oauthTokenRef.isEmpty {
+                    let oauthPresentation = GatewayOAuthPresentation.forStatus(server.oauthStatus)
                     HStack {
-                        oauthStatusIcon(for: server.oauthStatus)
-                        Text("OAuth: \(server.oauthStatus.replacingOccurrences(of: "_", with: " "))")
+                        oauthStatusIcon(for: oauthPresentation)
+                        Text("OAuth: \(oauthPresentation.statusLabel)")
                         Spacer()
-                        if server.oauthStatus == "connected" {
-                            Text("Connected").foregroundStyle(.green)
-                        } else {
+                        if oauthPresentation.showsConnectButton {
                             Button("Connect") {
                                 store.connectOAuth(for: server)
                             }
+                        } else {
+                            Text("Connected").foregroundStyle(.green)
                         }
                     }
                     .font(.caption)
@@ -2566,16 +2554,14 @@ struct GatewayServerRow: View {
     }
 
     @ViewBuilder
-    private func oauthStatusIcon(for status: String) -> some View {
-        switch status {
-        case "connected":
-            Image(systemName: "checkmark.seal.fill").foregroundStyle(.green)
-        case "reauth_required", "expired":
-            Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
-        case "missing":
-            Image(systemName: "key.slash").foregroundStyle(.secondary)
-        default:
-            Image(systemName: "key").foregroundStyle(.secondary)
+    private func oauthStatusIcon(for presentation: GatewayOAuthPresentation) -> some View {
+        switch presentation.iconTone {
+        case .connected:
+            Image(systemName: presentation.iconSystemName).foregroundStyle(.green)
+        case .warning:
+            Image(systemName: presentation.iconSystemName).foregroundStyle(.orange)
+        case .neutral:
+            Image(systemName: presentation.iconSystemName).foregroundStyle(.secondary)
         }
     }
 }

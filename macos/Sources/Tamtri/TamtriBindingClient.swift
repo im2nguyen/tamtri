@@ -305,7 +305,11 @@ private func rootRecord(from dto: RootDto, conversationId: String) -> RootRecord
         uri: dto.uri,
         kind: dto.kind,
         scope: dto.scope,
-        bookmarkMissing: !RootBookmarkStore.hasBookmark(conversationId: conversationId, rootId: dto.id)
+        bookmarkMissing: RootBookmarkStatus.isBookmarkMissing(
+            kind: dto.kind,
+            conversationId: conversationId,
+            rootId: dto.id
+        )
     )
 }
 
