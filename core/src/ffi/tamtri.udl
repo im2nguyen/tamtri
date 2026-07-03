@@ -73,6 +73,11 @@ dictionary AgentRosterEntryDto {
   string display_name;
 };
 
+dictionary ModelInfoDto {
+  string id;
+  string display_name;
+};
+
 dictionary GatewayEnvVarDto {
   string name;
   string value;
@@ -122,6 +127,8 @@ interface TamtriCore {
   void register_acp_agent(string id, string display_name, string command, sequence<string> args);
   [Throws=TamtriError]
   sequence<AgentRosterEntryDto> list_acp_agents();
+  [Throws=TamtriError]
+  sequence<ModelInfoDto> list_acp_agent_models(string agent_id);
   [Throws=TamtriError]
   sequence<ConversationSummaryDto> list_conversations();
   [Throws=TamtriError]

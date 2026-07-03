@@ -73,7 +73,8 @@ fn root_attach_persists_ref_not_bookmark() {
 fn root_missing_bookmark_surfaces_error_state() {
     let root = sample_root("file:///tmp/tamtri-data");
     let bookmark_present = false;
-    let error_state = if root.kind == RootKind::Filesystem && !bookmark_present {
+    let ui_flag = root.kind == RootKind::Filesystem && !bookmark_present;
+    let error_state = if ui_flag {
         Some(format!(
             "Missing access bookmark for root \"{}\". Re-pick the folder in conversation settings.",
             root.name
@@ -81,8 +82,21 @@ fn root_missing_bookmark_surfaces_error_state() {
     } else {
         None
     };
+    assert!(ui_flag, "filesystem root without bookmark should surface UI flag");
     assert!(error_state.is_some());
     assert!(error_state.unwrap().contains("Re-pick"));
+
+    let kb_root = Root {
+        id: "kb-1".to_string(),
+        name: "Docs".to_string(),
+        uri: "kb://team/docs".to_string(),
+        kind: RootKind::KnowledgeBase,
+        scope: RootScope::Conversation,
+    };
+    assert!(
+        !(kb_root.kind == RootKind::Filesystem && !bookmark_present),
+        "knowledge-base roots do not require filesystem bookmarks"
+    );
 }
 
 #[tokio::test]

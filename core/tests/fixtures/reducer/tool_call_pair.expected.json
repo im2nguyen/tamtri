@@ -1,0 +1,11 @@
+[
+  {"type": "tool_call", "id": "tool-1", "name": "echo", "input": {"x": 1}},
+  {
+    "type": "tool_result",
+    "call_id": "tool-1",
+    "output": {
+      "status": "completed",
+      "content": [{"type": "text", "text": "ok"}]
+    }
+  }
+]

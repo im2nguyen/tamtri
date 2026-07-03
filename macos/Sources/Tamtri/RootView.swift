@@ -2043,6 +2043,7 @@ struct NewConversationView: View {
     @State private var title = ""
     @State private var harnessId = defaultHarnessId()
     @State private var modelId = defaultModelId()
+    @State private var availableModels: [ModelInfoRecord] = []
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -2050,7 +2051,7 @@ struct NewConversationView: View {
                 .font(.title2.bold())
             TextField("Title", text: $title)
             HarnessPicker(harnessId: $harnessId, agents: store.harnessAgents)
-            TextField("Model", text: $modelId)
+            ModelPicker(modelId: $modelId, models: availableModels)
             HStack {
                 Spacer()
                 Button("Cancel") {
@@ -2071,6 +2072,18 @@ struct NewConversationView: View {
                let first = store.harnessAgents.first {
                 harnessId = first.id
             }
+            await refreshModels()
+        }
+        .onChange(of: harnessId) { _, _ in
+            Task { await refreshModels() }
+        }
+    }
+
+    private func refreshModels() async {
+        availableModels = await store.listAgentModels(agentId: harnessId)
+        if let first = availableModels.first,
+           !availableModels.contains(where: { $0.id == modelId }) {
+            modelId = first.id
         }
     }
 }
@@ -2092,11 +2105,29 @@ struct HarnessPicker: View {
     }
 }
 
+struct ModelPicker: View {
+    @Binding var modelId: String
+    let models: [ModelInfoRecord]
+
+    var body: some View {
+        if models.isEmpty {
+            TextField("Model", text: $modelId)
+        } else {
+            Picker("Model", selection: $modelId) {
+                ForEach(models) { model in
+                    Text(model.displayName).tag(model.id)
+                }
+            }
+        }
+    }
+}
+
 struct ForkConversationView: View {
     @EnvironmentObject private var store: AppStore
     @Environment(\.dismiss) private var dismiss
     @State private var harnessId = defaultHarnessId()
     @State private var modelId = defaultModelId()
+    @State private var availableModels: [ModelInfoRecord] = []
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -2112,7 +2143,7 @@ struct ForkConversationView: View {
                 }
             }
             HarnessPicker(harnessId: $harnessId, agents: store.harnessAgents)
-            TextField("Model", text: $modelId)
+            ModelPicker(modelId: $modelId, models: availableModels)
             HStack {
                 Spacer()
                 Button("Cancel") {
@@ -2133,6 +2164,18 @@ struct ForkConversationView: View {
                let first = store.harnessAgents.first {
                 harnessId = first.id
             }
+            await refreshModels()
+        }
+        .onChange(of: harnessId) { _, _ in
+            Task { await refreshModels() }
+        }
+    }
+
+    private func refreshModels() async {
+        availableModels = await store.listAgentModels(agentId: harnessId)
+        if let first = availableModels.first,
+           !availableModels.contains(where: { $0.id == modelId }) {
+            modelId = first.id
         }
     }
 }
@@ -2173,7 +2216,7 @@ struct SettingsView: View {
                 }
             }
 
-            Text("Tamtri gateway tools")
+            Text(GatewaySettingsCopy.tamtriGatewayToolsHeading)
                 .font(.headline)
 
             HStack {
@@ -2241,7 +2284,7 @@ struct SettingsView: View {
                     .font(.caption)
             }
 
-            Text("Agent-native tools are not exposed by this harness yet.")
+            Text(GatewaySettingsCopy.agentNativeToolsDisclaimer)
                 .font(.caption)
                 .foregroundStyle(.secondary)
 

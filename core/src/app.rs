@@ -118,6 +118,12 @@ pub struct AgentRosterEntryDto {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, uniffi::Record)]
+pub struct ModelInfoDto {
+    pub id: String,
+    pub display_name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, uniffi::Record)]
 pub struct GatewayToolDto {
     pub exposed_name: String,
     pub server_id: String,
@@ -328,6 +334,26 @@ impl TamtriCore {
         Ok(agents)
     }
 
+    fn list_acp_agent_models_inner(&self, agent_id: &str) -> Result<Vec<ModelInfoDto>> {
+        let adapters = self
+            .adapters
+            .lock()
+            .map_err(|_| CoreError::Protocol("adapter registry lock poisoned".to_string()))?;
+        let adapter = adapters
+            .get(agent_id)
+            .ok_or_else(|| CoreError::Protocol(format!("unknown ACP agent: {agent_id}")))?;
+        let models = self
+            .runtime
+            .block_on(adapter.available_models())?
+            .into_iter()
+            .map(|model| ModelInfoDto {
+                id: model.id,
+                display_name: model.display_name,
+            })
+            .collect();
+        Ok(models)
+    }
+
     fn invalidate_conversation_cache(&self, id: Id) {
         if let Ok(mut cache) = self.conversation_cache.lock() {
             cache.remove(&id);
@@ -378,8 +404,33 @@ impl TamtriCore {
         .map_err(ffi_err)
     }
 
+    pub fn register_acp_agent_with_env(
+        &self,
+        id: String,
+        display_name: String,
+        command: String,
+        args: Vec<String>,
+        env: Vec<GatewayEnvVarDto>,
+    ) -> FfiResult<()> {
+        self.register_acp_agent_spec(AgentLaunchSpec {
+            id,
+            display_name,
+            command,
+            args,
+            env: env
+                .into_iter()
+                .map(|pair| (pair.name, pair.value))
+                .collect(),
+        })
+        .map_err(ffi_err)
+    }
+
     pub fn list_acp_agents(&self) -> FfiResult<Vec<AgentRosterEntryDto>> {
         self.list_acp_agents_inner().map_err(ffi_err)
+    }
+
+    pub fn list_acp_agent_models(&self, agent_id: String) -> FfiResult<Vec<ModelInfoDto>> {
+        self.list_acp_agent_models_inner(&agent_id).map_err(ffi_err)
     }
 
     pub fn list_conversations(&self) -> FfiResult<Vec<ConversationSummaryDto>> {

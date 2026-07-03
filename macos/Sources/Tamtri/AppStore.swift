@@ -636,6 +636,15 @@ final class AppStore: ObservableObject {
         }
     }
 
+    func listAgentModels(agentId: String) async -> [ModelInfoRecord] {
+        do {
+            return try await core.listAcpAgentModels(agentId: agentId)
+        } catch {
+            errorMessage = error.localizedDescription
+            return []
+        }
+    }
+
     func saveGatewayDefaultTimeout(_ seconds: UInt64) {
         Task {
             do {

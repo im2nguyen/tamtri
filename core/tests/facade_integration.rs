@@ -232,14 +232,23 @@ fn events_jsonl_gateway_receipts() {
     core.set_gateway_credential("keychain://mock".to_string(), "super-secret".to_string())
         .expect("credential");
 
-    core.register_acp_agent(
+    core.register_acp_agent_with_env(
         "mock-acp".to_string(),
         "Mock ACP".to_string(),
         env!("CARGO_BIN_EXE_mock-acp-agent").to_string(),
         Vec::new(),
+        vec![
+            tamtri_core::app::GatewayEnvVarDto {
+                name: "MOCK_ACP_CALL_FAIL_TOOL".to_string(),
+                value: "1".to_string(),
+            },
+            tamtri_core::app::GatewayEnvVarDto {
+                name: "MOCK_ACP_EMIT_GATEWAY_CANCELLATION".to_string(),
+                value: "1".to_string(),
+            },
+        ],
     )
     .expect("agent");
-
     let conversation = core
         .create_conversation(
             "Gateway receipts".to_string(),
@@ -285,10 +294,13 @@ fn events_jsonl_gateway_receipts() {
         .collect();
 
     for expected in [
+        "gateway_server_connected",
         "gateway_tool_routed",
         "gateway_credential_injected",
         "gateway_progress",
         "gateway_log",
+        "gateway_downstream_error",
+        "gateway_cancellation",
     ] {
         assert!(
             kinds.contains(&expected),
@@ -383,6 +395,133 @@ fn fork_into_harness_updates_model_and_harness() {
     let fork_messages: Vec<serde_json::Value> =
         serde_json::from_str(&fork.transcript_json).expect("fork transcript");
     assert_eq!(fork_messages, parent_messages);
+}
+
+#[test]
+fn fork_first_run_seeds_fresh_transcript() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let observer = Arc::new(RecordingObserver::default());
+    let core = TamtriCore::new(temp.path().to_string_lossy().into_owned(), observer.clone()).expect("core");
+    core.register_acp_agent(
+        "mock-acp".to_string(),
+        "Mock ACP".to_string(),
+        env!("CARGO_BIN_EXE_mock-acp-agent").to_string(),
+        Vec::new(),
+    )
+    .expect("agent");
+
+    core.register_acp_agent(
+        "other-acp".to_string(),
+        "Other ACP".to_string(),
+        env!("CARGO_BIN_EXE_mock-acp-agent").to_string(),
+        Vec::new(),
+    )
+    .expect("other agent");
+
+    let parent = core
+        .create_conversation(
+            "Parent seed".to_string(),
+            "mock-acp".to_string(),
+            "model-a".to_string(),
+        )
+        .expect("conversation");
+    let parent_id = parent.id.clone();
+
+    core.send_message(parent_id.clone(), "parent context line".to_string())
+        .expect("send parent");
+    let request_id = wait_for_permission_requested(observer.as_ref());
+    core.respond_permission(parent_id.clone(), request_id, "allow_once".to_string())
+        .expect("permission");
+    wait_for_turn_end(observer.as_ref());
+    std::thread::sleep(Duration::from_millis(200));
+
+    let fork = core
+        .fork_conversation(
+            parent_id,
+            "other-acp".to_string(),
+            "model-b".to_string(),
+        )
+        .expect("fork");
+
+    core.send_message(fork.id.clone(), "fork follow up".to_string())
+        .expect("send fork");
+    let workdir = core
+        .conversation_workdir_path(fork.id.clone())
+        .expect("workdir");
+    let seed_path = Path::new(&workdir).join(".session-prompt-seed.txt");
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while std::time::Instant::now() < deadline {
+        if seed_path.is_file() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert!(seed_path.is_file(), "mock ACP should write session/prompt seed");
+
+    let seed = fs::read_to_string(&seed_path).expect("seed");
+    assert!(
+        seed.contains("parent context line"),
+        "seed should include parent user message; seed={seed:?}"
+    );
+    assert!(
+        seed.contains("fork follow up"),
+        "seed should include the new user message; seed={seed:?}"
+    );
+
+    core.cancel_run(fork.id).ok();
+}
+
+#[test]
+fn gateway_credential_reload_smoke_after_set_and_fresh_core() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let observer = Arc::new(RecordingObserver::default());
+    let core = TamtriCore::new(temp.path().to_string_lossy().into_owned(), observer).expect("core");
+
+    let mock_mcp = env!("CARGO_BIN_EXE_mock-mcp-server").to_string();
+    let mut server = gateway_mock_server(&mock_mcp);
+    server.credentials = vec![tamtri_core::config::CredentialBinding {
+        credential_ref: "keychain://mock".to_string(),
+        target: tamtri_core::config::CredentialTarget::EnvVar {
+            name: "MOCK_TOKEN".to_string(),
+        },
+    }];
+    tamtri_core::config::replace_gateway_servers(temp.path(), vec![server]).expect("save config");
+
+    let servers = core.list_gateway_servers().expect("servers");
+    assert_eq!(servers[0].missing_credential_refs, vec!["keychain://mock"]);
+
+    core.set_gateway_credential("keychain://mock".to_string(), "first-value".to_string())
+        .expect("set credential");
+    assert_eq!(
+        core.export_gateway_credential("keychain://mock".to_string())
+            .expect("export"),
+        Some("first-value".to_string())
+    );
+
+    let servers = core.refresh_gateway_capabilities().expect("refresh");
+    assert!(servers[0].missing_credential_refs.is_empty());
+
+    // Fresh core simulates relaunch before keychain preload (reloadGatewayServers).
+    let observer2 = Arc::new(RecordingObserver::default());
+    let reloaded = TamtriCore::new(
+        temp.path().to_string_lossy().into_owned(),
+        observer2,
+    )
+    .expect("reloaded core");
+    let servers = reloaded.list_gateway_servers().expect("servers");
+    assert_eq!(servers[0].missing_credential_refs, vec!["keychain://mock"]);
+
+    reloaded
+        .set_gateway_credential("keychain://mock".to_string(), "reloaded-value".to_string())
+        .expect("reload credential");
+    assert_eq!(
+        reloaded
+            .export_gateway_credential("keychain://mock".to_string())
+            .expect("export after reload"),
+        Some("reloaded-value".to_string())
+    );
+    let servers = reloaded.refresh_gateway_capabilities().expect("refresh");
+    assert!(servers[0].missing_credential_refs.is_empty());
 }
 
 #[test]

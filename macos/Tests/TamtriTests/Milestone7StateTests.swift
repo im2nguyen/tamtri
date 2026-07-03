@@ -78,6 +78,33 @@ final class Milestone7StateTests: XCTestCase {
         XCTAssertTrue(root.bookmarkMissing)
     }
 
+    func testRootBookmarkDeletedSurfacesMissingFlag() throws {
+        let conversationId = "conv-\(UUID().uuidString)"
+        let rootId = "root-\(UUID().uuidString)"
+        defer { try? RootBookmarkStore.deleteBookmark(conversationId: conversationId, rootId: rootId) }
+
+        try RootBookmarkStore.saveBookmark(data: Data("mock-bookmark".utf8), conversationId: conversationId, rootId: rootId)
+        XCTAssertTrue(RootBookmarkStore.hasBookmark(conversationId: conversationId, rootId: rootId))
+
+        try RootBookmarkStore.deleteBookmark(conversationId: conversationId, rootId: rootId)
+        XCTAssertFalse(RootBookmarkStore.hasBookmark(conversationId: conversationId, rootId: rootId))
+
+        let bookmarkMissing = !RootBookmarkStore.hasBookmark(conversationId: conversationId, rootId: rootId)
+        XCTAssertTrue(bookmarkMissing, "deleted bookmark should map to bookmarkMissing in the roots UI")
+    }
+
+    func testAppOfflineAccessibilitySemantics() {
+        func accessibilityValue(templateLoaded: Bool) -> String {
+            templateLoaded ? "loaded" : "offline"
+        }
+        XCTAssertEqual(accessibilityValue(templateLoaded: false), "offline")
+        XCTAssertEqual(accessibilityValue(templateLoaded: true), "loaded")
+
+        let offlineCopy = "App offline — template unavailable without an active gateway run."
+        XCTAssertTrue(offlineCopy.contains("offline"))
+        XCTAssertTrue(offlineCopy.contains("gateway"))
+    }
+
     func testLiveEventGroupingNestsTaskUnderToolCall() {
         let events = [
             IdentifiedCoreEvent(

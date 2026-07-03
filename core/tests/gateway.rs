@@ -503,6 +503,55 @@ async fn gateway_tool_name_collision_routing() {
 }
 
 #[tokio::test]
+async fn gateway_evicts_client_on_transport_closed() {
+    let command = env!("CARGO_BIN_EXE_mock-mcp-server");
+    let mut server = stdio_server("mock", command);
+    if let GatewayTransport::Stdio { ref mut env, .. } = server.transport {
+        env.push(("MOCK_MCP_EXIT_AFTER_FIRST_LIST".to_string(), "1".to_string()));
+    }
+
+    let gateway = McpGateway::new(
+        GatewayConfig {
+            default_call_timeout_secs: 300,
+            servers: vec![server],
+        },
+        Arc::new(NoCredentials),
+        None,
+    )
+    .unwrap();
+
+    let first = gateway.list_tools().await.expect("first list connects");
+    assert!(
+        first.iter().any(|tool| tool.exposed_name == "mock__echo"),
+        "expected tools before subprocess exit, got: {:?}",
+        first
+            .iter()
+            .map(|tool| tool.exposed_name.as_str())
+            .collect::<Vec<_>>()
+    );
+
+    let second = gateway.list_tools().await.expect("list after transport closed");
+    assert!(
+        second.is_empty(),
+        "expected eviction pass to surface empty tools, got: {:?}",
+        second
+            .iter()
+            .map(|tool| tool.exposed_name.as_str())
+            .collect::<Vec<_>>()
+    );
+
+    let third = gateway.list_tools().await.expect("list after reconnect");
+    assert!(
+        third.iter().any(|tool| tool.exposed_name == "mock__echo"),
+        "expected gateway to reconnect after killed subprocess, got: {:?}",
+        third
+            .iter()
+            .map(|tool| tool.exposed_name.as_str())
+            .collect::<Vec<_>>()
+    );
+}
+
+#[tokio::test]
 async fn gateway_list_tools_recovers_after_timeout() {
     let dir = tempfile::tempdir().expect("temp dir");
     let marker_path = dir

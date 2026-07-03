@@ -39,6 +39,12 @@ actor TamtriBindingClient: CoreClient {
         }
     }
 
+    func listAcpAgentModels(agentId: String) async throws -> [ModelInfoRecord] {
+        try core.listAcpAgentModels(agentId: agentId).map {
+            ModelInfoRecord(id: $0.id, displayName: $0.displayName)
+        }
+    }
+
     func sendMessage(conversationId: String, text: String) async throws {
         try core.sendMessage(conversationId: conversationId, text: text)
     }

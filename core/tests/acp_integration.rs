@@ -66,6 +66,40 @@ fn user_turn() -> TurnInput {
 }
 
 #[tokio::test]
+async fn acp_handshake_and_session() {
+    let temp = tempfile::tempdir().unwrap();
+    let workdir = temp.path().to_path_buf();
+    let adapter = adapter();
+    let run = adapter
+        .run(ctx_in(workdir.clone()), user_turn())
+        .await
+        .unwrap();
+
+    let caps = adapter
+        .agent_capabilities()
+        .expect("initialize should record agentCapabilities");
+    assert_eq!(caps["streaming"], true);
+    assert_eq!(caps["tools"], true);
+    assert_eq!(caps["models"][0]["id"], "mock");
+
+    let cwd_marker = workdir.join(".session-cwd.txt");
+    let deadline = std::time::Instant::now() + Duration::from_secs(2);
+    while std::time::Instant::now() < deadline {
+        if cwd_marker.is_file() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let recorded_cwd = std::fs::read_to_string(&cwd_marker).expect("session/new cwd marker");
+    let expected_cwd = workdir.canonicalize().unwrap();
+    let recorded = std::path::PathBuf::from(recorded_cwd.trim());
+    let recorded = recorded.canonicalize().unwrap_or(recorded);
+    assert_eq!(recorded, expected_cwd);
+
+    run.control.cancel().await.ok();
+}
+
+#[tokio::test]
 async fn acp_handshake_and_session_streams_events() {
     let temp = tempfile::tempdir().unwrap();
     let run = adapter()

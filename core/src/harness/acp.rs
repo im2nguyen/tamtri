@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::Mutex;
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -30,11 +31,22 @@ pub struct AgentLaunchSpec {
 
 pub struct AcpAdapter {
     launch: AgentLaunchSpec,
+    agent_capabilities: Mutex<Option<Value>>,
 }
 
 impl AcpAdapter {
     pub fn new(launch: AgentLaunchSpec) -> Self {
-        Self { launch }
+        Self {
+            launch,
+            agent_capabilities: Mutex::new(None),
+        }
+    }
+
+    pub fn agent_capabilities(&self) -> Option<Value> {
+        self.agent_capabilities
+            .lock()
+            .ok()
+            .and_then(|caps| caps.clone())
     }
 }
 
@@ -67,7 +79,7 @@ impl HarnessAdapter for AcpAdapter {
         .await?;
         let (rpc, inbound) = RpcConnection::start(Box::new(transport));
 
-        let _initialize = rpc
+        let initialize = rpc
             .request(
                 "initialize",
                 Some(json!({
@@ -78,6 +90,9 @@ impl HarnessAdapter for AcpAdapter {
                 ACP_REQUEST_TIMEOUT,
             )
             .await?;
+        if let Ok(mut caps) = self.agent_capabilities.lock() {
+            *caps = initialize.get("agentCapabilities").cloned();
+        }
 
         let cwd = absolute_cwd(&ctx.working_dir_path)?;
         let session = rpc
@@ -108,8 +123,68 @@ impl HarnessAdapter for AcpAdapter {
     }
 
     async fn available_models(&self) -> Result<Vec<ModelInfo>> {
-        Ok(Vec::new())
+        if let Some(caps) = self.agent_capabilities() {
+            let models = models_from_agent_capabilities(&caps);
+            if !models.is_empty() {
+                return Ok(models);
+            }
+        }
+
+        let transport = StdioTransport::spawn(
+            &self.launch.command,
+            &self.launch.args,
+            &self.launch.env,
+        )
+        .await?;
+        let (rpc, _inbound) = RpcConnection::start(Box::new(transport));
+        let initialize = rpc
+            .request(
+                "initialize",
+                Some(json!({
+                    "protocolVersion": 1,
+                    "clientInfo": {"name": "tamtri-core", "version": env!("CARGO_PKG_VERSION")},
+                    "clientCapabilities": {}
+                })),
+                ACP_REQUEST_TIMEOUT,
+            )
+            .await?;
+        if let Ok(mut caps) = self.agent_capabilities.lock() {
+            *caps = initialize.get("agentCapabilities").cloned();
+        }
+        let _ = rpc.close().await;
+        Ok(models_from_agent_capabilities(
+            &initialize
+                .get("agentCapabilities")
+                .cloned()
+                .unwrap_or(Value::Null),
+        ))
     }
+}
+
+fn models_from_agent_capabilities(caps: &Value) -> Vec<ModelInfo> {
+    caps.get("models")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| {
+                    let id = string_field(item, &["id", "modelId"]);
+                    if id.is_empty() {
+                        return None;
+                    }
+                    let display_name = string_field(item, &["displayName", "display_name", "name"]);
+                    Some(ModelInfo {
+                        id: id.clone(),
+                        display_name: if display_name.is_empty() {
+                            id
+                        } else {
+                            display_name
+                        },
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 async fn run_prompt_loop(
@@ -657,5 +732,22 @@ mod tests {
         let message = format_harness_run_error(&err);
         assert!(message.contains("tamtri-gateway-stdio"));
         assert!(message.contains("twenty-questions"));
+    }
+
+    #[test]
+    fn models_from_agent_capabilities_parses_model_list() {
+        let caps = json!({
+            "streaming": true,
+            "models": [
+                {"id": "mock", "displayName": "Mock Model"},
+                {"id": "mock-fast", "name": "Mock Fast"}
+            ]
+        });
+        let models = models_from_agent_capabilities(&caps);
+        assert_eq!(models.len(), 2);
+        assert_eq!(models[0].id, "mock");
+        assert_eq!(models[0].display_name, "Mock Model");
+        assert_eq!(models[1].id, "mock-fast");
+        assert_eq!(models[1].display_name, "Mock Fast");
     }
 }

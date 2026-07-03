@@ -799,6 +799,8 @@ public protocol TamtriCoreProtocol: AnyObject, Sendable {
     
     func getGatewaySettings() throws  -> GatewaySettingsDto
     
+    func listAcpAgentModels(agentId: String) throws  -> [ModelInfoDto]
+    
     func listAcpAgents() throws  -> [AgentRosterEntryDto]
     
     func listConversations() throws  -> [ConversationSummaryDto]
@@ -826,6 +828,8 @@ public protocol TamtriCoreProtocol: AnyObject, Sendable {
     func refreshGatewayCapabilities() throws  -> [GatewayServerDto]
     
     func registerAcpAgent(id: String, displayName: String, command: String, args: [String]) throws 
+    
+    func registerAcpAgentWithEnv(id: String, displayName: String, command: String, args: [String], env: [GatewayEnvVarDto]) throws 
     
     func removeRoot(conversationId: String, rootId: String) throws 
     
@@ -1044,6 +1048,16 @@ open func getGatewaySettings()throws  -> GatewaySettingsDto  {
 })
 }
     
+open func listAcpAgentModels(agentId: String)throws  -> [ModelInfoDto]  {
+    return try  FfiConverterSequenceTypeModelInfoDto.lift(try rustCallWithError(FfiConverterTypeTamtriError_lift) {
+        uniffiCallStatus in
+    uniffi_tamtri_core_fn_method_tamtricore_list_acp_agent_models(
+            self.uniffiCloneHandle(),
+        FfiConverterString.lower(agentId),uniffiCallStatus
+    )
+})
+}
+    
 open func listAcpAgents()throws  -> [AgentRosterEntryDto]  {
     return try  FfiConverterSequenceTypeAgentRosterEntryDto.lift(try rustCallWithError(FfiConverterTypeTamtriError_lift) {
         uniffiCallStatus in
@@ -1181,6 +1195,19 @@ open func registerAcpAgent(id: String, displayName: String, command: String, arg
         FfiConverterString.lower(displayName),
         FfiConverterString.lower(command),
         FfiConverterSequenceString.lower(args),uniffiCallStatus
+    )
+}
+}
+    
+open func registerAcpAgentWithEnv(id: String, displayName: String, command: String, args: [String], env: [GatewayEnvVarDto])throws   {try rustCallWithError(FfiConverterTypeTamtriError_lift) {
+        uniffiCallStatus in
+    uniffi_tamtri_core_fn_method_tamtricore_register_acp_agent_with_env(
+            self.uniffiCloneHandle(),
+        FfiConverterString.lower(id),
+        FfiConverterString.lower(displayName),
+        FfiConverterString.lower(command),
+        FfiConverterSequenceString.lower(args),
+        FfiConverterSequenceTypeGatewayEnvVarDto.lower(env),uniffiCallStatus
     )
 }
 }
@@ -2016,6 +2043,60 @@ public func FfiConverterTypeGatewayToolDto_lower(_ value: GatewayToolDto) -> Rus
 }
 
 
+public struct ModelInfoDto: Equatable, Hashable {
+    public var id: String
+    public var displayName: String
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(id: String, displayName: String) {
+        self.id = id
+        self.displayName = displayName
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension ModelInfoDto: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeModelInfoDto: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ModelInfoDto {
+        return
+            try ModelInfoDto(
+                id: FfiConverterString.read(from: &buf), 
+                displayName: FfiConverterString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: ModelInfoDto, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.id, into: &buf)
+        FfiConverterString.write(value.displayName, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeModelInfoDto_lift(_ buf: RustBuffer) throws -> ModelInfoDto {
+    return try FfiConverterTypeModelInfoDto.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeModelInfoDto_lower(_ value: ModelInfoDto) -> RustBuffer {
+    return FfiConverterTypeModelInfoDto.lower(value)
+}
+
+
 public struct OAuthCompletionDto: Equatable, Hashable {
     public var serverId: String
     public var oauthStatus: String
@@ -2671,6 +2752,31 @@ fileprivate struct FfiConverterSequenceTypeGatewayToolDto: FfiConverterRustBuffe
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterSequenceTypeModelInfoDto: FfiConverterRustBuffer {
+    typealias SwiftType = [ModelInfoDto]
+
+    public static func write(_ value: [ModelInfoDto], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeModelInfoDto.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [ModelInfoDto] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [ModelInfoDto]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeModelInfoDto.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterSequenceTypeRootDto: FfiConverterRustBuffer {
     typealias SwiftType = [RootDto]
 
@@ -2772,6 +2878,9 @@ private let initializationResult: InitializationResult = {
     if (uniffi_tamtri_core_checksum_method_tamtricore_get_gateway_settings() != 50417) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_tamtri_core_checksum_method_tamtricore_list_acp_agent_models() != 46806) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_tamtri_core_checksum_method_tamtricore_list_acp_agents() != 4958) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -2812,6 +2921,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_tamtri_core_checksum_method_tamtricore_register_acp_agent() != 43935) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tamtri_core_checksum_method_tamtricore_register_acp_agent_with_env() != 53909) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_tamtri_core_checksum_method_tamtricore_remove_root() != 56826) {

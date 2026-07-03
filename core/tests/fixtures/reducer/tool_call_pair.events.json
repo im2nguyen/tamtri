@@ -1,0 +1,16 @@
+[
+  {
+    "type": "tool_call_started",
+    "id": "tool-1",
+    "name": "echo",
+    "kind": {"other": "echo"},
+    "title": "Echo",
+    "input": {"x": 1}
+  },
+  {
+    "type": "tool_call_progress",
+    "id": "tool-1",
+    "status": "completed",
+    "content": [{"type": "text", "text": "ok"}]
+  }
+]

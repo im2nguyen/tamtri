@@ -68,26 +68,11 @@ fn app_bridge_allow_routes_through_gateway_and_audits() {
     core.send_message(conversation.id.clone(), "hello".to_string())
         .expect("send");
 
-    let deadline = std::time::Instant::now() + Duration::from_secs(5);
-    loop {
-        if core
-            .submit_app_bridge_request(
-                conversation.id.clone(),
-                "m7-app".to_string(),
-                "ui://m7-app/demo".to_string(),
-                "ui://m7-app/demo".to_string(),
-                r#"{"jsonrpc":"2.0","id":"bridge-allow","method":"tools/call","params":{"name":"show_app","arguments":{}}}"#
-                    .to_string(),
-            )
-            .is_ok()
-        {
-            break;
-        }
-        if std::time::Instant::now() >= deadline {
-            panic!("active run never became available for app bridge");
-        }
-        std::thread::sleep(Duration::from_millis(20));
-    }
+    wait_for_active_run(
+        &core,
+        &conversation.id,
+        r#"{"jsonrpc":"2.0","id":"bridge-allow","method":"tools/call","params":{"name":"show_app","arguments":{}}}"#,
+    );
 
     let request_id = wait_for_bridge_consent(&observer);
     core.respond_app_bridge_consent(

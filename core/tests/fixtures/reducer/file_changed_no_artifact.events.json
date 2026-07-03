@@ -1,0 +1,14 @@
+[
+  {
+    "type": "file_changed",
+    "tool_call_id": "tool-1",
+    "path": "report.html",
+    "change": "modified",
+    "diff": {
+      "path": "report.html",
+      "change": "modified",
+      "old_text": null,
+      "new_text": "<h1>ok</h1>"
+    }
+  }
+]

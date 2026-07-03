@@ -22,6 +22,7 @@ fn main() {
         };
 
         if message.get("method").and_then(Value::as_str) == Some("session/cancel") {
+            let _ = notify_gateway_cancelled(&mcp_servers);
             continue;
         }
 
@@ -43,7 +44,16 @@ fn main() {
                     json!({
                         "jsonrpc": "2.0",
                         "id": id,
-                        "result": {"agentCapabilities": {"streaming": true, "tools": true}}
+                        "result": {
+                            "agentCapabilities": {
+                                "streaming": true,
+                                "tools": true,
+                                "models": [
+                                    {"id": "mock", "displayName": "Mock Model"},
+                                    {"id": "mock-fast", "displayName": "Mock Fast"}
+                                ]
+                            }
+                        }
                     }),
                 ),
                 Some("session/new") => {
@@ -65,6 +75,10 @@ fn main() {
                             serde_json::to_string(&mcp_servers)
                                 .unwrap_or_else(|_| "[]".to_string()),
                         );
+                        let _ = std::fs::write(
+                            std::path::Path::new(cwd_path).join(".session-cwd.txt"),
+                            cwd_path,
+                        );
                     }
                     write_msg(
                         &mut stdout,
@@ -78,17 +92,40 @@ fn main() {
                 Some("session/prompt") => {
                     if let Some(cwd) = &cwd {
                         let _ = std::fs::create_dir_all(cwd);
+                        let prompt_text = prompt_text(&message);
+                        let _ = std::fs::write(
+                            std::path::Path::new(cwd).join(".session-prompt-seed.txt"),
+                            &prompt_text,
+                        );
                         let _ = std::fs::write(
                             std::path::Path::new(cwd).join("report.html"),
                             "<!doctype html><html><body><h1>ok</h1></body></html>",
                         );
                     }
                     emit_updates(&mut stdout);
+                    let prompt_text = prompt_text(&message);
                     if let Some(cwd_path) = cwd.as_deref() {
+                        if std::env::var("MOCK_ACP_CALL_FAIL_TOOL")
+                            .ok()
+                            .is_some_and(|value| value == "1")
+                        {
+                            let _ = call_gateway_fail(&mcp_servers);
+                        }
                         let _ = call_gateway_echo(&mcp_servers, std::path::Path::new(cwd_path));
                         let _ = call_gateway_probe_roots(&mcp_servers, std::path::Path::new(cwd_path));
+                        if std::env::var("MOCK_ACP_EMIT_GATEWAY_CANCELLATION")
+                            .ok()
+                            .is_some_and(|value| value == "1")
+                        {
+                            let _ = notify_gateway_cancelled(&mcp_servers);
+                        }
                     }
-                    let _ = call_gateway_elicit_url(&mcp_servers);
+                    if prompt_text.contains("form-elicit") {
+                        let cwd_path = cwd.as_deref().map(std::path::Path::new);
+                        let _ = call_gateway_elicit_form(&mcp_servers, cwd_path);
+                    } else if prompt_text.contains("url-elicit") {
+                        let _ = call_gateway_elicit_url(&mcp_servers);
+                    }
                     let req_id = json!("perm-1");
                     permission_id = Some(id);
                     write_msg(
@@ -170,6 +207,32 @@ fn write_msg(stdout: &mut io::Stdout, value: Value) {
     let _ = stdout.flush();
 }
 
+fn call_gateway_fail(mcp_servers: &[Value]) -> Result<(), String> {
+    if mcp_servers.is_empty() {
+        return Ok(());
+    }
+    let tools = list_gateway_tools(mcp_servers)?;
+    let tool_name = tools
+        .iter()
+        .find(|tool| tool.get("name").and_then(Value::as_str) == Some("mock__fail"))
+        .and_then(|tool| tool.get("name").and_then(Value::as_str))
+        .ok_or_else(|| "gateway did not expose fail tool".to_string())?
+        .to_string();
+    let _ = call_gateway_tool(mcp_servers, &tool_name, json!({}));
+    Ok(())
+}
+
+fn notify_gateway_cancelled(mcp_servers: &[Value]) -> Result<(), String> {
+    if mcp_servers.is_empty() {
+        return Ok(());
+    }
+    let mut session = GatewaySession::connect(mcp_servers)?;
+    session.send_notification(
+        "notifications/cancelled",
+        json!({"requestId": "acp-tool-1"}),
+    )
+}
+
 fn call_gateway_echo(mcp_servers: &[Value], cwd: &std::path::Path) -> Result<(), String> {
     if mcp_servers.is_empty() {
         return Ok(());
@@ -223,6 +286,61 @@ fn call_gateway_probe_roots(mcp_servers: &[Value], cwd: &std::path::Path) -> Res
     if count > 0 {
         std::fs::write(cwd.join(".gateway-probe-roots-ok"), count.to_string())
             .map_err(|err| err.to_string())?;
+    }
+    Ok(())
+}
+
+fn prompt_text(message: &Value) -> String {
+    message
+        .pointer("/params/prompt")
+        .and_then(|prompt| {
+            if let Some(blocks) = prompt.as_array() {
+                Some(
+                    blocks
+                        .iter()
+                        .filter_map(|block| block.get("text").and_then(Value::as_str))
+                        .collect::<Vec<_>>()
+                        .join(""),
+                )
+            } else {
+                prompt.as_str().map(str::to_string)
+            }
+        })
+        .unwrap_or_default()
+}
+
+fn call_gateway_elicit_form(
+    mcp_servers: &[Value],
+    cwd: Option<&std::path::Path>,
+) -> Result<(), String> {
+    if mcp_servers.is_empty() {
+        return Ok(());
+    }
+    let tools = list_gateway_tools(mcp_servers)?;
+    let tool_name = tools
+        .iter()
+        .find(|tool| tool.get("name").and_then(Value::as_str) == Some("mock__elicit"))
+        .or_else(|| {
+            tools.iter().find(|tool| {
+                tool.get("name")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .ends_with("__elicit")
+            })
+        })
+        .and_then(|tool| tool.get("name").and_then(Value::as_str))
+        .ok_or_else(|| "gateway did not expose form elicit tool".to_string())?
+        .to_string();
+    let result = call_gateway_tool(mcp_servers, &tool_name, json!({}))?;
+    let name = result
+        .pointer("/structuredContent/name")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if let Some(cwd) = cwd {
+        if !name.is_empty() {
+            std::fs::write(cwd.join(".gateway-elicit-form-ok"), name)
+                .map_err(|err| err.to_string())?;
+        }
     }
     Ok(())
 }
@@ -330,6 +448,13 @@ impl GatewaySession {
         params: Value,
     ) -> Result<Value, String> {
         rpc_request(&mut self.input, &mut self.reader, id, method, params)
+    }
+
+    fn send_notification(&mut self, method: &str, params: Value) -> Result<(), String> {
+        let notification = json!({"jsonrpc": "2.0", "method": method, "params": params});
+        serde_json::to_writer(&mut self.input, &notification).map_err(|err| err.to_string())?;
+        writeln!(self.input).map_err(|err| err.to_string())?;
+        self.input.flush().map_err(|err| err.to_string())
     }
 }
 

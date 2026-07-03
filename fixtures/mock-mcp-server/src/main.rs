@@ -23,6 +23,7 @@ fn main() {
             continue;
         }
 
+        let mut exit_after_write = false;
         let response = match message.get("method").and_then(Value::as_str) {
             Some("initialize") => response(
                 &message,
@@ -37,50 +38,72 @@ fn main() {
                 }),
             ),
             Some("tools/list") => {
-                if should_hang_on_list() {
+                if should_exit_after_first_list() {
+                    exit_after_write = true;
+                    response(
+                        &message,
+                        json!({
+                            "tools": [
+                                {
+                                    "name": "echo",
+                                    "description": "Echoes its arguments",
+                                    "inputSchema": {"type": "object"}
+                                }
+                            ]
+                        }),
+                    )
+                } else if should_hang_on_list() {
                     loop {
                         std::thread::sleep(std::time::Duration::from_secs(3600));
                     }
+                } else {
+                    response(
+                        &message,
+                        json!({
+                            "tools": [
+                                {
+                                    "name": "echo",
+                                    "description": "Echoes its arguments",
+                                    "inputSchema": {"type": "object"}
+                                },
+                                {
+                                    "name": "elicit",
+                                    "description": "Elicits a name then echoes it",
+                                    "inputSchema": {"type": "object"}
+                                },
+                                {
+                                    "name": "elicit_url",
+                                    "description": "Elicits via URL handoff then echoes the action",
+                                    "inputSchema": {"type": "object"}
+                                },
+                                {
+                                    "name": "elicit_secret",
+                                    "description": "Elicits a secret field; gateway should auto-decline",
+                                    "inputSchema": {"type": "object"}
+                                },
+                                {
+                                    "name": "elicit_complex",
+                                    "description": "Elicits with a nested object schema",
+                                    "inputSchema": {"type": "object"}
+                                },
+                                {
+                                    "name": "fail",
+                                    "description": "Always fails for gateway error receipt tests",
+                                    "inputSchema": {"type": "object"}
+                                }
+                            ]
+                        }),
+                    )
                 }
-                response(
-                    &message,
-                    json!({
-                        "tools": [
-                            {
-                                "name": "echo",
-                                "description": "Echoes its arguments",
-                                "inputSchema": {"type": "object"}
-                            },
-                            {
-                                "name": "elicit",
-                                "description": "Elicits a name then echoes it",
-                                "inputSchema": {"type": "object"}
-                            },
-                            {
-                                "name": "elicit_url",
-                                "description": "Elicits via URL handoff then echoes the action",
-                                "inputSchema": {"type": "object"}
-                            },
-                            {
-                                "name": "elicit_secret",
-                                "description": "Elicits a secret field; gateway should auto-decline",
-                                "inputSchema": {"type": "object"}
-                            },
-                            {
-                                "name": "elicit_complex",
-                                "description": "Elicits with a nested object schema",
-                                "inputSchema": {"type": "object"}
-                            }
-                        ]
-                    }),
-                )
             }
             Some("tools/call") => {
                 let tool_name = message
                     .pointer("/params/name")
                     .and_then(Value::as_str)
                     .unwrap_or_default();
-                if tool_name == "elicit" {
+                if tool_name == "fail" {
+                    error_response(&message, -32000, "forced tool failure")
+                } else if tool_name == "elicit" {
                     match elicit_then_echo(&mut stdout, &mut input) {
                         Ok(result) => response(&message, result),
                         Err(err) => error_response(&message, -32000, err),
@@ -240,6 +263,9 @@ fn main() {
         if stdout.flush().is_err() {
             break;
         }
+        if exit_after_write {
+            std::process::exit(0);
+        }
     }
 }
 
@@ -375,6 +401,12 @@ fn should_hang_on_list() -> bool {
         return false;
     }
     std::fs::write(&marker, "hung").is_ok()
+}
+
+fn should_exit_after_first_list() -> bool {
+    std::env::var("MOCK_MCP_EXIT_AFTER_FIRST_LIST")
+        .ok()
+        .is_some_and(|value| !value.is_empty() && value != "0")
 }
 
 fn response(request: &Value, result: Value) -> Value {

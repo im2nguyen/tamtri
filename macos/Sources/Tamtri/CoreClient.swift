@@ -113,6 +113,11 @@ struct HarnessAgentRecord: Identifiable, Equatable {
     let displayName: String
 }
 
+struct ModelInfoRecord: Identifiable, Equatable {
+    let id: String
+    let displayName: String
+}
+
 struct GatewayToolRecord: Identifiable, Equatable {
     var id: String { exposedName }
     let exposedName: String
@@ -128,6 +133,7 @@ protocol CoreClient: Sendable {
     func createConversation(title: String, harnessId: String, modelId: String) async throws -> ConversationRecord
     func forkConversation(id: String, harnessId: String, modelId: String) async throws -> ConversationRecord
     func listAcpAgents() async throws -> [HarnessAgentRecord]
+    func listAcpAgentModels(agentId: String) async throws -> [ModelInfoRecord]
     func sendMessage(conversationId: String, text: String) async throws
     func syncRuntimeRoots(conversationId: String, roots: [RootDto]) async throws
     func copyFileToWorkdir(conversationId: String, sourcePath: String) async throws -> String
@@ -225,6 +231,11 @@ actor MockCoreClient: CoreClient {
 
     func listAcpAgents() async throws -> [HarnessAgentRecord] {
         [HarnessAgentRecord(id: "mock-acp", displayName: "Mock ACP")]
+    }
+
+    func listAcpAgentModels(agentId: String) async throws -> [ModelInfoRecord] {
+        _ = agentId
+        return [ModelInfoRecord(id: "mock", displayName: "Mock Model")]
     }
 
     func sendMessage(conversationId: String, text: String) async throws {
