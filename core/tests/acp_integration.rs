@@ -100,6 +100,78 @@ async fn acp_handshake_and_session_streams_events() {
 }
 
 #[tokio::test]
+async fn stream_normalizes_to_events() {
+    let temp = tempfile::tempdir().unwrap();
+    let run = adapter()
+        .run(ctx_in(temp.path().to_path_buf()), user_turn())
+        .await
+        .unwrap();
+    let events = collect_until_permission(run).await;
+
+    let kinds: Vec<&str> = events
+        .iter()
+        .map(|event| match event {
+            HarnessEvent::ThoughtDelta { .. } => "thought_delta",
+            HarnessEvent::TextDelta { .. } => "text_delta",
+            HarnessEvent::ToolCallStarted { .. } => "tool_call_started",
+            HarnessEvent::ToolCallProgress { .. } => "tool_call_progress",
+            HarnessEvent::FileChanged { .. } => "file_changed",
+            HarnessEvent::PermissionRequested { .. } => "permission_requested",
+            _ => "other",
+        })
+        .collect();
+    assert_eq!(
+        kinds,
+        vec![
+            "thought_delta",
+            "text_delta",
+            "text_delta",
+            "tool_call_started",
+            "tool_call_progress",
+            "file_changed",
+            "permission_requested",
+        ]
+    );
+
+    assert!(
+        events.iter().any(
+            |event| matches!(event, HarnessEvent::ThoughtDelta { text } if text == "thinking")
+        )
+    );
+    assert!(
+        events
+            .iter()
+            .filter(|event| matches!(event, HarnessEvent::TextDelta { .. }))
+            .map(|event| match event {
+                HarnessEvent::TextDelta { text } => text.as_str(),
+                _ => "",
+            })
+            .collect::<String>()
+            == "Hello world"
+    );
+    assert!(events.iter().any(|event| matches!(
+        event,
+        HarnessEvent::ToolCallStarted { id, name, .. } if id == "tool-1" && name == "Write"
+    )));
+    assert!(events.iter().any(|event| matches!(
+        event,
+        HarnessEvent::ToolCallProgress {
+            id,
+            status: ToolStatus::Completed,
+            ..
+        } if id == "tool-1"
+    )));
+    assert!(events.iter().any(|event| matches!(
+        event,
+        HarnessEvent::FileChanged { path, diff, .. } if path == "report.html" && diff.new_text.as_deref() == Some("<h1>ok</h1>")
+    )));
+    assert!(matches!(
+        events.last(),
+        Some(HarnessEvent::PermissionRequested { .. })
+    ));
+}
+
+#[tokio::test]
 async fn permission_round_trip_mid_turn() {
     let temp = tempfile::tempdir().unwrap();
     let mut run = adapter()

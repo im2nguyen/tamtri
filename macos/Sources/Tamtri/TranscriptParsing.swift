@@ -107,6 +107,84 @@ struct TranscriptContentBlock: Decodable, Equatable {
     var outputSummary: String {
         output?.truncatedDescription ?? ""
     }
+
+    var toolDiffs: [DiffPayload] {
+        ToolDiffParsing.diffs(from: output)
+    }
+}
+
+enum ToolDiffParsing {
+    static func diffs(from output: JSONValue?) -> [DiffPayload] {
+        guard let output else { return [] }
+        guard case .object(let object) = output,
+              case .array(let items)? = object["content"]
+        else {
+            return []
+        }
+        return items.compactMap { item in
+            guard case .object(let entry) = item,
+                  case .string(let kind)? = entry["type"],
+                  kind == "diff",
+                  case .object(let diffObject) = entry["diff"]
+            else {
+                return nil
+            }
+            return DiffPayload(json: diffObject)
+        }
+    }
+
+    static func diff(from eventPayload: JSONValue?) -> DiffPayload? {
+        guard let eventPayload else { return nil }
+        if case .object(let diffObject) = eventPayload.value(at: "diff") {
+            return DiffPayload(json: diffObject)
+        }
+        return diffs(from: eventPayload).first
+    }
+}
+
+struct DiffPayload: Equatable, Decodable {
+    let path: String?
+    let change: String?
+    let oldText: String?
+    let newText: String?
+
+    init(path: String?, change: String?, oldText: String?, newText: String?) {
+        self.path = path
+        self.change = change
+        self.oldText = oldText
+        self.newText = newText
+    }
+
+    init(json: [String: JSONValue]) {
+        path = json["path"]?.stringValue
+        change = json["change"]?.stringValue
+        oldText = json["old_text"]?.stringValue ?? json["oldText"]?.stringValue
+        newText = json["new_text"]?.stringValue ?? json["newText"]?.stringValue
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case path
+        case change
+        case oldText = "old_text"
+        case newText = "new_text"
+    }
+
+    var summary: String {
+        var lines = [path, change].compactMap { $0 }
+        if let newText, !newText.isEmpty {
+            lines.append(newText)
+        }
+        return lines.joined(separator: "\n")
+    }
+}
+
+private extension JSONValue {
+    var stringValue: String? {
+        if case .string(let value) = self {
+            return value
+        }
+        return nil
+    }
 }
 
 enum TranscriptParsing {

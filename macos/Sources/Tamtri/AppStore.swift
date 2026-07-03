@@ -59,6 +59,7 @@ final class AppStore: ObservableObject {
                         self.isRunActive = true
                     }
                     if event.kind == "turn_ended" || event.kind == "message_committed" {
+                        self.clearLiveEvents(for: event.conversationId)
                         self.conversationCache.removeValue(forKey: event.conversationId)
                         let preferNewest = event.kind == "turn_ended"
                         Task { await self.refreshWorkdirFiles(preferNewest: preferNewest, force: preferNewest) }
@@ -151,6 +152,7 @@ final class AppStore: ObservableObject {
             return
         }
 
+        clearLiveEvents()
         selectedConversationId = summary.id
 
         if let cached = conversationCache[summary.id] {
@@ -184,6 +186,15 @@ final class AppStore: ObservableObject {
             isLoadingConversation = false
             errorMessage = error.localizedDescription
         }
+    }
+
+    private func clearLiveEvents(for conversationId: String? = nil) {
+        if let conversationId {
+            liveEvents.removeAll { $0.conversationId == conversationId }
+        } else {
+            liveEvents.removeAll()
+        }
+        liveTaskStates = [:]
     }
 
     private func applySelection(_ record: ConversationRecord) {

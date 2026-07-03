@@ -1,0 +1,23 @@
+{
+  "default_harness_id": "mock-acp",
+  "agent_roster": [
+    {
+      "id": "mock-acp",
+      "display_name": "Mock ACP (fixture)",
+      "command": "/absolute/path/to/mock-acp-agent",
+      "args": [],
+      "env": []
+    },
+    {
+      "id": "claude-code-acp",
+      "display_name": "Claude Code",
+      "command": "claude",
+      "args": ["acp"],
+      "env": []
+    }
+  ],
+  "gateway": {
+    "default_call_timeout_secs": 300,
+    "servers": []
+  }
+}
