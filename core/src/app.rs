@@ -32,6 +32,7 @@ use crate::mcp::oauth::{
 };
 use crate::mcp::url_handoff::validate_handoff_url;
 use crate::mcp::endpoint::{GatewayEndpoint, start_loopback_gateway};
+use crate::mcp::capabilities::{FeatureStatus, ServerCapabilityReport};
 use crate::mcp::gateway::{GatewayEvent, McpGateway, MemoryCredentials};
 use crate::vault::events::{Event, EventKind};
 use crate::vault::fs::FilesystemVault;
@@ -112,6 +113,14 @@ pub struct GatewayServerDto {
     pub oauth_authorization_endpoint: String,
     pub oauth_token_endpoint: String,
     pub oauth_scopes: Vec<String>,
+    pub cap_tools: String,
+    pub cap_resources: String,
+    pub cap_prompts: String,
+    pub cap_elicitation: String,
+    pub cap_apps: String,
+    pub cap_tasks: String,
+    pub cap_roots: String,
+    pub cap_sampling: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, uniffi::Record)]
@@ -168,6 +177,7 @@ pub struct TamtriCore {
     observer: Arc<dyn ConversationObserver>,
     conversation_cache: Arc<Mutex<HashMap<Id, CachedConversationDto>>>,
     pending_oauth: Arc<Mutex<HashMap<String, PendingOAuthFlow>>>,
+    gateway_capability_cache: Arc<Mutex<HashMap<String, ServerCapabilityReport>>>,
 }
 
 const CONVERSATION_CACHE_LIMIT: usize = 32;
@@ -192,6 +202,7 @@ impl TamtriCore {
             observer,
             conversation_cache: Arc::new(Mutex::new(HashMap::new())),
             pending_oauth: Arc::new(Mutex::new(HashMap::new())),
+            gateway_capability_cache: Arc::new(Mutex::new(HashMap::new())),
         })
     }
 
@@ -316,6 +327,10 @@ impl TamtriCore {
 
     pub fn list_gateway_servers(&self) -> FfiResult<Vec<GatewayServerDto>> {
         self.list_gateway_servers_inner().map_err(ffi_err)
+    }
+
+    pub fn refresh_gateway_capabilities(&self) -> FfiResult<Vec<GatewayServerDto>> {
+        self.refresh_gateway_capabilities_inner().map_err(ffi_err)
     }
 
     pub fn set_gateway_credential(&self, credential_ref: String, value: String) -> FfiResult<()> {
@@ -752,12 +767,44 @@ impl TamtriCore {
 
     pub fn list_gateway_servers_inner(&self) -> Result<Vec<GatewayServerDto>> {
         let config = load_app_config(self.vault.root())?;
+        let cache = self
+            .gateway_capability_cache
+            .lock()
+            .map_err(|_| CoreError::Protocol("capability cache lock poisoned".to_string()))?;
         config
             .gateway
             .servers
             .into_iter()
-            .map(|server| gateway_server_to_dto(&server, &self.credentials))
+            .map(|server| {
+                gateway_server_to_dto(
+                    &server,
+                    &self.credentials,
+                    cache.get(&server.id),
+                )
+            })
             .collect()
+    }
+
+    pub fn refresh_gateway_capabilities_inner(&self) -> Result<Vec<GatewayServerDto>> {
+        let config = load_app_config(self.vault.root())?;
+        let gateway = McpGateway::new(
+            config.gateway.clone(),
+            self.credentials.clone(),
+            None,
+        )?;
+        let reports = self
+            .runtime
+            .block_on(async { gateway.probe_server_capabilities().await })?;
+        {
+            let mut cache = self
+                .gateway_capability_cache
+                .lock()
+                .map_err(|_| CoreError::Protocol("capability cache lock poisoned".to_string()))?;
+            for report in reports {
+                cache.insert(report.server_id.clone(), report);
+            }
+        }
+        self.list_gateway_servers_inner()
     }
 
     pub fn save_gateway_servers_inner(&self, servers: &[GatewayServerDto]) -> Result<()> {
@@ -1316,9 +1363,21 @@ fn parse_elicitation_action(action: &str) -> Result<ElicitationAction> {
     }
 }
 
+fn capability_label(
+    report: Option<&ServerCapabilityReport>,
+    pick: impl Fn(&ServerCapabilityReport) -> FeatureStatus,
+) -> String {
+    report
+        .map(pick)
+        .unwrap_or(FeatureStatus::Unknown)
+        .label()
+        .to_string()
+}
+
 fn gateway_server_to_dto(
     server: &GatewayServerConfig,
     credentials: &MemoryCredentials,
+    capability_report: Option<&ServerCapabilityReport>,
 ) -> Result<GatewayServerDto> {
     let credential_refs = server
         .credentials
@@ -1422,6 +1481,14 @@ fn gateway_server_to_dto(
         oauth_authorization_endpoint,
         oauth_token_endpoint,
         oauth_scopes,
+        cap_tools: capability_label(capability_report, |report| report.tools),
+        cap_resources: capability_label(capability_report, |report| report.resources),
+        cap_prompts: capability_label(capability_report, |report| report.prompts),
+        cap_elicitation: capability_label(capability_report, |report| report.elicitation),
+        cap_apps: capability_label(capability_report, |report| report.apps),
+        cap_tasks: capability_label(capability_report, |report| report.tasks),
+        cap_roots: capability_label(capability_report, |report| report.roots),
+        cap_sampling: capability_label(capability_report, |report| report.sampling),
     })
 }
 

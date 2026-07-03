@@ -1,4 +1,5 @@
 pub mod bridge;
+pub mod capabilities;
 pub mod client;
 pub mod elicitation;
 pub mod endpoint;

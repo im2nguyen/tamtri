@@ -377,6 +377,16 @@ final class AppStore: ObservableObject {
         }
     }
 
+    func refreshGatewayCapabilities() {
+        Task {
+            do {
+                gatewayServers = try await core.refreshGatewayCapabilities()
+            } catch {
+                errorMessage = error.localizedDescription
+            }
+        }
+    }
+
     private func reloadGatewayServers() async {
         do {
             gatewayServers = try await core.listGatewayServers()

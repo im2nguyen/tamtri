@@ -121,6 +121,46 @@ async fn gateway_tools_call_routes_to_downstream() {
 }
 
 #[tokio::test]
+async fn gateway_list_tools_skips_unreachable_servers() {
+    let good_command = env!("CARGO_BIN_EXE_mock-mcp-server");
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    let gateway = McpGateway::new(
+        GatewayConfig {
+            default_call_timeout_secs: 300,
+            servers: vec![
+                stdio_server("broken", "/no/such/twenty-questions-mcp"),
+                stdio_server("mock", good_command),
+            ],
+        },
+        Arc::new(NoCredentials),
+        Some(tx),
+    )
+    .unwrap();
+
+    let tools = gateway.list_tools().await.unwrap();
+    assert!(
+        tools.iter().any(|tool| tool.exposed_name == "mock__echo"),
+        "expected mock tools after skipping broken server, got: {:?}",
+        tools
+            .iter()
+            .map(|tool| tool.exposed_name.as_str())
+            .collect::<Vec<_>>()
+    );
+
+    let mut saw_broken_error = false;
+    while let Ok(event) = tokio::time::timeout(Duration::from_secs(1), rx.recv()).await {
+        let Some(event) = event else { break };
+        if let GatewayEvent::DownstreamError { server_id, .. } = event
+            && server_id == "broken"
+        {
+            saw_broken_error = true;
+            break;
+        }
+    }
+    assert!(saw_broken_error);
+}
+
+#[tokio::test]
 async fn gateway_resources_route_to_downstream() {
     let command = env!("CARGO_BIN_EXE_mock-mcp-server");
     let gateway = McpGateway::new(

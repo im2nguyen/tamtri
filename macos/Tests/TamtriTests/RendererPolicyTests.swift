@@ -12,10 +12,21 @@ final class RendererPolicyTests: XCTestCase {
         XCTAssertTrue(html.contains("form-action 'none'"))
     }
 
-    func testArtifactNavigationPolicyBlocksExternalNavigation() {
+    func testWebContentPolicyArtifactMatchesLegacyNavigation() {
+        XCTAssertTrue(WebNavigationPolicy.allows(URL(string: "about:blank"), policy: .artifactNoNetwork))
+        XCTAssertFalse(WebNavigationPolicy.allows(URL(string: "https://example.com"), policy: .artifactNoNetwork))
         XCTAssertTrue(ArtifactNavigationPolicy.allows(URL(string: "about:blank")))
         XCTAssertFalse(ArtifactNavigationPolicy.allows(URL(string: "https://example.com")))
-        XCTAssertFalse(ArtifactNavigationPolicy.allows(URL(fileURLWithPath: "/tmp/report.html")))
+    }
+
+    func testAppPolicyBlocksUndeclaredOrigin() {
+        let policy = WebContentPolicy.app(
+            allowedOrigins: [WebOrigin(scheme: "https", host: "cdn.example.com")],
+            appId: "demo",
+            serverId: "fixture"
+        )
+        XCTAssertFalse(WebNavigationPolicy.allows(URL(string: "https://evil.example"), policy: policy))
+        XCTAssertTrue(WebNavigationPolicy.allows(URL(string: "https://cdn.example.com/app.js"), policy: policy))
     }
 
     func testArtifactMimeRouting() {

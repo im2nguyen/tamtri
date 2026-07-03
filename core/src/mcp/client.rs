@@ -142,6 +142,7 @@ impl McpClient {
                     form: Some(serde_json::json!({})),
                     url: Some(serde_json::json!({})),
                 }),
+                ..Default::default()
             },
             client_info: Implementation {
                 name: "tamtri-core".to_string(),
@@ -344,6 +345,18 @@ async fn run_inbound_driver(
                 };
                 let _ = handle.respond(req.id, result).await;
             }
+            InboundMessage::Request(req) if req.method == "sampling/create" => {
+                let _ = handle
+                    .respond(
+                        req.id,
+                        Err(JsonRpcError {
+                            code: METHOD_NOT_FOUND,
+                            message: "sampling is not supported".to_string(),
+                            data: None,
+                        }),
+                    )
+                    .await;
+            }
             InboundMessage::Request(req) => {
                 tracing::warn!("unsupported MCP server request {}", req.method);
                 let _ = handle
@@ -543,8 +556,7 @@ mod tests {
                 tools: Some(ToolsCapability {
                     list_changed: Some(false)
                 }),
-                resources: None,
-                prompts: None,
+                ..Default::default()
             })
         );
         let sent = sent.lock().await;

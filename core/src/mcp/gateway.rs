@@ -13,6 +13,9 @@ use crate::config::{
     validate_app_config,
 };
 use crate::conversation::{ElicitationAction, ElicitationMode};
+use crate::mcp::capabilities::{
+    ServerCapabilityReport, TamtriFeatureSupport, report_from_initialize,
+};
 use crate::mcp::client::{ElicitationHandler, McpClient, McpClientConfig, McpClientEvent};
 use crate::mcp::elicitation::{
     elicitation_mode, elicitation_request_id, origin_tool_call_id_from_meta, parse_create_params,
@@ -20,6 +23,7 @@ use crate::mcp::elicitation::{
 };
 use crate::mcp::protocol::{
     CallToolResult, GetPromptResult, Prompt, ReadResourceResult, Resource, Tool,
+    MCP_PROTOCOL_VERSION,
 };
 use crate::mcp::oauth::{
     OAuthResolveOutcome, resolve_oauth_access_token, serialize_stored_oauth,
@@ -181,6 +185,7 @@ pub struct McpGateway {
     routes: Mutex<HashMap<String, ToolRoute>>,
     resource_routes: Mutex<HashMap<String, ResourceRoute>>,
     prompt_routes: Mutex<HashMap<String, PromptRoute>>,
+    server_capability_reports: Mutex<HashMap<String, ServerCapabilityReport>>,
 }
 
 #[derive(Debug, Clone)]
@@ -264,7 +269,72 @@ impl McpGateway {
             routes: Mutex::new(HashMap::new()),
             resource_routes: Mutex::new(HashMap::new()),
             prompt_routes: Mutex::new(HashMap::new()),
+            server_capability_reports: Mutex::new(HashMap::new()),
         })
+    }
+
+    pub async fn capability_report(&self, server_id: &str) -> Option<ServerCapabilityReport> {
+        self.server_capability_reports
+            .lock()
+            .await
+            .get(server_id)
+            .cloned()
+    }
+
+    pub async fn capability_reports(&self) -> Vec<ServerCapabilityReport> {
+        self.server_capability_reports
+            .lock()
+            .await
+            .values()
+            .cloned()
+            .collect()
+    }
+
+    pub async fn probe_server_capabilities(&self) -> Result<Vec<ServerCapabilityReport>> {
+        let mut reports = Vec::new();
+        for server in self.config.enabled_servers() {
+            match self.client_for(server).await {
+                Ok(client) => {
+                    if let Some(caps) = client.server_capabilities() {
+                        let report = report_from_initialize(
+                            &server.id,
+                            MCP_PROTOCOL_VERSION,
+                            caps,
+                            TamtriFeatureSupport::milestone_7_pr1(),
+                        );
+                        self.store_capability_report(report.clone()).await;
+                        reports.push(report);
+                    }
+                }
+                Err(err) => {
+                    self.emit(GatewayEvent::DownstreamError {
+                        server_id: server.id.clone(),
+                        message: err.to_string(),
+                    });
+                }
+            }
+        }
+        Ok(reports)
+    }
+
+    async fn store_capability_report(&self, report: ServerCapabilityReport) {
+        self.server_capability_reports
+            .lock()
+            .await
+            .insert(report.server_id.clone(), report);
+    }
+
+    async fn record_connected_capabilities(&self, server_id: &str, client: &McpClient) {
+        let Some(caps) = client.server_capabilities() else {
+            return;
+        };
+        let report = report_from_initialize(
+            server_id,
+            MCP_PROTOCOL_VERSION,
+            caps,
+            TamtriFeatureSupport::milestone_7_pr1(),
+        );
+        self.store_capability_report(report).await;
     }
 
     pub async fn respond_elicitation(
@@ -296,7 +366,16 @@ impl McpGateway {
     pub async fn list_tools(&self) -> Result<Vec<GatewayTool>> {
         let mut tools = Vec::new();
         for server in self.config.enabled_servers() {
-            let client = self.client_for(server).await?;
+            let client = match self.client_for(server).await {
+                Ok(client) => client,
+                Err(err) => {
+                    self.emit(GatewayEvent::DownstreamError {
+                        server_id: server.id.clone(),
+                        message: err.to_string(),
+                    });
+                    continue;
+                }
+            };
             match client.list_tools().await {
                 Ok(server_tools) => {
                     for tool in server_tools {
@@ -321,7 +400,6 @@ impl McpGateway {
                         server_id: server.id.clone(),
                         message: err.to_string(),
                     });
-                    return Err(err);
                 }
             }
         }
@@ -508,6 +586,8 @@ impl McpGateway {
             return Ok(client);
         }
         let client = Arc::new(self.connect_server(server).await?);
+        self.record_connected_capabilities(&server.id, client.as_ref())
+            .await;
         self.clients
             .lock()
             .await

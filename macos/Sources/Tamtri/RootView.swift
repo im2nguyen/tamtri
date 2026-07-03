@@ -596,6 +596,7 @@ func artifactIsImageMime(_ mimeType: String?) -> Bool {
 
 struct SandboxedHTMLView: NSViewRepresentable {
     let html: String
+    var policy: WebContentPolicy = .artifactNoNetwork
     var onBlockedNavigation: ((URL) -> Void)?
 
     func makeNSView(context: Context) -> WKWebView {
@@ -608,18 +609,21 @@ struct SandboxedHTMLView: NSViewRepresentable {
     }
 
     func updateNSView(_ webView: WKWebView, context: Context) {
+        context.coordinator.policy = policy
         context.coordinator.onBlockedNavigation = onBlockedNavigation
-        webView.loadHTMLString(artifactSandboxedHTML(html), baseURL: nil)
+        webView.loadHTMLString(sandboxedHTML(for: html, policy: policy), baseURL: nil)
     }
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(onBlockedNavigation: onBlockedNavigation)
+        Coordinator(policy: policy, onBlockedNavigation: onBlockedNavigation)
     }
 
     final class Coordinator: NSObject, WKNavigationDelegate {
+        var policy: WebContentPolicy
         var onBlockedNavigation: ((URL) -> Void)?
 
-        init(onBlockedNavigation: ((URL) -> Void)?) {
+        init(policy: WebContentPolicy, onBlockedNavigation: ((URL) -> Void)?) {
+            self.policy = policy
             self.onBlockedNavigation = onBlockedNavigation
         }
 
@@ -628,7 +632,7 @@ struct SandboxedHTMLView: NSViewRepresentable {
                 decisionHandler(.allow)
                 return
             }
-            if ArtifactNavigationPolicy.allows(url) {
+            if WebNavigationPolicy.allows(url, policy: policy) {
                 decisionHandler(.allow)
             } else {
                 onBlockedNavigation?(url)
@@ -636,24 +640,6 @@ struct SandboxedHTMLView: NSViewRepresentable {
             }
         }
     }
-}
-
-struct ArtifactNavigationPolicy {
-    static func allows(_ url: URL?) -> Bool {
-        guard let url else { return true }
-        return url.scheme == "about" || url.scheme == nil
-    }
-}
-
-func artifactSandboxedHTML(_ html: String) -> String {
-    let csp = "<meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; img-src data:; style-src 'unsafe-inline'; script-src 'none'; base-uri 'none'; form-action 'none'\">"
-    if let headRange = html.range(of: "<head", options: [.caseInsensitive]),
-       let close = html[headRange.upperBound...].firstIndex(of: ">") {
-        var copy = html
-        copy.insert(contentsOf: csp, at: html.index(after: close))
-        return copy
-    }
-    return "<!doctype html><html><head>\(csp)</head><body>\(html)</body></html>"
 }
 
 struct CSVPreview: View {
@@ -1419,6 +1405,11 @@ struct SettingsView: View {
                     .font(.title2.bold())
                 Spacer()
                 Button {
+                    store.refreshGatewayCapabilities()
+                } label: {
+                    Label("Probe capabilities", systemImage: "antenna.radiowaves.left.and.right")
+                }
+                Button {
                     store.refreshGatewayServers()
                 } label: {
                     Label("Refresh", systemImage: "arrow.clockwise")
@@ -1518,6 +1509,104 @@ struct SettingsView: View {
     }
 }
 
+struct GatewayCapabilityBadges: View {
+    let server: GatewayServerRecord
+
+    private let features: [(label: String, keyPath: KeyPath<GatewayServerRecord, String>)] = [
+        ("Tools", \.capTools),
+        ("Resources", \.capResources),
+        ("Prompts", \.capPrompts),
+        ("Elicitation", \.capElicitation),
+        ("Apps", \.capApps),
+        ("Tasks", \.capTasks),
+        ("Roots", \.capRoots),
+        ("Sampling", \.capSampling),
+    ]
+
+    var body: some View {
+        FlowLayout(spacing: 6) {
+            ForEach(features, id: \.label) { feature in
+                CapabilityBadge(title: feature.label, status: server[keyPath: feature.keyPath])
+            }
+        }
+    }
+}
+
+private struct CapabilityBadge: View {
+    let title: String
+    let status: String
+
+    var body: some View {
+        Text("\(title): \(displayStatus)")
+            .font(.caption2)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(backgroundColor.opacity(0.15), in: Capsule())
+            .foregroundStyle(foregroundColor)
+            .accessibilityLabel("\(title) \(displayStatus)")
+    }
+
+    private var displayStatus: String {
+        status.replacingOccurrences(of: "_", with: " ")
+    }
+
+    private var foregroundColor: Color {
+        switch status {
+        case "supported": .green
+        case "server_only": .orange
+        case "declined": .secondary
+        case "unknown": .secondary
+        default: .secondary
+        }
+    }
+
+    private var backgroundColor: Color {
+        foregroundColor
+    }
+}
+
+/// Simple horizontal flow for capability chips.
+private struct FlowLayout: Layout {
+    var spacing: CGFloat = 8
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let result = arrange(proposal: proposal, subviews: subviews)
+        return result.size
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let result = arrange(proposal: proposal, subviews: subviews)
+        for (index, position) in result.positions.enumerated() {
+            subviews[index].place(
+                at: CGPoint(x: bounds.minX + position.x, y: bounds.minY + position.y),
+                proposal: .unspecified
+            )
+        }
+    }
+
+    private func arrange(proposal: ProposedViewSize, subviews: Subviews) -> (size: CGSize, positions: [CGPoint]) {
+        let maxWidth = proposal.width ?? .infinity
+        var x: CGFloat = 0
+        var y: CGFloat = 0
+        var rowHeight: CGFloat = 0
+        var positions: [CGPoint] = []
+
+        for subview in subviews {
+            let size = subview.sizeThatFits(.unspecified)
+            if x + size.width > maxWidth, x > 0 {
+                x = 0
+                y += rowHeight + spacing
+                rowHeight = 0
+            }
+            positions.append(CGPoint(x: x, y: y))
+            rowHeight = max(rowHeight, size.height)
+            x += size.width + spacing
+        }
+
+        return (CGSize(width: maxWidth, height: y + rowHeight), positions)
+    }
+}
+
 struct GatewayServerRow: View {
     @EnvironmentObject private var store: AppStore
     let server: GatewayServerRecord
@@ -1545,6 +1634,7 @@ struct GatewayServerRow: View {
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
+            GatewayCapabilityBadges(server: server)
             if server.credentialRefs.isEmpty && server.oauthTokenRef.isEmpty {
                 Text("No credentials required")
                     .font(.caption)

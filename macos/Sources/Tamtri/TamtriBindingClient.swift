@@ -118,6 +118,10 @@ actor TamtriBindingClient: CoreClient {
         try core.listGatewayServers().map(gatewayServerRecord(from:))
     }
 
+    func refreshGatewayCapabilities() async throws -> [GatewayServerRecord] {
+        try core.refreshGatewayCapabilities().map(gatewayServerRecord(from:))
+    }
+
     func saveGatewayServers(_ servers: [GatewayServerRecord]) async throws {
         try core.saveGatewayServers(servers: servers.map(gatewayServerDto(from:)))
     }
@@ -218,7 +222,15 @@ private func gatewayServerRecord(from dto: GatewayServerDto) -> GatewayServerRec
         oauthClientId: dto.oauthClientId,
         oauthAuthorizationEndpoint: dto.oauthAuthorizationEndpoint,
         oauthTokenEndpoint: dto.oauthTokenEndpoint,
-        oauthScopes: dto.oauthScopes
+        oauthScopes: dto.oauthScopes,
+        capTools: dto.capTools,
+        capResources: dto.capResources,
+        capPrompts: dto.capPrompts,
+        capElicitation: dto.capElicitation,
+        capApps: dto.capApps,
+        capTasks: dto.capTasks,
+        capRoots: dto.capRoots,
+        capSampling: dto.capSampling
     )
 }
 
@@ -240,7 +252,15 @@ private func gatewayServerDto(from record: GatewayServerRecord) -> GatewayServer
         oauthClientId: record.oauthClientId,
         oauthAuthorizationEndpoint: record.oauthAuthorizationEndpoint,
         oauthTokenEndpoint: record.oauthTokenEndpoint,
-        oauthScopes: record.oauthScopes
+        oauthScopes: record.oauthScopes,
+        capTools: record.capTools,
+        capResources: record.capResources,
+        capPrompts: record.capPrompts,
+        capElicitation: record.capElicitation,
+        capApps: record.capApps,
+        capTasks: record.capTasks,
+        capRoots: record.capRoots,
+        capSampling: record.capSampling
     )
 }
 

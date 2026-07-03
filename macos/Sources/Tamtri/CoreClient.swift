@@ -59,6 +59,14 @@ struct GatewayServerRecord: Identifiable, Equatable {
     let oauthAuthorizationEndpoint: String
     let oauthTokenEndpoint: String
     let oauthScopes: [String]
+    let capTools: String
+    let capResources: String
+    let capPrompts: String
+    let capElicitation: String
+    let capApps: String
+    let capTasks: String
+    let capRoots: String
+    let capSampling: String
 }
 
 struct WorkdirFileRecord: Equatable, Identifiable, Hashable {
@@ -97,6 +105,7 @@ protocol CoreClient: Sendable {
     func respondElicitation(conversationId: String, requestId: String, action: String, dataJSON: String?) async throws
     func cancelRun(conversationId: String) async throws
     func listGatewayServers() async throws -> [GatewayServerRecord]
+    func refreshGatewayCapabilities() async throws -> [GatewayServerRecord]
     func saveGatewayServers(_ servers: [GatewayServerRecord]) async throws
     func setGatewayCredential(credentialRef: String, value: String) async throws
     func exportGatewayCredential(credentialRef: String) async throws -> String?
@@ -229,9 +238,21 @@ actor MockCoreClient: CoreClient {
                 oauthClientId: "",
                 oauthAuthorizationEndpoint: "",
                 oauthTokenEndpoint: "",
-                oauthScopes: []
+                oauthScopes: [],
+                capTools: "unknown",
+                capResources: "unknown",
+                capPrompts: "unknown",
+                capElicitation: "unknown",
+                capApps: "unknown",
+                capTasks: "unknown",
+                capRoots: "unknown",
+                capSampling: "declined"
             )
         ]
+    }
+
+    func refreshGatewayCapabilities() async throws -> [GatewayServerRecord] {
+        try await listGatewayServers()
     }
 
     func saveGatewayServers(_ servers: [GatewayServerRecord]) async throws {}

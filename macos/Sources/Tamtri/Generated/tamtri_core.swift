@@ -805,6 +805,8 @@ public protocol TamtriCoreProtocol: AnyObject, Sendable {
     
     func readWorkdirFile(conversationId: String, relativePath: String) throws  -> WorkdirFileContentDto
     
+    func refreshGatewayCapabilities() throws  -> [GatewayServerDto]
+    
     func registerAcpAgent(id: String, displayName: String, command: String, args: [String]) throws 
     
     func respondElicitation(conversationId: String, requestId: String, action: String, dataJson: String?) throws 
@@ -1038,6 +1040,15 @@ open func readWorkdirFile(conversationId: String, relativePath: String)throws  -
             self.uniffiCloneHandle(),
         FfiConverterString.lower(conversationId),
         FfiConverterString.lower(relativePath),uniffiCallStatus
+    )
+})
+}
+    
+open func refreshGatewayCapabilities()throws  -> [GatewayServerDto]  {
+    return try  FfiConverterSequenceTypeGatewayServerDto.lift(try rustCallWithError(FfiConverterTypeTamtriError_lift) {
+        uniffiCallStatus in
+    uniffi_tamtri_core_fn_method_tamtricore_refresh_gateway_capabilities(
+            self.uniffiCloneHandle(),uniffiCallStatus
     )
 })
 }
@@ -1385,10 +1396,18 @@ public struct GatewayServerDto: Equatable, Hashable {
     public var oauthAuthorizationEndpoint: String
     public var oauthTokenEndpoint: String
     public var oauthScopes: [String]
+    public var capTools: String
+    public var capResources: String
+    public var capPrompts: String
+    public var capElicitation: String
+    public var capApps: String
+    public var capTasks: String
+    public var capRoots: String
+    public var capSampling: String
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(id: String, displayName: String, enabled: Bool, scope: String, transport: String, stdioCommand: String, stdioArgs: [String], stdioEnv: [GatewayEnvVarDto], httpEndpoint: String, credentialRefs: [String], missingCredentialRefs: [String], oauthStatus: String, oauthTokenRef: String, oauthClientId: String, oauthAuthorizationEndpoint: String, oauthTokenEndpoint: String, oauthScopes: [String]) {
+    public init(id: String, displayName: String, enabled: Bool, scope: String, transport: String, stdioCommand: String, stdioArgs: [String], stdioEnv: [GatewayEnvVarDto], httpEndpoint: String, credentialRefs: [String], missingCredentialRefs: [String], oauthStatus: String, oauthTokenRef: String, oauthClientId: String, oauthAuthorizationEndpoint: String, oauthTokenEndpoint: String, oauthScopes: [String], capTools: String, capResources: String, capPrompts: String, capElicitation: String, capApps: String, capTasks: String, capRoots: String, capSampling: String) {
         self.id = id
         self.displayName = displayName
         self.enabled = enabled
@@ -1406,6 +1425,14 @@ public struct GatewayServerDto: Equatable, Hashable {
         self.oauthAuthorizationEndpoint = oauthAuthorizationEndpoint
         self.oauthTokenEndpoint = oauthTokenEndpoint
         self.oauthScopes = oauthScopes
+        self.capTools = capTools
+        self.capResources = capResources
+        self.capPrompts = capPrompts
+        self.capElicitation = capElicitation
+        self.capApps = capApps
+        self.capTasks = capTasks
+        self.capRoots = capRoots
+        self.capSampling = capSampling
     }
 
     
@@ -1438,9 +1465,17 @@ public struct FfiConverterTypeGatewayServerDto: FfiConverterRustBuffer {
                 oauthStatus: FfiConverterString.read(from: &buf), 
                 oauthTokenRef: FfiConverterString.read(from: &buf), 
                 oauthClientId: FfiConverterString.read(from: &buf), 
-                oauthAuthorizationEndpoint: FfiConverterString.read(from: &buf),
-                oauthTokenEndpoint: FfiConverterString.read(from: &buf),
-                oauthScopes: FfiConverterSequenceString.read(from: &buf)
+                oauthAuthorizationEndpoint: FfiConverterString.read(from: &buf), 
+                oauthTokenEndpoint: FfiConverterString.read(from: &buf), 
+                oauthScopes: FfiConverterSequenceString.read(from: &buf), 
+                capTools: FfiConverterString.read(from: &buf), 
+                capResources: FfiConverterString.read(from: &buf), 
+                capPrompts: FfiConverterString.read(from: &buf), 
+                capElicitation: FfiConverterString.read(from: &buf), 
+                capApps: FfiConverterString.read(from: &buf), 
+                capTasks: FfiConverterString.read(from: &buf), 
+                capRoots: FfiConverterString.read(from: &buf), 
+                capSampling: FfiConverterString.read(from: &buf)
         )
     }
 
@@ -1462,6 +1497,14 @@ public struct FfiConverterTypeGatewayServerDto: FfiConverterRustBuffer {
         FfiConverterString.write(value.oauthAuthorizationEndpoint, into: &buf)
         FfiConverterString.write(value.oauthTokenEndpoint, into: &buf)
         FfiConverterSequenceString.write(value.oauthScopes, into: &buf)
+        FfiConverterString.write(value.capTools, into: &buf)
+        FfiConverterString.write(value.capResources, into: &buf)
+        FfiConverterString.write(value.capPrompts, into: &buf)
+        FfiConverterString.write(value.capElicitation, into: &buf)
+        FfiConverterString.write(value.capApps, into: &buf)
+        FfiConverterString.write(value.capTasks, into: &buf)
+        FfiConverterString.write(value.capRoots, into: &buf)
+        FfiConverterString.write(value.capSampling, into: &buf)
     }
 }
 
@@ -2055,6 +2098,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_tamtri_core_checksum_method_tamtricore_read_workdir_file() != 53471) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tamtri_core_checksum_method_tamtricore_refresh_gateway_capabilities() != 33045) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_tamtri_core_checksum_method_tamtricore_register_acp_agent() != 43935) {

@@ -36,6 +36,14 @@ dictionary GatewayServerDto {
   string oauth_authorization_endpoint;
   string oauth_token_endpoint;
   sequence<string> oauth_scopes;
+  string cap_tools;
+  string cap_resources;
+  string cap_prompts;
+  string cap_elicitation;
+  string cap_apps;
+  string cap_tasks;
+  string cap_roots;
+  string cap_sampling;
 };
 
 dictionary GatewayEnvVarDto {
@@ -90,6 +98,8 @@ interface TamtriCore {
   void cancel_run(string conversation_id);
   [Throws=TamtriError]
   sequence<GatewayServerDto> list_gateway_servers();
+  [Throws=TamtriError]
+  sequence<GatewayServerDto> refresh_gateway_capabilities();
   [Throws=TamtriError]
   void save_gateway_servers(sequence<GatewayServerDto> servers);
   [Throws=TamtriError]
