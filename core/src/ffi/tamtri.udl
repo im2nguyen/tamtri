@@ -1,3 +1,13 @@
+dictionary VaultIssueDto {
+  string kind;
+  string? conversation_id;
+  string? path;
+  string? reason;
+  string? winner_path;
+  sequence<string> loser_paths;
+  string detail;
+};
+
 dictionary RootDto {
   string id;
   string name;
@@ -224,6 +234,12 @@ interface TamtriCore {
   sequence<HarnessHealthEntryDto> list_harness_health();
   [Throws=TamtriError]
   string harness_health_checklist();
+  [Throws=TamtriError]
+  sequence<VaultIssueDto> vault_issues();
+  [Throws=TamtriError]
+  string vault_path();
+  [Throws=TamtriError]
+  string write_diagnostics_bundle(string dest_path, string system_info_json);
 };
 
 namespace tamtri {};

@@ -869,9 +869,15 @@ public protocol TamtriCoreProtocol: AnyObject, Sendable {
     
     func syncRuntimeRoots(conversationId: String, roots: [RootDto]) throws 
     
+    func vaultIssues() throws  -> [VaultIssueDto]
+    
+    func vaultPath()  -> String
+    
     func verifiedAttachmentPath(conversationId: String, path: String, size: UInt64, sha256: String) throws  -> String
     
     func verifyArtifactInline(size: UInt64, sha256: String, inlineContent: String) throws 
+    
+    func writeDiagnosticsBundle(destPath: String, systemInfoJson: String) throws  -> String
     
 }
 open class TamtriCore: TamtriCoreProtocol, @unchecked Sendable {
@@ -1422,6 +1428,24 @@ open func syncRuntimeRoots(conversationId: String, roots: [RootDto])throws   {tr
 }
 }
     
+open func vaultIssues()throws  -> [VaultIssueDto]  {
+    return try  FfiConverterSequenceTypeVaultIssueDto.lift(try rustCallWithError(FfiConverterTypeTamtriError_lift) {
+        uniffiCallStatus in
+    uniffi_tamtri_core_fn_method_tamtricore_vault_issues(
+            self.uniffiCloneHandle(),uniffiCallStatus
+    )
+})
+}
+    
+open func vaultPath() -> String  {
+    return try!  FfiConverterString.lift(try! rustCall() {
+        uniffiCallStatus in
+    uniffi_tamtri_core_fn_method_tamtricore_vault_path(
+            self.uniffiCloneHandle(),uniffiCallStatus
+    )
+})
+}
+    
 open func verifiedAttachmentPath(conversationId: String, path: String, size: UInt64, sha256: String)throws  -> String  {
     return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeTamtriError_lift) {
         uniffiCallStatus in
@@ -1444,6 +1468,17 @@ open func verifyArtifactInline(size: UInt64, sha256: String, inlineContent: Stri
         FfiConverterString.lower(inlineContent),uniffiCallStatus
     )
 }
+}
+    
+open func writeDiagnosticsBundle(destPath: String, systemInfoJson: String)throws  -> String  {
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeTamtriError_lift) {
+        uniffiCallStatus in
+    uniffi_tamtri_core_fn_method_tamtricore_write_diagnostics_bundle(
+            self.uniffiCloneHandle(),
+        FfiConverterString.lower(destPath),
+        FfiConverterString.lower(systemInfoJson),uniffiCallStatus
+    )
+})
 }
     
 
@@ -2654,6 +2689,80 @@ public func FfiConverterTypeUiEvent_lower(_ value: UiEvent) -> RustBuffer {
 }
 
 
+public struct VaultIssueDto: Equatable, Hashable {
+    public var kind: String
+    public var conversationId: String?
+    public var path: String?
+    public var reason: String?
+    public var winnerPath: String?
+    public var loserPaths: [String]
+    public var detail: String
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(kind: String, conversationId: String?, path: String?, reason: String?, winnerPath: String?, loserPaths: [String], detail: String) {
+        self.kind = kind
+        self.conversationId = conversationId
+        self.path = path
+        self.reason = reason
+        self.winnerPath = winnerPath
+        self.loserPaths = loserPaths
+        self.detail = detail
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension VaultIssueDto: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeVaultIssueDto: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> VaultIssueDto {
+        return
+            try VaultIssueDto(
+                kind: FfiConverterString.read(from: &buf), 
+                conversationId: FfiConverterOptionString.read(from: &buf), 
+                path: FfiConverterOptionString.read(from: &buf), 
+                reason: FfiConverterOptionString.read(from: &buf), 
+                winnerPath: FfiConverterOptionString.read(from: &buf), 
+                loserPaths: FfiConverterSequenceString.read(from: &buf), 
+                detail: FfiConverterString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: VaultIssueDto, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.kind, into: &buf)
+        FfiConverterOptionString.write(value.conversationId, into: &buf)
+        FfiConverterOptionString.write(value.path, into: &buf)
+        FfiConverterOptionString.write(value.reason, into: &buf)
+        FfiConverterOptionString.write(value.winnerPath, into: &buf)
+        FfiConverterSequenceString.write(value.loserPaths, into: &buf)
+        FfiConverterString.write(value.detail, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeVaultIssueDto_lift(_ buf: RustBuffer) throws -> VaultIssueDto {
+    return try FfiConverterTypeVaultIssueDto.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeVaultIssueDto_lower(_ value: VaultIssueDto) -> RustBuffer {
+    return FfiConverterTypeVaultIssueDto.lower(value)
+}
+
+
 public struct WorkdirFileContentDto: Equatable, Hashable {
     public var mimeType: String?
     public var data: Data
@@ -3194,6 +3303,31 @@ fileprivate struct FfiConverterSequenceTypeSearchHitDto: FfiConverterRustBuffer 
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterSequenceTypeVaultIssueDto: FfiConverterRustBuffer {
+    typealias SwiftType = [VaultIssueDto]
+
+    public static func write(_ value: [VaultIssueDto], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeVaultIssueDto.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [VaultIssueDto] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [VaultIssueDto]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeVaultIssueDto.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterSequenceTypeWorkdirFileDto: FfiConverterRustBuffer {
     typealias SwiftType = [WorkdirFileDto]
 
@@ -3375,10 +3509,19 @@ private let initializationResult: InitializationResult = {
     if (uniffi_tamtri_core_checksum_method_tamtricore_sync_runtime_roots() != 21628) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_tamtri_core_checksum_method_tamtricore_vault_issues() != 3109) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tamtri_core_checksum_method_tamtricore_vault_path() != 40934) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_tamtri_core_checksum_method_tamtricore_verified_attachment_path() != 25850) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_tamtri_core_checksum_method_tamtricore_verify_artifact_inline() != 64758) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_tamtri_core_checksum_method_tamtricore_write_diagnostics_bundle() != 53587) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_tamtri_core_checksum_constructor_tamtricore_new() != 23658) {

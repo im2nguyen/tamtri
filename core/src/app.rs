@@ -49,8 +49,9 @@ use crate::mcp::capabilities::{FeatureStatus, ServerCapabilityReport};
 use crate::mcp::gateway::{GatewayEvent, McpGateway, MemoryCredentials};
 use crate::vault::events::{Event, EventKind};
 use crate::vault::fs::FilesystemVault;
-use crate::vault::{ConversationSummary, ConversationVault};
+use crate::vault::{ConversationSummary, ConversationVault, VaultIssue};
 use crate::debug_log::debug_log;
+use crate::diagnostics;
 use crate::{CoreError, Result};
 
 #[uniffi::export(foreign)]
@@ -86,6 +87,17 @@ pub struct ConversationDto {
 struct CachedConversationDto {
     updated_at: DateTime<Utc>,
     dto: ConversationDto,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, uniffi::Record)]
+pub struct VaultIssueDto {
+    pub kind: String,
+    pub conversation_id: Option<String>,
+    pub path: Option<String>,
+    pub reason: Option<String>,
+    pub winner_path: Option<String>,
+    pub loser_paths: Vec<String>,
+    pub detail: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, uniffi::Record)]
@@ -807,6 +819,23 @@ impl TamtriCore {
 
     pub fn harness_health_checklist(&self) -> FfiResult<String> {
         self.harness_health_checklist_inner().map_err(ffi_err)
+    }
+
+    pub fn vault_issues(&self) -> FfiResult<Vec<VaultIssueDto>> {
+        self.vault_issues_inner().map_err(ffi_err)
+    }
+
+    pub fn vault_path(&self) -> String {
+        self.vault.root().display().to_string()
+    }
+
+    pub fn write_diagnostics_bundle(
+        &self,
+        dest_path: String,
+        system_info_json: String,
+    ) -> FfiResult<String> {
+        self.write_diagnostics_bundle_inner(dest_path.into(), &system_info_json)
+            .map_err(ffi_err)
     }
 }
 
@@ -1839,6 +1868,38 @@ impl TamtriCore {
         )))
     }
 
+    pub fn vault_issues_inner(&self) -> Result<Vec<VaultIssueDto>> {
+        Ok(self
+            .vault
+            .issues()?
+            .iter()
+            .map(vault_issue_to_dto)
+            .collect())
+    }
+
+    pub fn write_diagnostics_bundle_inner(
+        &self,
+        dest_path: PathBuf,
+        system_info_json: &str,
+    ) -> Result<String> {
+        let system_info: serde_json::Value =
+            serde_json::from_str(system_info_json).unwrap_or_else(|_| json!({}));
+        let app_config = load_app_config(self.vault.root())?;
+        let harness_health = self.list_harness_health_inner()?;
+        let harness_health_json = serde_json::to_value(&harness_health)?;
+        let issues = self.vault_issues_inner()?;
+        let issues_json = serde_json::to_value(&issues)?;
+        let bundle = diagnostics::write_diagnostics_bundle(
+            self.vault.root(),
+            &dest_path,
+            &app_config,
+            &harness_health_json,
+            &issues_json,
+            &system_info,
+        )?;
+        Ok(bundle.display().to_string())
+    }
+
     fn adapter(&self, harness_id: &str) -> Result<Arc<dyn HarnessAdapter>> {
         self.adapters
             .lock()
@@ -1846,6 +1907,50 @@ impl TamtriCore {
             .get(harness_id)
             .cloned()
             .ok_or_else(|| CoreError::Protocol(format!("unknown harness: {harness_id}")))
+    }
+}
+
+fn vault_issue_to_dto(issue: &VaultIssue) -> VaultIssueDto {
+    match issue {
+        VaultIssue::DuplicateId { id, winner, losers } => VaultIssueDto {
+            kind: "duplicate_id".to_string(),
+            conversation_id: Some(id.to_string()),
+            path: None,
+            reason: None,
+            winner_path: Some(winner.display().to_string()),
+            loser_paths: losers.iter().map(|path| path.display().to_string()).collect(),
+            detail: format!(
+                "Duplicate conversation id {}. Active folder: {}. Duplicate folders: {}.",
+                id,
+                winner.display(),
+                losers
+                    .iter()
+                    .map(|path| path.display().to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+        },
+        VaultIssue::TornTailDetected { id } => VaultIssueDto {
+            kind: "torn_tail".to_string(),
+            conversation_id: Some(id.to_string()),
+            path: None,
+            reason: None,
+            winner_path: None,
+            loser_paths: Vec::new(),
+            detail: format!(
+                "Conversation {} has a torn final line in messages.jsonl. tamtri repairs this on the next write.",
+                id
+            ),
+        },
+        VaultIssue::UnreadableFolder { path, reason } => VaultIssueDto {
+            kind: "unreadable_folder".to_string(),
+            conversation_id: None,
+            path: Some(path.display().to_string()),
+            reason: Some(reason.clone()),
+            winner_path: None,
+            loser_paths: Vec::new(),
+            detail: format!("Unreadable conversation folder {}: {}", path.display(), reason),
+        },
     }
 }
 

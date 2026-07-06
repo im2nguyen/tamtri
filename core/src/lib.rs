@@ -1,6 +1,7 @@
 pub mod app;
 pub mod artifact;
 pub mod config;
+pub mod diagnostics;
 pub mod conversation;
 pub mod debug_log;
 pub mod error;
