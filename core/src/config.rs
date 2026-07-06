@@ -352,6 +352,31 @@ mod tests {
     }
 
     #[test]
+    fn load_app_config_accepts_roster_entries_without_env_or_args() {
+        let dir = tempfile::tempdir().unwrap();
+        let raw = r#"{
+  "agent_roster": [
+    {
+      "id": "hermes-acp",
+      "display_name": "Hermes",
+      "command": "hermes",
+      "args": ["acp"],
+      "default_model_id": "default"
+    }
+  ],
+  "gateway": {
+    "default_call_timeout_secs": 300,
+    "servers": []
+  }
+}"#;
+        std::fs::write(dir.path().join(CONFIG_FILE), raw).unwrap();
+        let config = load_app_config(dir.path()).unwrap();
+        assert_eq!(config.agent_roster.len(), 1);
+        assert_eq!(config.agent_roster[0].id, "hermes-acp");
+        assert!(config.agent_roster[0].env.is_empty());
+    }
+
+    #[test]
     fn seed_agent_roster_if_empty_preserves_existing_roster() {
         let dir = tempfile::tempdir().unwrap();
         let config = AppConfig {

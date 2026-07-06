@@ -490,8 +490,14 @@ func makeDefaultCoreClient() -> CoreClient {
     configureDevelopmentGatewayStdioHelper()
     let home = FileManager.default.homeDirectoryForCurrentUser
     let vaultURL = home.appendingPathComponent(".tamtri/vault", isDirectory: true)
-    if let client = try? TamtriBindingClient(vaultPath: vaultURL.path) {
-        return client
+    do {
+        return try TamtriBindingClient(vaultPath: vaultURL.path)
+    } catch {
+        fputs("tamtri: failed to initialize native core: \(error)\n", stderr)
+        if ProcessInfo.processInfo.environment["TAMTRI_USE_MOCK"] == "1" {
+            fputs("tamtri: using MockCoreClient (TAMTRI_USE_MOCK=1)\n", stderr)
+            return MockCoreClient()
+        }
+        fatalError("tamtri failed to initialize native core: \(error)")
     }
-    return MockCoreClient()
 }

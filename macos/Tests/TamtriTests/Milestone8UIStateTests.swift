@@ -124,4 +124,60 @@ final class Milestone8UIStateTests: XCTestCase {
         store.performDesignedErrorRecovery(.openHarnessHealth)
         XCTAssertTrue(store.showHarnessHealth)
     }
+
+    func testBindingClientListsMultipleConversationsWithRosterConfigMissingEnv() async throws {
+        let vaultURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("tamtri-m8-list-\(UUID().uuidString)", isDirectory: true)
+        let conversationsURL = vaultURL.appendingPathComponent("conversations", isDirectory: true)
+        try FileManager.default.createDirectory(at: conversationsURL, withIntermediateDirectories: true)
+
+        let configJSON = """
+        {
+          "agent_roster": [
+            {
+              "id": "hermes-acp",
+              "display_name": "Hermes",
+              "command": "hermes",
+              "args": ["acp"]
+            }
+          ],
+          "gateway": { "default_call_timeout_secs": 300, "servers": [] }
+        }
+        """
+        try configJSON.write(
+            to: vaultURL.appendingPathComponent("config.json"),
+            atomically: true,
+            encoding: .utf8
+        )
+
+        for (index, title) in ["Alpha", "Beta", "Gamma"].enumerated() {
+            let suffix = ["6789", "678a", "678b"][index]
+            let id = "018e1234-5678-7890-abcd-ef012345\(suffix)"
+            let folderSuffix = ["6789", "678a", "678b"][index]
+            let folder = conversationsURL.appendingPathComponent("2026-07-03-\(title.lowercased())--018e123456787890abcdef012345\(folderSuffix)", isDirectory: true)
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            let metaJSON = """
+            {
+              "schema_version": 1,
+              "id": "\(id)",
+              "title": "\(title)",
+              "created_at": "2026-07-03T12:00:0\(index)Z",
+              "updated_at": "2026-07-03T12:00:0\(index)Z",
+              "active_harness_id": "hermes-acp",
+              "model_id": "default",
+              "working_dir": {"mode": "vault_local"},
+              "mcp_servers": [],
+              "roots": []
+            }
+            """
+            try metaJSON.write(to: folder.appendingPathComponent("meta.json"), atomically: true, encoding: .utf8)
+            try Data("{}".utf8).write(to: folder.appendingPathComponent("messages.jsonl"))
+        }
+        defer { try? FileManager.default.removeItem(at: vaultURL) }
+
+        let client = try TamtriBindingClient(vaultPath: vaultURL.path)
+        let listed = try await client.listConversations()
+        XCTAssertEqual(listed.count, 3)
+        XCTAssertEqual(Set(listed.map(\.title)), Set(["Alpha", "Beta", "Gamma"]))
+    }
 }

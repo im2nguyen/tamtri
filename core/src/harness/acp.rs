@@ -25,7 +25,9 @@ pub struct AgentLaunchSpec {
     pub id: String,
     pub display_name: String,
     pub command: String,
+    #[serde(default)]
     pub args: Vec<String>,
+    #[serde(default)]
     pub env: Vec<(String, String)>,
 }
 
