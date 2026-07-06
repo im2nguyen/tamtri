@@ -90,7 +90,7 @@ final class Milestone6UIStateTests: XCTestCase {
         let missing = GatewayOAuthPresentation.forStatus("missing")
         XCTAssertEqual(missing.iconSystemName, "key.slash")
         XCTAssertTrue(missing.showsConnectButton)
-        XCTAssertEqual(missing.statusLabel, "missing")
+        XCTAssertEqual(missing.statusLabel, "Not connected")
 
         let notConfigured = GatewayOAuthPresentation.forStatus("not_configured")
         XCTAssertTrue(notConfigured.showsConnectButton)
@@ -102,7 +102,7 @@ final class Milestone6UIStateTests: XCTestCase {
         XCTAssertEqual(connected.iconSystemName, "checkmark.seal.fill")
         XCTAssertEqual(connected.iconTone, .connected)
         XCTAssertFalse(connected.showsConnectButton)
-        XCTAssertEqual(connected.statusLabel, "connected")
+        XCTAssertEqual(connected.statusLabel, "Connected")
     }
 
     func testOAuthStatusReauthRequiredSnapshot() {
@@ -110,7 +110,7 @@ final class Milestone6UIStateTests: XCTestCase {
         XCTAssertEqual(reauth.iconSystemName, "exclamationmark.triangle.fill")
         XCTAssertEqual(reauth.iconTone, .warning)
         XCTAssertTrue(reauth.showsConnectButton)
-        XCTAssertEqual(reauth.statusLabel, "reauth required")
+        XCTAssertEqual(reauth.statusLabel, "Reconnect required")
 
         let expired = GatewayOAuthPresentation.forStatus("expired")
         XCTAssertEqual(expired.iconTone, .warning)

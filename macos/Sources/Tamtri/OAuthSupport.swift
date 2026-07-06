@@ -91,15 +91,33 @@ struct GatewayOAuthPresentation: Equatable {
         case "missing":
             iconSystemName = "key.slash"
             iconTone = .neutral
+        case "not_configured":
+            iconSystemName = "key"
+            iconTone = .neutral
         default:
             iconSystemName = "key"
             iconTone = .neutral
+        }
+        let statusLabel: String
+        switch status {
+        case "connected":
+            statusLabel = "Connected"
+        case "missing":
+            statusLabel = "Not connected"
+        case "not_configured":
+            statusLabel = "Not configured"
+        case "expired":
+            statusLabel = "Expired — reconnect"
+        case "reauth_required":
+            statusLabel = "Reconnect required"
+        default:
+            statusLabel = status.replacingOccurrences(of: "_", with: " ").capitalized
         }
         return GatewayOAuthPresentation(
             iconSystemName: iconSystemName,
             iconTone: iconTone,
             showsConnectButton: status != "connected",
-            statusLabel: status.replacingOccurrences(of: "_", with: " ")
+            statusLabel: statusLabel
         )
     }
 }
