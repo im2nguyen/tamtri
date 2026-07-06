@@ -139,6 +139,17 @@ struct ImportResultRecord: Equatable {
     let warnings: [ImportWarningRecord]
 }
 
+struct VaultIssueRecord: Identifiable, Equatable {
+    var id: String { "\(kind)-\(conversationId ?? path ?? detail)" }
+    let kind: String
+    let conversationId: String?
+    let path: String?
+    let reason: String?
+    let winnerPath: String?
+    let loserPaths: [String]
+    let detail: String
+}
+
 struct ModelInfoRecord: Identifiable, Equatable {
     let id: String
     let displayName: String
@@ -200,6 +211,9 @@ protocol CoreClient: Sendable {
     func searchScopeMessage() async -> String
     func listHarnessHealth() async throws -> [HarnessHealthRecord]
     func harnessHealthChecklist() async throws -> String
+    func vaultIssues() async throws -> [VaultIssueRecord]
+    func vaultPath() async -> String
+    func writeDiagnosticsBundle(destPath: String, systemInfoJSON: String) async throws -> String
 }
 
 struct OAuthHandoff: Equatable {
@@ -450,5 +464,17 @@ actor MockCoreClient: CoreClient {
 
     func harnessHealthChecklist() async throws -> String {
         "tamtri harness setup checklist\n\n- Mock ACP (mock-acp) — status: ready"
+    }
+
+    func vaultIssues() async throws -> [VaultIssueRecord] { [] }
+
+    func vaultPath() async -> String {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".tamtri/vault")
+            .path
+    }
+
+    func writeDiagnosticsBundle(destPath: String, systemInfoJSON: String) async throws -> String {
+        destPath.hasSuffix(".zip") ? destPath : "\(destPath).zip"
     }
 }

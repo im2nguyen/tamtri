@@ -180,4 +180,19 @@ final class Milestone8UIStateTests: XCTestCase {
         XCTAssertEqual(listed.count, 3)
         XCTAssertEqual(Set(listed.map(\.title)), Set(["Alpha", "Beta", "Gamma"]))
     }
+
+    func testMockVaultIssuesEmptyByDefault() async throws {
+        let client = MockCoreClient()
+        let issues = try await client.vaultIssues()
+        XCTAssertTrue(issues.isEmpty)
+    }
+
+    func testMockDiagnosticsBundleReturnsZipPath() async throws {
+        let client = MockCoreClient()
+        let path = try await client.writeDiagnosticsBundle(
+            destPath: "/tmp/tamtri-diag",
+            systemInfoJSON: DiagnosticsSystemInfo.currentJSON()
+        )
+        XCTAssertTrue(path.hasSuffix(".zip"))
+    }
 }

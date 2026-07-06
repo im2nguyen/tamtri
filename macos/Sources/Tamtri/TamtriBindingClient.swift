@@ -297,6 +297,28 @@ actor TamtriBindingClient: CoreClient {
         try core.harnessHealthChecklist()
     }
 
+    func vaultIssues() async throws -> [VaultIssueRecord] {
+        try core.vaultIssues().map {
+            VaultIssueRecord(
+                kind: $0.kind,
+                conversationId: $0.conversationId,
+                path: $0.path,
+                reason: $0.reason,
+                winnerPath: $0.winnerPath,
+                loserPaths: $0.loserPaths,
+                detail: $0.detail
+            )
+        }
+    }
+
+    func vaultPath() async -> String {
+        core.vaultPath()
+    }
+
+    func writeDiagnosticsBundle(destPath: String, systemInfoJSON: String) async throws -> String {
+        try core.writeDiagnosticsBundle(destPath: destPath, systemInfoJson: systemInfoJSON)
+    }
+
     nonisolated private func registerDevelopmentAgentsIfPresent() throws {
         if let command = mockAgentPath() {
             try core.registerAcpAgent(

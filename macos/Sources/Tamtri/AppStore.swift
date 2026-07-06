@@ -37,6 +37,11 @@ final class AppStore: ObservableObject {
     @Published var importSummaryMessage: String?
     @Published var designedErrorState: DesignedErrorState?
     @Published var missingBookmarkState: DesignedErrorState?
+    @Published var vaultIssues: [VaultIssueRecord] = []
+    @Published var vaultPath: String = ""
+    @Published var showCommandPalette = false
+    @Published var showDiagnostics = false
+    @Published private(set) var coldStartElapsedMs: Int?
     @Published private(set) var isRunActive = false
 
     var hasReadyHarness: Bool {
@@ -147,6 +152,8 @@ final class AppStore: ObservableObject {
     func refresh() async {
         do {
             conversations = try await core.listConversations()
+            vaultPath = await core.vaultPath()
+            vaultIssues = try await core.vaultIssues()
             if conversations.isEmpty {
                 designedErrorState = TamtriErrorClassifier.emptyVaultState()
                 selectedConversationId = nil
@@ -958,6 +965,44 @@ final class AppStore: ObservableObject {
     }
 
     private var oauthListener: OAuthLoopbackListener?
+
+    func revealVaultInFinder() {
+        guard !vaultPath.isEmpty else { return }
+        NSWorkspace.shared.open(URL(fileURLWithPath: vaultPath, isDirectory: true))
+    }
+
+    func copyVaultIssueDetails(_ issue: VaultIssueRecord) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(issue.detail, forType: .string)
+    }
+
+    func generateDiagnosticsBundle() async throws -> String {
+        let panel = NSSavePanel()
+        panel.title = "Save diagnostics bundle"
+        panel.nameFieldStringValue = "tamtri-diagnostics.zip"
+        panel.allowedContentTypes = [.zip]
+        guard panel.runModal() == .OK, let url = panel.url else {
+            throw NSError(domain: "tamtri.diagnostics", code: 1, userInfo: [
+                NSLocalizedDescriptionKey: "Diagnostics export cancelled."
+            ])
+        }
+        let systemInfo = DiagnosticsSystemInfo.currentJSON()
+        return try await core.writeDiagnosticsBundle(destPath: url.path, systemInfoJSON: systemInfo)
+    }
+
+    func recordColdStart(elapsedMs: Int) {
+        coldStartElapsedMs = elapsedMs
+        if elapsedMs > UserPreferences.coldStartBudgetMs {
+            debugPrint("tamtri cold start exceeded budget: \(elapsedMs)ms > \(UserPreferences.coldStartBudgetMs)ms")
+        }
+    }
+
+    func issuesForConversation(_ conversationId: String) -> [VaultIssueRecord] {
+        vaultIssues.filter { issue in
+            issue.conversationId == conversationId
+                || issue.kind == "unreadable_folder"
+        }
+    }
 
     func connectOAuth(for server: GatewayServerRecord) {
         Task {

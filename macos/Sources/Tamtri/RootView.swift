@@ -27,6 +27,12 @@ struct RootView: View {
         .sheet(isPresented: $store.showSearch) {
             SearchView()
         }
+        .sheet(isPresented: $store.showCommandPalette) {
+            CommandPaletteView()
+        }
+        .sheet(isPresented: $store.showDiagnostics) {
+            DiagnosticsView()
+        }
         .sheet(isPresented: $store.showConversationRoots) {
             if let conversation = store.displayedConversation {
                 NavigationStack {
@@ -88,6 +94,78 @@ struct RootView: View {
     }
 }
 
+struct SidebarConversationRow: View {
+    @EnvironmentObject private var store: AppStore
+    let conversation: ConversationSummary
+
+    private var issues: [VaultIssueRecord] {
+        store.issuesForConversation(conversation.id)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Text(conversation.title)
+                    .font(.headline)
+                Spacer()
+                ForEach(issues) { issue in
+                    VaultIssueBadge(issue: issue)
+                }
+            }
+            Text(conversation.updatedAt)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .contextMenu {
+            if let issue = issues.first {
+                Button("Copy Issue Details") {
+                    store.copyVaultIssueDetails(issue)
+                }
+                if let conversationId = issue.conversationId {
+                    Button("Reveal in Finder") {
+                        store.revealConversationFolder(conversationId: conversationId)
+                    }
+                } else if let path = issue.path {
+                    Button("Reveal in Finder") {
+                        NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)])
+                    }
+                }
+            }
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(conversation.title), updated \(conversation.updatedAt)")
+        .accessibilityValue(issues.isEmpty ? "" : issues.map(\.kind).joined(separator: ", "))
+    }
+}
+
+struct VaultIssueBadge: View {
+    let issue: VaultIssueRecord
+
+    var body: some View {
+        Image(systemName: iconName)
+            .font(.caption)
+            .foregroundStyle(tint)
+            .help(issue.detail)
+            .accessibilityLabel(issue.detail)
+    }
+
+    private var iconName: String {
+        switch issue.kind {
+        case "duplicate_id": "doc.on.doc.fill"
+        case "torn_tail": "scissors"
+        default: "exclamationmark.triangle.fill"
+        }
+    }
+
+    private var tint: Color {
+        switch issue.kind {
+        case "duplicate_id": .orange
+        case "torn_tail": .yellow
+        default: .red
+        }
+    }
+}
+
 struct SidebarView: View {
     @EnvironmentObject private var store: AppStore
 
@@ -113,15 +191,10 @@ struct SidebarView: View {
                 .padding()
             } else {
                 List(store.conversations, selection: $store.selectedConversationId) { conversation in
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(conversation.title)
-                            .font(.headline)
-                        Text(conversation.updatedAt)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                    .tag(conversation.id)
+                    SidebarConversationRow(conversation: conversation)
+                        .tag(conversation.id)
                 }
+                .accessibilityIdentifier(KeyboardHeroFlowCopy.sidebarIdentifier)
             }
         }
         .navigationTitle("tamtri")
@@ -183,17 +256,16 @@ struct TranscriptView: View {
                             .padding(.top, 12)
                         ScrollView {
                             LazyVStack(alignment: .leading, spacing: 12) {
-                                ForEach(conversation.parsedMessages) { message in
-                                    MessageRow(
-                                        conversationId: conversation.id,
-                                        message: message
-                                    )
-                                }
+                                TranscriptRendererSection(
+                                    conversationId: conversation.id,
+                                    messages: conversation.parsedMessages
+                                )
                             }
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .padding(.horizontal)
                             .padding(.bottom, 16)
                         }
+                        .accessibilityIdentifier(KeyboardHeroFlowCopy.transcriptIdentifier)
                         .id(conversation.id)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                     }
@@ -472,6 +544,7 @@ struct MessageRow: View {
                 }
             }
             .padding(.vertical, 6)
+            .focusable()
             .accessibilityElement(children: .contain)
         }
     }
@@ -1964,18 +2037,26 @@ struct ComposerView: View {
             TextField("Message", text: $store.composerText, axis: .vertical)
                 .textFieldStyle(.roundedBorder)
                 .lineLimit(1...5)
+                .accessibilityIdentifier(KeyboardHeroFlowCopy.composerIdentifier)
+                .onSubmit {
+                    if !store.composerText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        store.send()
+                    }
+                }
                 .onDrop(of: [.fileURL], isTargeted: nil, perform: handleFileDrop)
             Button {
                 store.send()
             } label: {
                 Label("Send", systemImage: "paperplane.fill")
             }
+            .keyboardShortcut(.return, modifiers: [.command])
             .disabled(store.selectedConversation == nil || store.isRunActive)
             Button {
                 store.cancelRun()
             } label: {
                 Label("Cancel", systemImage: "stop.fill")
             }
+            .keyboardShortcut(.escape)
             .disabled(!store.isRunActive)
         }
         .padding()
@@ -2200,6 +2281,11 @@ struct SettingsView: View {
                     Label("Harness health", systemImage: "heart.text.square")
                 }
                 Button {
+                    store.showDiagnostics = true
+                } label: {
+                    Label("Report issue", systemImage: "ladybug")
+                }
+                Button {
                     store.refreshGatewayCapabilities()
                 } label: {
                     Label("Probe capabilities", systemImage: "antenna.radiowaves.left.and.right")
@@ -2211,6 +2297,53 @@ struct SettingsView: View {
                 }
                 Button("Done") {
                     dismiss()
+                }
+            }
+
+            GroupBox("Vault and launch") {
+                VStack(alignment: .leading, spacing: 8) {
+                    LabeledContent("Vault path") {
+                        Text(store.vaultPath.isEmpty ? "—" : store.vaultPath)
+                            .font(.caption.monospaced())
+                            .textSelection(.enabled)
+                    }
+                    HStack {
+                        Button("Reveal vault") {
+                            store.revealVaultInFinder()
+                        }
+                        Button("Roster config") {
+                            if !store.vaultPath.isEmpty {
+                                let configURL = URL(fileURLWithPath: store.vaultPath).appendingPathComponent("config.json")
+                                NSWorkspace.shared.open(configURL)
+                            }
+                        }
+                    }
+                    Toggle("Global launch hotkey (⌘⇧Space)", isOn: Binding(
+                        get: { UserPreferences.globalHotkeyEnabled },
+                        set: { UserPreferences.globalHotkeyEnabled = $0 }
+                    ))
+                    .font(.caption)
+                    if let coldStart = store.coldStartElapsedMs {
+                        Text("Last cold start: \(coldStart) ms (budget \(UserPreferences.coldStartBudgetMs) ms)")
+                            .font(.caption)
+                            .foregroundStyle(coldStart > UserPreferences.coldStartBudgetMs ? .orange : .secondary)
+                    }
+                }
+            }
+
+            GroupBox("Credentials") {
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(store.gatewayServers) { server in
+                        let missing = server.missingCredentialRefs.count
+                        let oauth = GatewayOAuthPresentation.forStatus(server.oauthStatus)
+                        Text("\(server.displayName): \(missing == 0 ? "credentials ready" : "\(missing) missing") · OAuth \(oauth.statusLabel)")
+                            .font(.caption)
+                    }
+                    if store.gatewayServers.isEmpty {
+                        Text("No gateway servers configured.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
                 }
             }
 
@@ -2294,7 +2427,7 @@ struct SettingsView: View {
                 .font(.caption)
         }
         .padding()
-        .frame(width: 560, height: 560)
+        .frame(width: 560, height: 640)
         .onAppear {
             timeoutDraft = String(store.defaultCallTimeoutSecs)
             Task { await store.refreshGatewayServers() }
