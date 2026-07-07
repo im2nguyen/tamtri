@@ -400,25 +400,64 @@ fn tool_update_events(update: &Value) -> Vec<HarnessEvent> {
 
 fn parse_tool_content(update: &Value) -> Vec<ToolContent> {
     let mut content = Vec::new();
-    if let Some(text) = update.get("text").and_then(Value::as_str) {
-        content.push(ToolContent::Text {
-            text: text.to_string(),
-        });
-    }
-    if let Some(diff) = update.get("diff").and_then(parse_diff) {
-        content.push(ToolContent::Diff { diff });
-    }
-    if let Some(uri) = update.get("uri").and_then(Value::as_str) {
-        content.push(ToolContent::ResourceRef {
-            uri: uri.to_string(),
-        });
-    }
+    collect_tool_content_items(update, &mut content);
     if content.is_empty() {
         content.push(ToolContent::Json {
             value: update.clone(),
         });
     }
     content
+}
+
+fn collect_tool_content_items(value: &Value, content: &mut Vec<ToolContent>) {
+    if let Some(text) = value.get("text").and_then(Value::as_str)
+        && !text.is_empty()
+    {
+        push_tool_text(content, text);
+    }
+    if let Some(diff) = value.get("diff").and_then(parse_diff) {
+        content.push(ToolContent::Diff { diff });
+    } else if value.get("type").and_then(Value::as_str) == Some("diff")
+        && let Some(diff) = parse_diff(value)
+    {
+        content.push(ToolContent::Diff { diff });
+    }
+    if let Some(uri) = value.get("uri").and_then(Value::as_str) {
+        content.push(ToolContent::ResourceRef {
+            uri: uri.to_string(),
+        });
+    }
+    if let Some(items) = value.get("content").and_then(Value::as_array) {
+        for item in items {
+            if item.get("type").and_then(Value::as_str) == Some("diff")
+                && let Some(diff) = parse_diff(item)
+            {
+                content.push(ToolContent::Diff { diff });
+            } else if let Some(inner) = item.get("value") {
+                collect_tool_content_items(inner, content);
+            } else if let Some(inner) = item.get("content") {
+                collect_tool_content_items(inner, content);
+            } else if let Some(text) = item.get("text").and_then(Value::as_str) {
+                push_tool_text(content, text);
+            } else {
+                collect_tool_content_items(item, content);
+            }
+        }
+    }
+}
+
+fn push_tool_text(content: &mut Vec<ToolContent>, text: &str) {
+    if text.is_empty() {
+        return;
+    }
+    if let Some(ToolContent::Text { text: existing }) = content.last_mut() {
+        existing.push('\n');
+        existing.push_str(text);
+        return;
+    }
+    content.push(ToolContent::Text {
+        text: text.to_string(),
+    });
 }
 
 fn parse_diff(value: &Value) -> Option<Diff> {
@@ -446,10 +485,24 @@ fn parse_diff(value: &Value) -> Option<Diff> {
     })
 }
 
+fn diff_from_tool_call_content(tool_call: Option<&Value>) -> Option<Diff> {
+    let content = tool_call?.get("content")?.as_array()?;
+    for item in content {
+        if item.get("type").and_then(Value::as_str) == Some("diff")
+            && let Some(diff) = parse_diff(item)
+        {
+            return Some(diff);
+        }
+    }
+    None
+}
+
 fn permission_event(request_id: &str, params: &Value) -> HarnessEvent {
     let tool_call = params.get("toolCall").or_else(|| params.get("tool_call"));
     let detail_source = tool_call.unwrap_or(params);
     let detail = if let Some(diff) = detail_source.get("diff").and_then(parse_diff) {
+        PermissionDetail::FileEdit { diff }
+    } else if let Some(diff) = diff_from_tool_call_content(tool_call) {
         PermissionDetail::FileEdit { diff }
     } else if let Some(command) = detail_source
         .get("command")
@@ -493,9 +546,14 @@ fn permission_event(request_id: &str, params: &Value) -> HarnessEvent {
             ]
         });
 
+    let mut action = string_field(params, &["action"]);
+    if action.is_empty() {
+        action = string_field(detail_source, &["kind", "title"]);
+    }
+
     HarnessEvent::PermissionRequested {
         request_id: request_id.to_string(),
-        action: string_field(params, &["action"]),
+        action,
         detail,
         options,
     }
@@ -769,5 +827,93 @@ mod tests {
         assert_eq!(models[0].display_name, "Mock Model");
         assert_eq!(models[1].id, "mock-fast");
         assert_eq!(models[1].display_name, "Mock Fast");
+    }
+
+    #[test]
+    fn permission_event_parses_nested_tool_call_diff() {
+        let params = json!({
+            "options": [
+                {"optionId": "allow_once", "name": "Allow edit"},
+                {"optionId": "deny", "name": "Deny"}
+            ],
+            "toolCall": {
+                "kind": "edit",
+                "title": "Approve edit: report.html",
+                "content": [{
+                    "type": "diff",
+                    "path": "report.html",
+                    "newText": "<html></html>"
+                }]
+            }
+        });
+        let HarnessEvent::PermissionRequested {
+            request_id,
+            action,
+            detail,
+            options,
+        } = permission_event("perm-1", &params)
+        else {
+            panic!("expected permission requested");
+        };
+        assert_eq!(request_id, "perm-1");
+        assert_eq!(action, "edit");
+        assert_eq!(options.len(), 2);
+        assert_eq!(options[0].id, "allow_once");
+        assert!(matches!(detail, PermissionDetail::FileEdit { .. }));
+        if let PermissionDetail::FileEdit { diff } = detail {
+            assert_eq!(diff.path, "report.html");
+            assert_eq!(diff.new_text.as_deref(), Some("<html></html>"));
+        }
+    }
+
+    #[test]
+    fn parse_tool_content_extracts_nested_content_diffs() {
+        let update = json!({
+            "content": [{
+                "type": "diff",
+                "path": "report.html",
+                "newText": "<h1>ok</h1>"
+            }],
+            "sessionUpdate": "tool_call_update",
+            "status": "completed",
+            "toolCallId": "tool-1"
+        });
+        let content = parse_tool_content(&update);
+        assert!(content.iter().any(|item| matches!(
+            item,
+            ToolContent::Diff { diff } if diff.path == "report.html"
+        )));
+        assert!(!content.iter().any(|item| matches!(item, ToolContent::Json { .. })));
+    }
+
+    #[test]
+    fn parse_tool_content_extracts_hermes_execute_text() {
+        let update = json!({
+            "content": [{
+                "type": "json",
+                "value": {
+                    "kind": "execute",
+                    "status": "completed",
+                    "content": [{
+                        "type": "content",
+                        "content": {
+                            "type": "text",
+                            "text": "Execution complete\n\nOutput:\nsales.csv rows: 30\nregions: ['North', 'South', 'West']"
+                        }
+                    }]
+                }
+            }],
+            "status": "completed",
+            "toolCallId": "tool-1"
+        });
+        let content = parse_tool_content(&update);
+        assert_eq!(
+            content,
+            vec![ToolContent::Text {
+                text: "Execution complete\n\nOutput:\nsales.csv rows: 30\nregions: ['North', 'South', 'West']"
+                    .to_string()
+            }]
+        );
+        assert!(!content.iter().any(|item| matches!(item, ToolContent::Json { .. })));
     }
 }

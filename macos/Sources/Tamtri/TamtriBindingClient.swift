@@ -17,7 +17,12 @@ actor TamtriBindingClient: CoreClient {
 
     func listConversations() async throws -> [ConversationSummary] {
         try core.listConversations().map {
-            ConversationSummary(id: $0.id, title: $0.title, updatedAt: $0.updatedAt)
+            ConversationSummary(
+                id: $0.id,
+                title: $0.title,
+                updatedAt: $0.updatedAt,
+                activeHarnessId: $0.activeHarnessId
+            )
         }
     }
 

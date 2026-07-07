@@ -17,9 +17,10 @@ dictionary RootDto {
 };
 
 dictionary ConversationSummaryDto {
-  string id;
-  string title;
-  string updated_at;
+    string id;
+    string title;
+    string updated_at;
+    string? active_harness_id;
 };
 
 dictionary ConversationDto {

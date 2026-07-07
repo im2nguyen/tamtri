@@ -4,6 +4,7 @@ struct ConversationSummary: Identifiable, Equatable {
     let id: String
     let title: String
     let updatedAt: String
+    let activeHarnessId: String?
 }
 
 struct RootRecord: Identifiable, Equatable {
@@ -30,7 +31,8 @@ struct ConversationRecord: Equatable {
         harnessId: String?,
         modelId: String?,
         forkedFrom: String? = nil,
-        transcriptJSON: String
+        transcriptJSON: String,
+        parsedMessages: [ParsedTranscriptMessage]? = nil
     ) {
         self.id = id
         self.title = title
@@ -38,7 +40,31 @@ struct ConversationRecord: Equatable {
         self.modelId = modelId
         self.forkedFrom = forkedFrom
         self.transcriptJSON = transcriptJSON
-        self.parsedMessages = TranscriptParsing.parseTranscript(transcriptJSON)
+        self.parsedMessages = parsedMessages ?? TranscriptParsing.parseTranscript(transcriptJSON)
+    }
+
+    func appending(message: ParsedTranscriptMessage) -> ConversationRecord {
+        ConversationRecord(
+            id: id,
+            title: title,
+            harnessId: harnessId,
+            modelId: modelId,
+            forkedFrom: forkedFrom,
+            transcriptJSON: transcriptJSON,
+            parsedMessages: parsedMessages + [message]
+        )
+    }
+
+    func removingMessage(id: String) -> ConversationRecord {
+        ConversationRecord(
+            id: id,
+            title: title,
+            harnessId: harnessId,
+            modelId: modelId,
+            forkedFrom: forkedFrom,
+            transcriptJSON: transcriptJSON,
+            parsedMessages: parsedMessages.filter { $0.id != id }
+        )
     }
 }
 
@@ -249,7 +275,7 @@ actor MockCoreClient: CoreClient {
 
     func listConversations() async throws -> [ConversationSummary] {
         conversations.map {
-            ConversationSummary(id: $0.id, title: $0.title, updatedAt: "now")
+            ConversationSummary(id: $0.id, title: $0.title, updatedAt: "now", activeHarnessId: $0.harnessId)
         }
     }
 
@@ -286,6 +312,11 @@ actor MockCoreClient: CoreClient {
     }
 
     func sendMessage(conversationId: String, text: String) async throws {
+        if let index = conversations.firstIndex(where: { $0.id == conversationId }) {
+            let message = ParsedTranscriptMessage.pendingUserMessage(id: UUID().uuidString, text: text)
+            conversations[index] = conversations[index].appending(message: message)
+        }
+        continuation.yield(CoreEvent(conversationId: conversationId, kind: "turn_started", payloadJSON: #"{"harness_id":"mock-acp"}"#))
         continuation.yield(CoreEvent(conversationId: conversationId, kind: "text_delta", payloadJSON: #"{"text":"Thinking about it..."}"#))
         continuation.yield(CoreEvent(conversationId: conversationId, kind: "permission_requested", payloadJSON: #"{"request_id":"mock-permission","action":"edit","options":[{"id":"allow_once","label":"Allow once"},{"id":"allow_for_conversation","label":"Allow for this conversation"},{"id":"deny","label":"Deny"}]}"#))
     }

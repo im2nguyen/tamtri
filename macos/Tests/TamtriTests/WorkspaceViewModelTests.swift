@@ -2,7 +2,7 @@ import Foundation
 @testable import Tamtri
 import XCTest
 
-final class Milestone8UIStateTests: XCTestCase {
+final class WorkspaceViewModelTests: XCTestCase {
     func testSearchScopeMessageNamesTitlesTextAndThinking() async {
         let client = MockCoreClient()
         let message = await client.searchScopeMessage()
@@ -47,10 +47,10 @@ final class Milestone8UIStateTests: XCTestCase {
         XCTAssertEqual(binaryOnly.primaryAction?.label, "Open")
     }
 
-    func testFilesPanelCopyDistinguishesZones() {
-        XCTAssertTrue(FilesPanelCopy.artifactsSectionTitle.localizedCaseInsensitiveContains("frozen"))
-        XCTAssertTrue(FilesPanelCopy.workdirSectionSubtitle.localizedCaseInsensitiveContains("live"))
-        XCTAssertNotEqual(FilesPanelCopy.liveWorkingFileBadge, FilesPanelCopy.frozenAttachmentBadge)
+    func testFilesPanelStringsDistinguishesZones() {
+        XCTAssertTrue(FilesPanelStrings.artifactsSectionTitle.localizedCaseInsensitiveContains("attachment"))
+        XCTAssertTrue(FilesPanelStrings.workdirSectionSubtitle.localizedCaseInsensitiveContains("live"))
+        XCTAssertNotEqual(FilesPanelStrings.liveWorkingFileBadge, FilesPanelStrings.attachmentBadge)
     }
 
     func testEmptyVaultState() {
@@ -114,6 +114,30 @@ final class Milestone8UIStateTests: XCTestCase {
     }
 
     @MainActor
+    func testSendAppendsUserMessageOptimistically() {
+        let store = AppStore(core: MockCoreClient())
+        store.selectedConversationId = "sample"
+        store.selectedConversation = ConversationRecord(
+            id: "sample",
+            title: "Report from CSV",
+            harnessId: "mock-acp",
+            modelId: "mock",
+            transcriptJSON: "[]"
+        )
+
+        store.composerText = "adsfasdf"
+        store.send()
+
+        XCTAssertEqual(store.composerText, "")
+        XCTAssertTrue(store.isRunActive)
+        XCTAssertEqual(store.selectedConversation?.parsedMessages.count, 1)
+        let userMessage = store.selectedConversation?.parsedMessages.first
+        XCTAssertEqual(userMessage?.role, "user")
+        XCTAssertEqual(userMessage?.content.first?.text, "adsfasdf")
+        XCTAssertTrue(userMessage?.id.hasPrefix("pending-") == true)
+    }
+
+    @MainActor
     func testAppStoreRoutesDesignedRecoveryActions() async {
         let store = AppStore(core: MockCoreClient())
         store.designedErrorState = TamtriErrorClassifier.emptyVaultState()
@@ -123,6 +147,53 @@ final class Milestone8UIStateTests: XCTestCase {
 
         store.performDesignedErrorRecovery(.openHarnessHealth)
         XCTAssertTrue(store.showHarnessHealth)
+    }
+
+    @MainActor
+    func testWorkspaceRailModeTransitions() async {
+        let store = AppStore(core: MockCoreClient())
+        XCTAssertEqual(store.workspaceRailMode, .closed)
+        XCTAssertFalse(store.showFilesPanel)
+
+        store.openWorkspaceRail(mode: .browse, animated: false)
+        XCTAssertEqual(store.workspaceRailMode, .browse)
+        XCTAssertTrue(store.showFilesPanel)
+
+        let file = WorkdirFileRecord(relativePath: "report.md", size: 100, mimeType: "text/markdown", modifiedAt: 1_720_000_000)
+        await store.openFilesPreviewWorkdir(file)
+        XCTAssertEqual(store.workspaceRailMode, .preview)
+        XCTAssertEqual(store.selectedWorkdirFile?.relativePath, "report.md")
+
+        store.backToFilesBrowse(animated: false)
+        XCTAssertEqual(store.workspaceRailMode, .browse)
+        XCTAssertNil(store.selectedWorkdirFile)
+
+        store.closeWorkspaceRail(animated: false)
+        XCTAssertEqual(store.workspaceRailMode, .closed)
+        XCTAssertFalse(store.showFilesPanel)
+    }
+
+    func testFilePreviewSupportRichAvailability() {
+        XCTAssertTrue(
+            FilePreviewSupport.richPreviewAvailable(
+                mimeType: "text/html",
+                text: "<html></html>",
+                imageData: nil,
+                error: nil
+            )
+        )
+        XCTAssertFalse(
+            FilePreviewSupport.richPreviewAvailable(
+                mimeType: "text/html",
+                text: nil,
+                imageData: nil,
+                error: "Integrity failed"
+            )
+        )
+    }
+
+    func testWorkspacePreviewRailWidthPreferenceDefault() {
+        XCTAssertEqual(UserPreferences.workspacePreviewRailWidth, Double(TamtriLayout.filesPreviewRailIdealWidth))
     }
 
     func testBindingClientListsMultipleConversationsWithRosterConfigMissingEnv() async throws {

@@ -325,6 +325,7 @@ impl ConversationVault for FilesystemVault {
                 id: entry.meta.id,
                 title: entry.meta.title,
                 updated_at: entry.meta.updated_at,
+                active_harness_id: entry.meta.active_harness_id.clone(),
             });
         }
         summaries.sort_by(|a, b| b.updated_at.cmp(&a.updated_at).then(a.title.cmp(&b.title)));

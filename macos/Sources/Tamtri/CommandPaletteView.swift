@@ -123,7 +123,7 @@ struct CommandPaletteView: View {
                         }
                     }
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(.tamtriPlain)
                 .accessibilityLabel(action.title)
                 .accessibilityHint(action.subtitle)
             }

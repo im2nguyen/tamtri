@@ -1,6 +1,6 @@
 import Foundation
 
-enum KeyboardHeroFlowCopy {
+enum KeyboardHeroFlowIdentifiers {
     static let sidebarIdentifier = "tamtri.sidebar"
     static let composerIdentifier = "tamtri.composer"
     static let transcriptIdentifier = "tamtri.transcript"

@@ -11,7 +11,10 @@ use tokio::runtime::{Builder, Runtime};
 use url::Url;
 use uuid::Uuid;
 
-use crate::artifact::{detect_mime, verify_inline_artifact, ArtifactSnapshot, ArtifactSnapshotter, verify_attachment};
+use crate::artifact::{
+    detect_mime, list_renderable_workdir_paths, new_renderable_workdir_paths,
+    verify_inline_artifact, verify_attachment, ArtifactSnapshot, ArtifactSnapshotter,
+};
 use crate::config::{
     load_app_config, replace_gateway_servers, save_app_config, seed_agent_roster_if_empty,
     GatewayScope, GatewayServerConfig,
@@ -71,6 +74,7 @@ pub struct ConversationSummaryDto {
     pub id: String,
     pub title: String,
     pub updated_at: String,
+    pub active_harness_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, uniffi::Record)]
@@ -994,6 +998,8 @@ impl TamtriCore {
                     observer_emit_gateway(&gateway_observer, id, &event);
                 }
             });
+            let workdir_baseline = list_renderable_workdir_paths(&workdir_path)
+                .unwrap_or_default();
             let run = adapter.run(ctx, TurnInput { user_message }).await;
             match run {
                 Ok(mut run) => {
@@ -1079,6 +1085,56 @@ impl TamtriCore {
                                                 snapshot,
                                                 None,
                                                 &mut message,
+                                            );
+                                        }
+                                    }
+                                }
+                                Err(err) => {
+                                    let _ = vault.append_event(
+                                        id,
+                                        &Event::new(
+                                            EventKind::Error,
+                                            json!({ "message": err.to_string() }),
+                                        ),
+                                    );
+                                }
+                            }
+                            match new_renderable_workdir_paths(&workdir_path, &workdir_baseline) {
+                                Ok(new_paths) => {
+                                    let already_tracked: HashSet<String> = reduced
+                                        .file_changes
+                                        .iter()
+                                        .map(|change| change.diff.path.clone())
+                                        .chain(reduced.referenced_paths.iter().cloned())
+                                        .collect();
+                                    let paths_to_snapshot = new_paths
+                                        .iter()
+                                        .map(String::as_str)
+                                        .filter(|path| !already_tracked.contains(*path));
+                                    match snapshotter.snapshot_referenced_paths(paths_to_snapshot)
+                                    {
+                                        Ok(snapshots) => {
+                                            for snapshot in snapshots {
+                                                if snapshotted
+                                                    .insert(snapshot.attachment_path.clone())
+                                                {
+                                                    append_artifact_snapshot(
+                                                        &vault,
+                                                        id,
+                                                        snapshot,
+                                                        None,
+                                                        &mut message,
+                                                    );
+                                                }
+                                            }
+                                        }
+                                        Err(err) => {
+                                            let _ = vault.append_event(
+                                                id,
+                                                &Event::new(
+                                                    EventKind::Error,
+                                                    json!({ "message": err.to_string() }),
+                                                ),
                                             );
                                         }
                                     }
@@ -2784,6 +2840,7 @@ fn summary_to_dto(summary: ConversationSummary) -> Result<ConversationSummaryDto
         id: summary.id.to_string(),
         title: summary.title,
         updated_at: summary.updated_at.to_rfc3339(),
+        active_harness_id: summary.active_harness_id,
     })
 }
 

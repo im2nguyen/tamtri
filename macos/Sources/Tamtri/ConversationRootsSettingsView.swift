@@ -73,24 +73,7 @@ struct ConversationRootsSettingsView: View {
     private func attachFolder(url: URL) {
         Task {
             do {
-                let bookmark = try url.bookmarkData(
-                    options: [.withSecurityScope],
-                    includingResourceValuesForKeys: nil,
-                    relativeTo: nil
-                )
-                let name = url.lastPathComponent
-                let root = try await store.attachRoot(
-                    conversationId: conversationId,
-                    name: name,
-                    uri: url.path,
-                    kind: "filesystem",
-                    scope: "conversation"
-                )
-                try RootBookmarkStore.saveBookmark(
-                    data: bookmark,
-                    conversationId: conversationId,
-                    rootId: root.id
-                )
+                try await store.attachFolderRoot(conversationId: conversationId, url: url)
                 await refresh()
             } catch {
                 errorMessage = error.localizedDescription

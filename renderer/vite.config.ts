@@ -7,5 +7,14 @@ export default defineConfig({
   build: {
     outDir: "dist",
     emptyOutDir: true,
+    rollupOptions: {
+      output: {
+        format: "iife",
+        name: "TamtriTranscript",
+        inlineDynamicImports: true,
+        entryFileNames: "assets/transcript.js",
+        assetFileNames: "assets/transcript.[ext]",
+      },
+    },
   },
 });

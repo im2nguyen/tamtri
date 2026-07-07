@@ -53,7 +53,7 @@ extension TranscriptContentBlock {
     }
 }
 
-final class Milestone7StateTests: XCTestCase {
+final class McpFeatureViewModelTests: XCTestCase {
     func testLiveTaskStateParsesRunningAndCompleted() {
         let running = LiveTaskState(payloadJSON: #"{"state":{"task_id":"t-1","server_id":"tasks","status":"running","title":"Import CSV","progress":{"message":"Reading rows"}}}"#)
         XCTAssertEqual(running.taskId, "t-1")
@@ -131,7 +131,7 @@ final class Milestone7StateTests: XCTestCase {
     @MainActor
     func testComposerAttachRootOpensRootsSheet() async throws {
         let store = AppStore(core: MockCoreClient())
-        let summary = ConversationSummary(id: "sample", title: "Report from CSV", updatedAt: "now")
+        let summary = ConversationSummary(id: "sample", title: "Report from CSV", updatedAt: "now", activeHarnessId: "hermes-acp")
         store.selectConversation(summary)
         XCTAssertFalse(store.showConversationRoots)
         store.presentConversationRoots()

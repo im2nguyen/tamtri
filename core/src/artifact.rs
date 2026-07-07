@@ -26,6 +26,54 @@ pub fn is_deliverable_snapshot_path(path: &str) -> bool {
         || lower.ends_with(".markdown")
 }
 
+pub fn list_renderable_workdir_paths(workdir: &Path) -> Result<HashSet<String>> {
+    let mut paths = HashSet::new();
+    if workdir.is_dir() {
+        collect_renderable_workdir_paths(workdir, workdir, &mut paths)?;
+    }
+    Ok(paths)
+}
+
+pub fn new_renderable_workdir_paths(
+    workdir: &Path,
+    baseline: &HashSet<String>,
+) -> Result<Vec<String>> {
+    let current = list_renderable_workdir_paths(workdir)?;
+    let mut paths: Vec<_> = current
+        .into_iter()
+        .filter(|path| !baseline.contains(path))
+        .collect();
+    paths.sort();
+    Ok(paths)
+}
+
+fn collect_renderable_workdir_paths(
+    root: &Path,
+    dir: &Path,
+    paths: &mut HashSet<String>,
+) -> Result<()> {
+    for entry in fs::read_dir(dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        let name = entry.file_name();
+        if name.to_string_lossy().starts_with('.') {
+            continue;
+        }
+        if path.is_dir() {
+            collect_renderable_workdir_paths(root, &path, paths)?;
+        } else if path.is_file() {
+            let relative = path.strip_prefix(root).map_err(|err| {
+                CoreError::Protocol(format!("workdir listing escaped root: {err}"))
+            })?;
+            let relative_path = relative.to_string_lossy();
+            if is_deliverable_snapshot_path(&relative_path) {
+                paths.insert(relative_path.into_owned());
+            }
+        }
+    }
+    Ok(())
+}
+
 pub struct ArtifactSnapshotter {
     workdir: PathBuf,
     conversation_dir: PathBuf,
@@ -648,5 +696,35 @@ mod tests {
         fs::create_dir_all(convo.join("attachments")).unwrap();
         let err = verify_attachment(&convo, "attachments/missing.txt", 0, "abc").unwrap_err();
         assert!(matches!(err, CoreError::Io(_)));
+    }
+
+    #[test]
+    fn new_renderable_workdir_paths_ignores_baseline_and_non_renderable_files() {
+        let temp = tempfile::tempdir().unwrap();
+        let workdir = temp.path().join("workdir");
+        fs::create_dir_all(&workdir).unwrap();
+        fs::write(workdir.join("sales.csv"), "a,b\n1,2\n").unwrap();
+        fs::write(workdir.join("notes.txt"), "ignore me").unwrap();
+
+        let baseline = list_renderable_workdir_paths(&workdir).unwrap();
+        assert!(baseline.is_empty());
+
+        fs::write(workdir.join("report.html"), "<h1>ok</h1>").unwrap();
+        let new_paths = new_renderable_workdir_paths(&workdir, &baseline).unwrap();
+        assert_eq!(new_paths, vec!["report.html".to_string()]);
+    }
+
+    #[test]
+    fn new_renderable_workdir_paths_skips_files_present_at_turn_start() {
+        let temp = tempfile::tempdir().unwrap();
+        let workdir = temp.path().join("workdir");
+        fs::create_dir_all(&workdir).unwrap();
+        fs::write(workdir.join("draft.html"), "<h1>draft</h1>").unwrap();
+
+        let baseline = list_renderable_workdir_paths(&workdir).unwrap();
+        fs::write(workdir.join("report.html"), "<h1>ok</h1>").unwrap();
+
+        let new_paths = new_renderable_workdir_paths(&workdir, &baseline).unwrap();
+        assert_eq!(new_paths, vec!["report.html".to_string()]);
     }
 }

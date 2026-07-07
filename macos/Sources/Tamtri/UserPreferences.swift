@@ -30,4 +30,38 @@ enum UserPreferences {
     }
 
     static var coldStartBudgetMs: Int { 2500 }
+
+    static var workspaceRailCollapsed: Bool {
+        get { defaults.object(forKey: "tamtri.workspaceRailCollapsed") as? Bool ?? true }
+        set { defaults.set(newValue, forKey: "tamtri.workspaceRailCollapsed") }
+    }
+
+    static var workspaceRailWidth: Double {
+        get {
+            let stored = defaults.double(forKey: "tamtri.workspaceRailWidth")
+            return stored > 0 ? stored : Double(TamtriLayout.filesBrowseRailIdealWidth)
+        }
+        set { defaults.set(newValue, forKey: "tamtri.workspaceRailWidth") }
+    }
+
+    static var workspacePreviewRailWidth: Double {
+        get {
+            let stored = defaults.double(forKey: "tamtri.workspacePreviewRailWidth")
+            return stored > 0 ? stored : Double(TamtriLayout.filesPreviewRailIdealWidth)
+        }
+        set { defaults.set(newValue, forKey: "tamtri.workspacePreviewRailWidth") }
+    }
+
+    static var sidebarCollapsed: Bool {
+        get { defaults.object(forKey: "tamtri.sidebarCollapsed") as? Bool ?? false }
+        set { defaults.set(newValue, forKey: "tamtri.sidebarCollapsed") }
+    }
+
+    static var sidebarWidth: Double {
+        get {
+            let stored = defaults.double(forKey: "tamtri.sidebarWidth")
+            return stored > 0 ? stored : Double(TamtriLayout.sidebarIdealWidth)
+        }
+        set { defaults.set(newValue, forKey: "tamtri.sidebarWidth") }
+    }
 }

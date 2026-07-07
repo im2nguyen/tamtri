@@ -124,7 +124,17 @@ private func wrapHTML(_ html: String, headInjection: String) -> String {
         copy.insert(contentsOf: headInjection, at: html.index(after: close))
         return copy
     }
+    if let htmlRange = html.range(of: "<html", options: [.caseInsensitive]),
+       let close = html[htmlRange.upperBound...].firstIndex(of: ">") {
+        var copy = html
+        copy.insert(contentsOf: "<head>\(headInjection)</head>", at: html.index(after: close))
+        return copy
+    }
     return "<!doctype html><html><head>\(headInjection)</head><body>\(html)</body></html>"
+}
+
+func artifactUsesWebViewPreview(mimeType: String?) -> Bool {
+    mimeType == "text/html" || mimeType == "image/svg+xml"
 }
 
 /// Artifacts must never expose the MCP App bridge bootstrap.
@@ -165,7 +175,7 @@ func sanitizedMarkdownForPreview(_ content: String) -> String {
 }
 
 func attributedMarkdownPreview(_ content: String) -> AttributedString? {
-    let safe = sanitizedMarkdownForPreview(content)
+    let safe = normalizedTranscriptMarkdown(content)
     var options = AttributedString.MarkdownParsingOptions()
     options.interpretedSyntax = .inlineOnlyPreservingWhitespace
     return try? AttributedString(markdown: safe, options: options)

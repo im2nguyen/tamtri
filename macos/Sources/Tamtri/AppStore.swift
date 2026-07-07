@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import SwiftUI
 import UniformTypeIdentifiers
 
 @MainActor
@@ -9,13 +10,16 @@ final class AppStore: ObservableObject {
     @Published var selectedConversation: ConversationRecord?
     @Published var liveEvents: [CoreEvent] = []
     @Published var composerText = ""
+    @Published var composerAttachedFiles: [String] = []
     @Published var workdirFiles: [WorkdirFileRecord] = []
     @Published var selectedWorkdirFile: WorkdirFileRecord?
     @Published var workdirPreview: WorkdirFilePreview?
     @Published var transcriptArtifacts: [TranscriptArtifactRecord] = []
     @Published var selectedTranscriptArtifact: TranscriptArtifactRecord?
     @Published var attachmentPreview: AttachmentFilePreview?
-    @Published var showFilesPanel = false
+    @Published var workspaceRailMode: WorkspaceRailMode = .closed
+    @Published var filesPreviewDisplayMode: FilesPreviewDisplayMode = .rich
+    @Published var sidebarCollapsed = UserPreferences.sidebarCollapsed
     @Published var showNewConversation = false
     @Published var showSettings = false
     @Published var showForkConversation = false
@@ -43,6 +47,14 @@ final class AppStore: ObservableObject {
     @Published var showDiagnostics = false
     @Published private(set) var coldStartElapsedMs: Int?
     @Published private(set) var isRunActive = false
+
+    private var userDismissedWorkspaceRail = UserPreferences.workspaceRailCollapsed
+    private var previousArtifactCount = 0
+    private var previousWorkdirFileCount = 0
+
+    var showFilesPanel: Bool {
+        workspaceRailMode != .closed
+    }
 
     var hasReadyHarness: Bool {
         harnessHealthEntries.contains { $0.status == "ready" }
@@ -80,20 +92,38 @@ final class AppStore: ObservableObject {
                     self.liveEvents.append(event)
                     if event.kind == "turn_started", event.conversationId == self.selectedConversationId {
                         self.isRunActive = true
+                        Task { await self.captureWorkdirBaseline() }
                     }
-                    if event.kind == "turn_ended" || event.kind == "message_committed" {
+                    if event.kind == "message_committed" {
+                        if event.conversationId == self.selectedConversationId {
+                            self.applyCommittedMessage(from: event)
+                        }
                         self.clearLiveEvents(for: event.conversationId)
                         self.conversationCache.removeValue(forKey: event.conversationId)
-                        let preferNewest = event.kind == "turn_ended"
-                        Task { await self.refreshWorkdirFiles(preferNewest: preferNewest, force: preferNewest) }
                         if event.conversationId == self.selectedConversationId {
-                            if event.kind == "message_committed" || event.kind == "turn_ended" {
+                            Task {
+                                await self.refreshWorkdirFiles(preferNewest: true, force: true)
+                                await self.reloadSelectedConversation()
+                                await self.handleTurnEndedWorkspaceRail()
+                            }
+                        } else {
+                            Task { await self.refreshWorkdirFiles(preferNewest: true, force: true) }
+                        }
+                    }
+                    if event.kind == "turn_ended" {
+                        if event.conversationId == self.selectedConversationId {
+                            self.isRunActive = false
+                        }
+                        self.liveTaskStates = [:]
+                        RootBookmarkAccess.endAccess(conversationId: event.conversationId)
+                        self.conversationCache.removeValue(forKey: event.conversationId)
+                        Task { await self.refreshWorkdirFiles(preferNewest: true, force: true) }
+                        if self.isCancelledTurn(payloadJSON: event.payloadJSON) {
+                            self.clearLiveEvents(for: event.conversationId)
+                            if event.conversationId == self.selectedConversationId {
                                 Task { await self.reloadSelectedConversation() }
                             }
                         }
-                    }
-                    if event.kind == "turn_ended", event.conversationId == self.selectedConversationId {
-                        self.isRunActive = false
                     }
                     if event.kind == "gateway_credential_updated" {
                         Task { @MainActor in
@@ -111,13 +141,37 @@ final class AppStore: ObservableObject {
                         let state = LiveTaskState(payloadJSON: event.payloadJSON)
                         self.liveTaskStates[state.taskId] = state
                     }
-                    if event.kind == "turn_ended" {
-                        self.liveTaskStates = [:]
-                        RootBookmarkAccess.endAccess(conversationId: event.conversationId)
-                    }
                 }
             }
         }
+    }
+
+    private func applyCommittedMessage(from event: CoreEvent) {
+        guard event.conversationId == selectedConversationId,
+              let conversation = selectedConversation
+        else {
+            return
+        }
+        let message = ParsedTranscriptMessage(
+            json: event.payloadJSON,
+            fallbackIndex: conversation.parsedMessages.count
+        )
+        guard message.role == "assistant", !message.content.isEmpty else { return }
+        guard !conversation.parsedMessages.contains(where: { $0.id == message.id }) else { return }
+        let updated = conversation.appending(message: message)
+        selectedConversation = updated
+        conversationCache[conversation.id] = updated
+        transcriptArtifacts = TranscriptArtifacts.extract(from: updated.parsedMessages)
+    }
+
+    private func isCancelledTurn(payloadJSON: String) -> Bool {
+        guard let data = payloadJSON.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let reason = object["reason"] as? String
+        else {
+            return false
+        }
+        return reason == "cancelled"
     }
 
     private func handleAppBridgeResolved(payloadJSON: String) {
@@ -240,12 +294,20 @@ final class AppStore: ObservableObject {
         workdirPreview = nil
         selectedTranscriptArtifact = nil
         attachmentPreview = nil
+        filesPreviewDisplayMode = .rich
+        if workspaceRailMode != .closed {
+            workspaceRailMode = .browse
+        }
         transcriptArtifacts = TranscriptArtifacts.extract(from: record.parsedMessages)
+        previousArtifactCount = transcriptArtifacts.count
         selectedConversation = record
         if selectedConversationId != record.id {
             selectedConversationId = record.id
         }
-        Task { await refreshWorkdirFiles() }
+        Task {
+            await refreshWorkdirFiles(force: true)
+            previousWorkdirFileCount = workdirFiles.count
+        }
         Task { await refreshMissingBookmarkState() }
     }
 
@@ -295,20 +357,28 @@ final class AppStore: ObservableObject {
         }
     }
 
+    func presentForkConversation() {
+        showForkConversation = true
+    }
+
     func send() {
         guard let conversation = selectedConversation else { return }
         let text = composerText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
         composerText = ""
+        composerAttachedFiles = []
         isRunActive = true
+        let pendingMessageId = appendPendingUserMessage(text: text)
         Task {
             do {
                 let roots = try await listRoots(conversationId: conversation.id)
                 let resolved = try RootBookmarkAccess.beginAccess(conversationId: conversation.id, roots: roots)
                 try await core.syncRuntimeRoots(conversationId: conversation.id, roots: resolved)
                 try await core.sendMessage(conversationId: conversation.id, text: text)
+                await reloadSelectedConversation()
             } catch {
                 isRunActive = false
+                removePendingUserMessage(id: pendingMessageId)
                 if let state = classifiedErrorState(
                     error,
                     conversationId: conversation.id,
@@ -320,6 +390,50 @@ final class AppStore: ObservableObject {
                 }
             }
         }
+    }
+
+    func copyMessageText(_ text: String) {
+        guard !text.isEmpty else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+    }
+
+    func prefillComposerForEdit(text: String) {
+        composerText = text
+    }
+
+    /// V1 retry: re-send plain text. Full fork-from-here truncation is not yet wired.
+    func retryUserMessage(_ message: ParsedTranscriptMessage) {
+        let text = TranscriptMessageText.plainText(from: message)
+        guard !text.isEmpty else { return }
+        composerText = text
+        send()
+    }
+
+    /// V1 retry: re-send the preceding user message to regenerate the assistant reply.
+    func retryAssistantMessage(_ message: ParsedTranscriptMessage, in messages: [ParsedTranscriptMessage]) {
+        guard let userMessage = TranscriptMessageText.precedingUserMessage(before: message, in: messages) else {
+            return
+        }
+        retryUserMessage(userMessage)
+    }
+
+    @discardableResult
+    private func appendPendingUserMessage(text: String) -> String {
+        let pendingMessageId = "pending-\(UUID().uuidString)"
+        guard let conversation = selectedConversation else { return pendingMessageId }
+        let message = ParsedTranscriptMessage.pendingUserMessage(id: pendingMessageId, text: text)
+        let updated = conversation.appending(message: message)
+        selectedConversation = updated
+        conversationCache[conversation.id] = updated
+        return pendingMessageId
+    }
+
+    private func removePendingUserMessage(id: String) {
+        guard let conversation = selectedConversation else { return }
+        let updated = conversation.removingMessage(id: id)
+        selectedConversation = updated
+        conversationCache[conversation.id] = updated
     }
 
     func cancelRun() {
@@ -343,6 +457,7 @@ final class AppStore: ObservableObject {
                     names.append(name)
                 }
                 if !names.isEmpty {
+                    composerAttachedFiles.append(contentsOf: names)
                     let attachmentText = names.map { "Attached: \($0)" }.joined(separator: "\n")
                     if composerText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                         composerText = attachmentText
@@ -368,22 +483,25 @@ final class AppStore: ObservableObject {
             return
         }
         transcriptArtifacts = TranscriptArtifacts.extract(from: conversation.parsedMessages)
-        guard showFilesPanel || force else {
+        guard workspaceRailMode != .closed || force else {
             return
         }
         do {
             workdirFiles = try await core.listWorkdirFiles(conversationId: conversation.id)
-            if let selected = selectedWorkdirFile,
-               !workdirFiles.contains(where: { $0.relativePath == selected.relativePath }) {
-                selectedWorkdirFile = nil
-                workdirPreview = nil
-            }
-            if preferNewest, let newest = workdirFiles.max(by: { $0.modifiedAt < $1.modifiedAt }) {
-                await selectWorkdirFile(newest)
-            } else if selectedWorkdirFile == nil, let fallback = workdirFiles.max(by: { $0.modifiedAt < $1.modifiedAt }) {
-                await selectWorkdirFile(fallback)
-            } else if let selected = selectedWorkdirFile {
-                await loadWorkdirPreview(for: selected)
+            if workspaceRailMode == .preview {
+                if let artifact = selectedTranscriptArtifact,
+                   !transcriptArtifacts.contains(where: { $0.id == artifact.id }) {
+                    backToFilesBrowse(animated: false)
+                } else if let selected = selectedWorkdirFile,
+                          !workdirFiles.contains(where: { $0.relativePath == selected.relativePath }) {
+                    backToFilesBrowse(animated: false)
+                } else if let artifact = selectedTranscriptArtifact {
+                    if attachmentPreview == nil {
+                        await loadAttachmentPreview(for: artifact)
+                    }
+                } else if let selected = selectedWorkdirFile {
+                    await loadWorkdirPreview(for: selected)
+                }
             }
         } catch {
             errorMessage = error.localizedDescription
@@ -391,19 +509,136 @@ final class AppStore: ObservableObject {
     }
 
     func selectWorkdirFile(_ file: WorkdirFileRecord) async {
-        selectedWorkdirFile = file
-        selectedTranscriptArtifact = nil
-        attachmentPreview = nil
-        showFilesPanel = true
-        await loadWorkdirPreview(for: file)
+        await openFilesPreviewWorkdir(file)
     }
 
     func selectTranscriptArtifact(_ artifact: TranscriptArtifactRecord) async {
+        await openFilesPreviewArtifact(artifact)
+    }
+
+    func openFilesPreviewWorkdir(_ file: WorkdirFileRecord) async {
+        selectedWorkdirFile = file
+        selectedTranscriptArtifact = nil
+        attachmentPreview = nil
+        filesPreviewDisplayMode = .rich
+        openWorkspaceRail(mode: .preview)
+        await loadWorkdirPreview(for: file)
+    }
+
+    func openFilesPreviewArtifact(_ artifact: TranscriptArtifactRecord) async {
         selectedTranscriptArtifact = artifact
         selectedWorkdirFile = nil
         workdirPreview = nil
-        showFilesPanel = true
+        filesPreviewDisplayMode = .rich
+        openWorkspaceRail(mode: .preview)
         await loadAttachmentPreview(for: artifact)
+    }
+
+    func backToFilesBrowse(animated: Bool = true) {
+        let apply = {
+            if self.workspaceRailMode != .closed {
+                self.workspaceRailMode = .browse
+            }
+            self.selectedWorkdirFile = nil
+            self.workdirPreview = nil
+            self.selectedTranscriptArtifact = nil
+            self.attachmentPreview = nil
+            self.filesPreviewDisplayMode = .rich
+        }
+        if animated {
+            withAnimation(TamtriLayout.panelSlideAnimation, apply)
+        } else {
+            apply()
+        }
+    }
+
+    func openWorkspaceRail(mode: WorkspaceRailMode = .browse, animated: Bool = true) {
+        let apply = {
+            self.workspaceRailMode = mode
+            self.userDismissedWorkspaceRail = false
+            UserPreferences.workspaceRailCollapsed = false
+        }
+        if animated {
+            withAnimation(TamtriLayout.panelSlideAnimation, apply)
+        } else {
+            apply()
+        }
+        Task { await refreshWorkdirFiles(force: true) }
+    }
+
+    func openWorkspaceRail(animated: Bool = true) {
+        openWorkspaceRail(mode: .browse, animated: animated)
+    }
+
+    func closeWorkspaceRail(animated: Bool = true) {
+        let apply = {
+            self.workspaceRailMode = .closed
+            self.userDismissedWorkspaceRail = true
+            UserPreferences.workspaceRailCollapsed = true
+            self.selectedWorkdirFile = nil
+            self.workdirPreview = nil
+            self.selectedTranscriptArtifact = nil
+            self.attachmentPreview = nil
+            self.filesPreviewDisplayMode = .rich
+        }
+        if animated {
+            withAnimation(TamtriLayout.panelSlideAnimation, apply)
+        } else {
+            apply()
+        }
+    }
+
+    func toggleWorkspaceRail() {
+        if workspaceRailMode == .closed {
+            openWorkspaceRail(mode: .browse)
+        } else {
+            closeWorkspaceRail()
+        }
+    }
+
+    func toggleSidebar() {
+        withAnimation(TamtriLayout.panelSlideAnimation) {
+            sidebarCollapsed.toggle()
+            UserPreferences.sidebarCollapsed = sidebarCollapsed
+        }
+    }
+
+    func openArtifactFromTranscript(block: TranscriptContentBlock) async {
+        guard let path = block.path,
+              let size = block.size,
+              let sha256 = block.sha256
+        else { return }
+        let artifact = TranscriptArtifactRecord(path: path, size: size, sha256: sha256, mimeType: block.mimeType)
+        if let existing = transcriptArtifacts.first(where: { $0.path == path && $0.sha256 == sha256 }) {
+            await selectTranscriptArtifact(existing)
+        } else {
+            await selectTranscriptArtifact(artifact)
+        }
+    }
+
+    private func captureWorkdirBaseline() async {
+        await refreshWorkdirFiles(force: true)
+        previousWorkdirFileCount = workdirFiles.count
+    }
+
+    private func handleTurnEndedWorkspaceRail() async {
+        let artifacts = TranscriptArtifacts.extract(from: selectedConversation?.parsedMessages ?? [])
+        transcriptArtifacts = artifacts
+        let artifactCount = artifacts.count
+        let workdirCount = workdirFiles.count
+        let artifactsAdded = artifactCount > previousArtifactCount
+        let workdirAdded = workdirCount > previousWorkdirFileCount
+        defer {
+            previousArtifactCount = artifactCount
+            previousWorkdirFileCount = workdirCount
+        }
+        guard !userDismissedWorkspaceRail else { return }
+        guard artifactsAdded || workdirAdded else { return }
+        if artifactsAdded, let newest = artifacts.last {
+            await selectTranscriptArtifact(newest)
+        } else {
+            openWorkspaceRail(mode: .browse)
+        }
     }
 
     func loadAttachmentPreview(for artifact: TranscriptArtifactRecord) async {
@@ -651,6 +886,68 @@ final class AppStore: ObservableObject {
 
     func presentConversationRoots() {
         showConversationRoots = true
+    }
+
+    func presentAddFilesPanel() {
+        guard selectedConversation != nil else { return }
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = true
+        panel.prompt = "Add"
+        panel.message = "Choose files to add to this conversation's workdir."
+        panel.begin { response in
+            guard response == .OK else { return }
+            let paths = panel.urls.map(\.path)
+            guard !paths.isEmpty else { return }
+            self.attachFiles(paths: paths)
+        }
+    }
+
+    func presentAddFolderAsRootPanel() {
+        guard selectedConversation != nil else { return }
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        panel.prompt = "Attach Folder"
+        panel.message = "Choose a folder to attach as a conversation root."
+        panel.begin { response in
+            guard response == .OK, let url = panel.url else { return }
+            Task {
+                do {
+                    try await self.attachFolderRoot(url: url)
+                } catch {
+                    self.presentError(error)
+                }
+            }
+        }
+    }
+
+    func attachFolderRoot(conversationId: String, url: URL) async throws {
+        let bookmark = try url.bookmarkData(
+            options: [.withSecurityScope],
+            includingResourceValuesForKeys: nil,
+            relativeTo: nil
+        )
+        let name = url.lastPathComponent
+        let root = try await attachRoot(
+            conversationId: conversationId,
+            name: name,
+            uri: url.path,
+            kind: "filesystem",
+            scope: "conversation"
+        )
+        try RootBookmarkStore.saveBookmark(
+            data: bookmark,
+            conversationId: conversationId,
+            rootId: root.id
+        )
+    }
+
+    func attachFolderRoot(url: URL) async throws {
+        guard let conversation = selectedConversation else { return }
+        try await attachFolderRoot(conversationId: conversation.id, url: url)
     }
 
     func attachRoot(conversationId: String, name: String, uri: String, kind: String, scope: String) async throws -> RootRecord {

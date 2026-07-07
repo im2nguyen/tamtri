@@ -2,7 +2,7 @@ import Foundation
 @testable import Tamtri
 import XCTest
 
-final class Milestone3UIStateTests: XCTestCase {
+final class TranscriptPresentationTests: XCTestCase {
     func testPermissionCardFromLivePayloadSnapshot() {
         let payload = """
         {
@@ -55,6 +55,36 @@ final class Milestone3UIStateTests: XCTestCase {
         XCTAssertEqual(presentation?.rejectOptions.map(\.id), ["deny"])
     }
 
+    func testPermissionCardFromHarnessEventLivePayload() {
+        let payload = """
+        {
+          "type": "permission_requested",
+          "request_id": "0",
+          "action": "edit",
+          "harness_display_name": "Hermes ACP",
+          "detail": {
+            "type": "file_edit",
+            "diff": {
+              "path": "report.html",
+              "change": "modified",
+              "new_text": "<html></html>"
+            }
+          },
+          "options": [
+            {"id": "allow_once", "label": "Allow edit"},
+            {"id": "deny", "label": "Deny"}
+          ]
+        }
+        """
+        let presentation = PermissionCardPresentationBuilder.build(payloadJSON: payload)
+
+        XCTAssertEqual(presentation?.requestId, "0")
+        XCTAssertEqual(presentation?.harnessDisplayName, "Hermes ACP")
+        XCTAssertEqual(presentation?.diff?.path, "report.html")
+        XCTAssertEqual(presentation?.allowOptions.map(\.id), ["allow_once"])
+        XCTAssertEqual(presentation?.rejectOptions.map(\.id), ["deny"])
+    }
+
     func testPermissionCardFromCommittedPayloadSnapshot() throws {
         let json = """
         {
@@ -76,6 +106,27 @@ final class Milestone3UIStateTests: XCTestCase {
         XCTAssertEqual(presentation?.summary, "Action: edit")
         XCTAssertEqual(presentation?.allowOptions.map(\.label), ["Allow once"])
         XCTAssertTrue(presentation?.rejectOptions.isEmpty ?? false)
+    }
+
+    func testStaleCommittedPermissionShowsReceipt() throws {
+        let json = """
+        {
+          "type": "tool_result",
+          "call_id": "perm-1",
+          "output": {
+            "permission": {
+              "action": "edit",
+              "status": "requested",
+              "options": [{"id": "allow_once", "label": "Allow once"}]
+            }
+          }
+        }
+        """
+        let block = try JSONDecoder().decode(TranscriptContentBlock.self, from: Data(json.utf8))
+        let receipt = PermissionResolvedReceiptBuilder.fromCommittedBlock(block)
+
+        XCTAssertEqual(receipt?.summary, "Permission · not resolved")
+        XCTAssertEqual(receipt?.accessibilityLabel, "Permission request expired when the turn ended")
     }
 
     func testThinkingDisclosureFromCommittedPayloadSnapshot() throws {
@@ -134,7 +185,7 @@ final class Milestone3UIStateTests: XCTestCase {
         let block = try JSONDecoder().decode(TranscriptContentBlock.self, from: Data(json.utf8))
         let presentation = ToolCardPresentationBuilder.fromCommittedResultBlock(block)
 
-        XCTAssertEqual(presentation?.title, "Tool result")
+        XCTAssertEqual(presentation?.title, "modified · report.html")
         XCTAssertEqual(presentation?.diff?.path, "report.html")
         XCTAssertEqual(presentation?.subtitle, "modified • report.html")
     }
@@ -153,8 +204,9 @@ final class Milestone3UIStateTests: XCTestCase {
             """
         )
 
-        XCTAssertEqual(presentation.title, "Write")
-        XCTAssertEqual(presentation.subtitle, "in_progress • report.html")
-        XCTAssertEqual(presentation.accessibilityLabel, "Tool event")
+        XCTAssertNotNil(presentation)
+        XCTAssertEqual(presentation?.title, "Write")
+        XCTAssertEqual(presentation?.subtitle, "in_progress • report.html")
+        XCTAssertEqual(presentation?.accessibilityLabel, "Tool event")
     }
 }

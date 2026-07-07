@@ -1785,13 +1785,15 @@ public struct ConversationSummaryDto: Equatable, Hashable {
     public var id: String
     public var title: String
     public var updatedAt: String
+    public var activeHarnessId: String?
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(id: String, title: String, updatedAt: String) {
+    public init(id: String, title: String, updatedAt: String, activeHarnessId: String?) {
         self.id = id
         self.title = title
         self.updatedAt = updatedAt
+        self.activeHarnessId = activeHarnessId
     }
 
     
@@ -1812,7 +1814,8 @@ public struct FfiConverterTypeConversationSummaryDto: FfiConverterRustBuffer {
             try ConversationSummaryDto(
                 id: FfiConverterString.read(from: &buf), 
                 title: FfiConverterString.read(from: &buf), 
-                updatedAt: FfiConverterString.read(from: &buf)
+                updatedAt: FfiConverterString.read(from: &buf), 
+                activeHarnessId: FfiConverterOptionString.read(from: &buf)
         )
     }
 
@@ -1820,6 +1823,7 @@ public struct FfiConverterTypeConversationSummaryDto: FfiConverterRustBuffer {
         FfiConverterString.write(value.id, into: &buf)
         FfiConverterString.write(value.title, into: &buf)
         FfiConverterString.write(value.updatedAt, into: &buf)
+        FfiConverterOptionString.write(value.activeHarnessId, into: &buf)
     }
 }
 

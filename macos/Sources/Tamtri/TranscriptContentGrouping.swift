@@ -26,6 +26,7 @@ enum TranscriptContentGrouping {
         "app_resource",
         "task_ref",
         "artifact",
+        "tool_result",
     ]
 
     static func build(from blocks: [TranscriptContentBlock]) -> [TranscriptBlockGroup] {
@@ -39,9 +40,16 @@ enum TranscriptContentGrouping {
                 var next = index + 1
                 while next < blocks.count {
                     let candidate = blocks[next]
-                    guard nestableTypes.contains(candidate.type),
-                          candidate.originToolCallId == callId
-                    else {
+                    guard nestableTypes.contains(candidate.type) else {
+                        break
+                    }
+                    let nestsUnderCall: Bool = {
+                        if candidate.type == "tool_result" {
+                            return candidate.callId == callId
+                        }
+                        return candidate.originToolCallId == callId
+                    }()
+                    guard nestsUnderCall else {
                         break
                     }
                     nested.append(candidate)

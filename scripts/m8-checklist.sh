@@ -26,3 +26,4 @@ else
 fi
 
 echo "M8 checklist passed."
+echo "Manual visual pass: docs/visual-qa-checklist.md"

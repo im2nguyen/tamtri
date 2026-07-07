@@ -26,6 +26,51 @@ struct PermissionCardPresentation: Equatable {
     }
 }
 
+struct PermissionResolvedReceipt: Equatable {
+    let summary: String
+    let accessibilityLabel: String
+}
+
+enum PermissionResolvedReceiptBuilder {
+    static func fromCommittedBlock(_ block: TranscriptContentBlock) -> PermissionResolvedReceipt? {
+        guard block.type == "tool_result",
+              let permission = block.output?.value(at: "permission"),
+              case .object(let object) = permission,
+              case .string(let status) = object["status"]
+        else {
+            return nil
+        }
+        if status == "resolved" {
+            let optionID = object["selected_option"]?.stringValue ?? "unknown"
+            let label = PermissionResolvedReceiptBuilder.friendlyLabel(for: optionID)
+            return PermissionResolvedReceipt(
+                summary: "Permission · \(label)",
+                accessibilityLabel: "Permission \(label)"
+            )
+        }
+        if status == "requested" {
+            return PermissionResolvedReceipt(
+                summary: "Permission · not resolved",
+                accessibilityLabel: "Permission request expired when the turn ended"
+            )
+        }
+        return nil
+    }
+
+    static func friendlyLabel(for optionID: String) -> String {
+        switch optionID.lowercased() {
+        case "deny", "reject":
+            return "denied"
+        case "allow_once":
+            return "allowed once"
+        case "allow_for_conversation":
+            return "allowed for conversation"
+        default:
+            return optionID.replacingOccurrences(of: "_", with: " ")
+        }
+    }
+}
+
 enum PermissionCardPresentationBuilder {
     static func build(payloadJSON: String) -> PermissionCardPresentation? {
         guard let payload = try? JSONDecoder().decode(PermissionPayloadDTO.self, from: Data(payloadJSON.utf8))
@@ -86,25 +131,51 @@ struct ThinkingDisclosurePresentation: Equatable {
     let title: String
     let text: String
     let initiallyExpanded: Bool
+    let startedAt: Date?
+    let endedAt: Date?
+    let isStreaming: Bool
+    let estimatedDurationSeconds: Double?
+
+    init(
+        title: String,
+        text: String,
+        initiallyExpanded: Bool,
+        startedAt: Date? = nil,
+        endedAt: Date? = nil,
+        isStreaming: Bool = false,
+        estimatedDurationSeconds: Double? = nil
+    ) {
+        self.title = title
+        self.text = text
+        self.initiallyExpanded = initiallyExpanded
+        self.startedAt = startedAt
+        self.endedAt = endedAt
+        self.isStreaming = isStreaming
+        self.estimatedDurationSeconds = estimatedDurationSeconds
+    }
 }
 
 enum ThinkingDisclosurePresentationBuilder {
     static func fromCommittedBlock(_ block: TranscriptContentBlock) -> ThinkingDisclosurePresentation? {
         guard block.type == "thinking" else { return nil }
+        let text = block.text ?? ""
         return ThinkingDisclosurePresentation(
             title: "Thinking",
-            text: block.text ?? "",
-            initiallyExpanded: false
+            text: text,
+            initiallyExpanded: false,
+            estimatedDurationSeconds: ThoughtDurationFormatting.estimatedFromText(text)
         )
     }
 
     static func fromLivePayloadJSON(_ payloadJSON: String) -> ThinkingDisclosurePresentation? {
-        let text = Milestone3EventPayload.text(from: payloadJSON)
+        let text = LiveEventPayload.text(from: payloadJSON)
         guard !text.isEmpty else { return nil }
         return ThinkingDisclosurePresentation(
             title: "Thinking",
             text: text,
-            initiallyExpanded: false
+            initiallyExpanded: false,
+            startedAt: Date(),
+            isStreaming: true
         )
     }
 }
@@ -118,10 +189,20 @@ struct ToolCardPresentation: Equatable {
 }
 
 enum ToolCardPresentationBuilder {
+    static func fromCommittedToolGroup(
+        call: TranscriptContentBlock,
+        result: TranscriptContentBlock
+    ) -> ToolCardPresentation? {
+        guard call.type == "tool_call", result.type == "tool_result" else { return nil }
+        return fromCommittedResultBlock(result, fallbackCall: call)
+    }
+
     static func fromCommittedCallBlock(_ block: TranscriptContentBlock) -> ToolCardPresentation? {
-        guard block.type == "tool_call" else { return nil }
+        guard block.type == "tool_call", block.hasToolCallBody else { return nil }
         return ToolCardPresentation(
-            title: block.name ?? "Tool call",
+            title: block.name?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+                ? (block.name ?? "Tool call")
+                : "Tool call",
             subtitle: block.inputSummary,
             detail: block.inputSummary,
             diff: nil,
@@ -129,7 +210,10 @@ enum ToolCardPresentationBuilder {
         )
     }
 
-    static func fromCommittedResultBlock(_ block: TranscriptContentBlock) -> ToolCardPresentation? {
+    static func fromCommittedResultBlock(
+        _ block: TranscriptContentBlock,
+        fallbackCall: TranscriptContentBlock? = nil
+    ) -> ToolCardPresentation? {
         guard block.type == "tool_result" else { return nil }
         if block.output?.value(at: "permission") != nil {
             return nil
@@ -137,37 +221,81 @@ enum ToolCardPresentationBuilder {
         let diffs = block.toolDiffs
         if let diff = diffs.first {
             return ToolCardPresentation(
-                title: "Tool result",
+                title: toolResultTitle(for: block, fallbackCall: fallbackCall),
                 subtitle: [diff.change, diff.path].compactMap { $0 }.joined(separator: " • "),
                 detail: "",
                 diff: diff,
                 accessibilityLabel: "Tool result"
             )
         }
+        let preview = block.toolResultPreviewText ?? block.outputSummary
+        let status = block.output?.string(at: "status") ?? ""
         return ToolCardPresentation(
-            title: "Tool result",
-            subtitle: "",
-            detail: block.outputSummary,
+            title: toolResultTitle(for: block, fallbackCall: fallbackCall),
+            subtitle: status,
+            detail: preview,
             diff: nil,
             accessibilityLabel: "Tool result"
         )
     }
 
-    static func fromLiveEvent(kind: String, payloadJSON: String) -> ToolCardPresentation {
+    private static func toolResultTitle(
+        for block: TranscriptContentBlock,
+        fallbackCall: TranscriptContentBlock?
+    ) -> String {
+        if block.toolDiffs.first != nil {
+            return block.toolResultDisplayTitle ?? "Tool result"
+        }
+        let kind = block.toolResultDisplayTitle
+            ?? fallbackCall?.name?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedKind = kind?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let status = block.output?.string(at: "status")?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !trimmedKind.isEmpty, !status.isEmpty {
+            return "\(trimmedKind) \(humanizedToolStatus(status))"
+        }
+        if !trimmedKind.isEmpty {
+            return trimmedKind
+        }
+        return "Tool result"
+    }
+
+    private static func humanizedToolStatus(_ status: String) -> String {
+        status.replacingOccurrences(of: "_", with: " ")
+    }
+
+    static func fromLiveEvent(kind: String, payloadJSON: String) -> ToolCardPresentation? {
         let json = JSONValue.from(json: payloadJSON)
         let name = json?.string(at: "name") ?? json?.string(at: "title")
         let path = json?.string(at: "path") ?? json?.value(at: "diff")?.string(at: "path")
         let status = json?.string(at: "status")
-        let title = name ?? kind.replacingOccurrences(of: "_", with: " ").capitalized
-        let subtitle = [status, path].compactMap { $0 }.joined(separator: " • ")
         let diff = ToolDiffParsing.diff(from: json)
         let detail: String
         if diff != nil {
             detail = ""
         } else if let json {
-            detail = json.description
+            detail = json.toolPayloadText ?? ""
         } else {
-            detail = payloadJSON
+            detail = ""
+        }
+        let kindLabel = json?.toolPayloadKind?.capitalized
+        let baseTitle = name?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+            ? name!
+            : (kindLabel ?? "")
+        let title: String
+        if !baseTitle.isEmpty, let status, !status.isEmpty,
+           kind == "tool_call_progress" || kind == "tool_call_completed" {
+            title = "\(baseTitle) \(humanizedToolStatus(status))"
+        } else if !baseTitle.isEmpty {
+            title = baseTitle
+        } else {
+            title = kind.replacingOccurrences(of: "_", with: " ").capitalized
+        }
+        let subtitle = [status, path]
+            .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .joined(separator: " • ")
+        if title == "Tool call started" && subtitle.isEmpty && detail.isEmpty && diff == nil {
+            return nil
         }
         return ToolCardPresentation(
             title: title,
@@ -179,7 +307,7 @@ enum ToolCardPresentationBuilder {
     }
 }
 
-enum Milestone3EventPayload {
+enum LiveEventPayload {
     static func text(from json: String) -> String {
         struct Payload: Decodable {
             let text: String?

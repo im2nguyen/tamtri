@@ -33,6 +33,8 @@ struct TamtriApp: App {
                     hotkeyManager.register()
                 }
         }
+        .windowStyle(.hiddenTitleBar)
+        .windowToolbarStyle(.unifiedCompact(showsTitle: false))
         .commands {
             CommandGroup(replacing: .newItem) {
                 Button("New Conversation") {

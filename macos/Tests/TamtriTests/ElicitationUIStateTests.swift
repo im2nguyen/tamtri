@@ -2,7 +2,7 @@ import Foundation
 @testable import Tamtri
 import XCTest
 
-final class Milestone6UIStateTests: XCTestCase {
+final class ElicitationUIStateTests: XCTestCase {
     func testElicitationFormCardStateSnapshot() {
         let schema: JSONValue = .object([
             "type": .string("object"),

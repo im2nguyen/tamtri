@@ -16,6 +16,7 @@ pub struct ConversationSummary {
     pub id: Id,
     pub title: String,
     pub updated_at: DateTime<Utc>,
+    pub active_harness_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]

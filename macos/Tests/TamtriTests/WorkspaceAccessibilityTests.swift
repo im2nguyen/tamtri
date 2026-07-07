@@ -2,11 +2,11 @@ import Foundation
 @testable import Tamtri
 import XCTest
 
-final class Milestone8AccessibilityTests: XCTestCase {
+final class WorkspaceAccessibilityTests: XCTestCase {
     func testKeyboardOnlyHeroFlowIdentifiers() {
-        XCTAssertEqual(KeyboardHeroFlowCopy.sidebarIdentifier, "tamtri.sidebar")
-        XCTAssertEqual(KeyboardHeroFlowCopy.composerIdentifier, "tamtri.composer")
-        XCTAssertEqual(KeyboardHeroFlowCopy.transcriptIdentifier, "tamtri.transcript")
+        XCTAssertEqual(KeyboardHeroFlowIdentifiers.sidebarIdentifier, "tamtri.sidebar")
+        XCTAssertEqual(KeyboardHeroFlowIdentifiers.composerIdentifier, "tamtri.composer")
+        XCTAssertEqual(KeyboardHeroFlowIdentifiers.transcriptIdentifier, "tamtri.transcript")
     }
 
     func testVoiceoverCardLabels() {

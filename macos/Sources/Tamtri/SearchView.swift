@@ -50,7 +50,7 @@ struct SearchView: View {
                                 .foregroundStyle(.tertiary)
                         }
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(.tamtriPlain)
                 }
             }
         }

@@ -15,6 +15,7 @@ let package = Package(
             name: "Tamtri",
             dependencies: ["tamtri_coreFFI"],
             path: "Sources/Tamtri",
+            exclude: ["Design/design-tokens.json"],
             linkerSettings: [
                 .unsafeFlags([
                     "-L", "../target/debug",

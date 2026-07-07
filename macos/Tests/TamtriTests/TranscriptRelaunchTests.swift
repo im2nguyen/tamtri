@@ -2,7 +2,7 @@ import Foundation
 @testable import Tamtri
 import XCTest
 
-final class Milestone3RelaunchTests: XCTestCase {
+final class TranscriptRelaunchTests: XCTestCase {
     private let conversationId = "018e1234-5678-7890-abcd-ef0123456789"
     private let folderName = "2024-03-15-m3-relaunch--018e123456787890abcdef0123456789"
 

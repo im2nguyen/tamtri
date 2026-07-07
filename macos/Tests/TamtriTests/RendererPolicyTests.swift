@@ -79,6 +79,23 @@ final class RendererPolicyTests: XCTestCase {
         XCTAssertTrue(html.contains("script-src 'none'"))
     }
 
+    func testArtifactSandboxPreservesDocumentWithoutHead() {
+        let source = "<!doctype html><html><body><h1>ok</h1></body></html>"
+        let html = artifactSandboxedHTML(source)
+
+        XCTAssertTrue(html.contains("<head>"))
+        XCTAssertTrue(html.contains("Content-Security-Policy"))
+        XCTAssertTrue(html.contains("<body><h1>ok</h1></body>"))
+        XCTAssertFalse(html.contains("<body><!doctype html>"))
+    }
+
+    func testArtifactUsesWebViewPreviewMimeRouting() {
+        XCTAssertTrue(artifactUsesWebViewPreview(mimeType: "text/html"))
+        XCTAssertTrue(artifactUsesWebViewPreview(mimeType: "image/svg+xml"))
+        XCTAssertFalse(artifactUsesWebViewPreview(mimeType: "text/plain"))
+        XCTAssertFalse(artifactUsesWebViewPreview(mimeType: nil))
+    }
+
     func testArtifactMimeRouting() {
         XCTAssertTrue(artifactIsTextLikeMime("text/html"))
         XCTAssertTrue(artifactIsTextLikeMime("image/svg+xml"))

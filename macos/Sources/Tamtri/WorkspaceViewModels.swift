@@ -1,12 +1,23 @@
 import Foundation
 
-enum FilesPanelCopy {
-    static let artifactsSectionTitle = "Frozen attachments"
+enum WorkspaceRailMode: Equatable {
+    case closed
+    case browse
+    case preview
+}
+
+enum FilesPreviewDisplayMode: Equatable {
+    case rich
+    case source
+}
+
+enum FilesPanelStrings {
+    static let artifactsSectionTitle = "Attachments"
     static let artifactsSectionSubtitle = "Deliverables saved with the transcript. Portable in export."
     static let workdirSectionTitle = "Working files"
     static let workdirSectionSubtitle = "Live workspace. Files may change until you refresh."
     static let liveWorkingFileBadge = "Live working file"
-    static let frozenAttachmentBadge = "Frozen attachment"
+    static let attachmentBadge = "Attachment"
 }
 
 enum FileActionRole: Equatable {
@@ -305,5 +316,17 @@ enum TamtriErrorClassifier {
 enum FilePreviewSupport {
     static func canPreviewInline(mimeType: String?) -> Bool {
         artifactIsTextLikeMime(mimeType) || artifactIsImageMime(mimeType)
+    }
+
+    static func richPreviewAvailable(
+        mimeType: String?,
+        text: String?,
+        imageData: Data?,
+        error: String?
+    ) -> Bool {
+        guard error == nil else { return false }
+        if imageData != nil { return true }
+        guard let text, !text.isEmpty else { return false }
+        return canPreviewInline(mimeType: mimeType)
     }
 }

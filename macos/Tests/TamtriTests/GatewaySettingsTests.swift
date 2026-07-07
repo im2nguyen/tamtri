@@ -94,23 +94,23 @@ final class GatewaySettingsTests: XCTestCase {
 
         // Agent-native tools are not surfaced through listGatewayTools; the UI keeps them separate.
         XCTAssertTrue(
-            GatewaySettingsCopy.agentNativeToolsDisclaimer.contains("not exposed by this harness yet")
+            GatewaySettingsStrings.agentNativeToolsDisclaimer.contains("not exposed by this harness yet")
         )
-        XCTAssertEqual(GatewaySettingsCopy.tamtriGatewayToolsHeading, "Tamtri gateway tools")
+        XCTAssertEqual(GatewaySettingsStrings.tamtriGatewayToolsHeading, "Tamtri gateway tools")
     }
 
     func test_settings_agent_native_tools_disclaimer() {
-        XCTAssertFalse(GatewaySettingsCopy.agentNativeToolsDisclaimer.isEmpty)
+        XCTAssertFalse(GatewaySettingsStrings.agentNativeToolsDisclaimer.isEmpty)
         XCTAssertTrue(
-            GatewaySettingsCopy.agentNativeToolsDisclaimer.contains("Agent-native tools")
+            GatewaySettingsStrings.agentNativeToolsDisclaimer.contains("Agent-native tools")
         )
         XCTAssertTrue(
-            GatewaySettingsCopy.agentNativeToolsDisclaimer.contains("not exposed by this harness yet")
+            GatewaySettingsStrings.agentNativeToolsDisclaimer.contains("not exposed by this harness yet")
         )
     }
 
     func test_settings_tamtri_gateway_tools_heading() {
-        XCTAssertEqual(GatewaySettingsCopy.tamtriGatewayToolsHeading, "Tamtri gateway tools")
+        XCTAssertEqual(GatewaySettingsStrings.tamtriGatewayToolsHeading, "Tamtri gateway tools")
     }
 
     private static func mockMcpServerPath() -> String? {
