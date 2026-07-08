@@ -1,0 +1,18 @@
+{
+  "name": "@tamtri/app",
+  "version": "0.1.0",
+  "private": true,
+  "description": "The one tamtri UI. Expo + React Native Web, reused across desktop (Electron renderer), web, and mobile (iOS/Android). Talks to the daemon via @tamtri/client.",
+  "main": "expo-router/entry",
+  "scripts": {
+    "start": "expo start",
+    "web": "expo start --web",
+    "ios": "expo run:ios",
+    "android": "expo run:android",
+    "export:web": "expo export --platform web"
+  },
+  "dependencies": {
+    "@tamtri/client": "*",
+    "@tamtri/protocol": "*"
+  }
+}

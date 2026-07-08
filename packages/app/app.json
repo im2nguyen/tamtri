@@ -1,0 +1,13 @@
+{
+  "expo": {
+    "name": "tamtri",
+    "slug": "tamtri",
+    "scheme": "tamtri",
+    "platforms": ["ios", "android", "web"],
+    "web": {
+      "bundler": "metro",
+      "output": "static"
+    },
+    "plugins": ["expo-router"]
+  }
+}

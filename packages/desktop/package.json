@@ -1,0 +1,16 @@
+{
+  "name": "@tamtri/desktop",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Electron desktop shell. Main process spawns/supervises the tamtri-daemon (Rust), reads ~/.tamtri token+port, bridges a local transport to the renderer, and loads the @tamtri/app web bundle.",
+  "main": "dist/main.js",
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@tamtri/client": "*"
+  },
+  "devDependencies": {
+    "typescript": "^5.8.3"
+  }
+}

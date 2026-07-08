@@ -1,5 +1,21 @@
 .DS_Store
 /target/
-/macos/.build/
+
+# JS monorepo
+node_modules/
+dist/
+build/
+*.tsbuildinfo
+
+# Expo / React Native (packages/app)
+.expo/
+web-build/
+*.orig.*
+
+# Electron (packages/desktop)
+out/
+release/
+
+# Legacy web renderer (superseded by packages/app)
 /renderer/node_modules/
 /renderer/dist/

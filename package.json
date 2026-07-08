@@ -1,0 +1,24 @@
+{
+  "name": "tamtri",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Model-agnostic agent UI shell. Rust daemon + shared TypeScript surfaces (Electron desktop, web, Expo mobile).",
+  "license": "AGPL-3.0-or-later",
+  "workspaces": [
+    "packages/protocol",
+    "packages/client",
+    "packages/relay",
+    "packages/app",
+    "packages/desktop"
+  ],
+  "scripts": {
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "build": "npm run build --workspaces --if-present",
+    "protocol:generate": "npm run generate --workspace @tamtri/protocol",
+    "daemon:build": "cargo build -p tamtri-daemon",
+    "daemon:run": "cargo run -p tamtri-daemon"
+  },
+  "devDependencies": {
+    "typescript": "^5.8.3"
+  }
+}
