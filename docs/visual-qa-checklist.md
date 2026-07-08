@@ -1,66 +1,45 @@
 # Tamtri Visual QA Checklist
 
-Run after visual polish changes on macOS 14+ in **dark and light** appearance.
+Run on macOS with the **Electron + Expo** shell (`@tamtri/app`).
 
-## Build
+## Build / run
 
 ```bash
-./scripts/build-renderer.sh
-cargo build -p tamtri-core
-cd macos && swift build && swift test
+cargo build -p tamtri-daemon
+npm run app:web          # Terminal 1
+npm run desktop:dev      # Terminal 2
 ```
 
-## Chrome
+Or packaged UI: `npm run desktop:build && npm run start --workspace @tamtri/desktop`
 
-- [ ] Sidebar header: toggle sidebar + search icons inline (Cursor-style), not in window toolbar
-- [ ] New Conversation row at top of sidebar with ⌘N hint
-- [ ] No sidebar toggle or new-conversation buttons in transcript toolbar (right panel toggle only)
-- [ ] Sidebar nav: New chat, Search, Harness health as labeled rows (Codex-style)
-- [ ] Chats section with single-line rows (title + compact time); no harness chips in list
-- [ ] Settings-only footer; sidebar toggle bottom-right
-- [ ] Sidebar shows relative times (no ISO timestamps)
-- [ ] Sidebar groups Today / Yesterday / Earlier when 8+ conversations
-- [ ] Sidebar rows show harness chip and running indicator for active conversation
-- [ ] Sidebar footer exposes Settings and Harness Health
-- [ ] Conversation header shows harness display name (e.g. Hermes), not `hermes-acp`
-- [ ] Running indicator appears during active harness run (header + sidebar)
-- [ ] Composer is a floating inset bar with harness/model chips and circular send
-- [ ] Cancel replaces send in the same position while running
-- [ ] Dropped files show as chips above composer
-- [ ] Workspace layout matches Codex: left sidebar | center (header + transcript + composer) | optional right rail
-- [ ] Center header: conversation title + actions; panel toggle in center header when rail closed
-- [ ] Right rail open: center column narrows; toggle moves to rail header (no duplicate title bar)
-- [ ] Closing files panel does not collapse the left sidebar
+## Chrome (Paseo-inspired)
+
+- [ ] Left sidebar: search, new conversation, conversation rows with status dot
+- [ ] Sidebar footer: Import sessions link
+- [ ] Home empty state when no conversation selected
+- [ ] Conversation header: title + harness/model chips
+- [ ] Composer: floating inset bar, circular send, VaultLocal chip
+- [ ] Frameless window drag region (desktop)
+- [ ] Dark theme: sidebar `#141716`, workspace `#181B1A`, green accent
 
 ## Transcript
 
-- [ ] Empty conversation shows hero empty state
-- [ ] Transcript column is reading-width centered (~72ch)
-- [ ] No User/Assistant debug labels on committed messages
-- [ ] React renderer shows summary-first tool cards (not raw JSON by default)
-- [ ] Thinking blocks collapsed by default
-- [ ] Transcript scroll area fills space between header and composer
-- [ ] Artifact cards are compact with Open preview action
-- [ ] Native consent cards: Allow is primary (borderedProminent)
-- [ ] Gateway events hide JSON behind "Show details"
+- [ ] Empty conversation shows placeholder copy
+- [ ] User messages as right-aligned pills; assistant as full-width column
+- [ ] Thinking blocks in muted collapsible-style card
+- [ ] Tool call + result cards
+- [ ] Transcript column centered (~820px max width)
 
-## Files panel
+## Sessions import
 
-- [ ] Workspace rail collapses; auto-opens when a new artifact completes
-- [ ] Preview tab uses artifact typography for text deliverables
-- [ ] No cramped 160pt list caps; preview gets ≥40% of files tab
-- [ ] Frozen vs live badges visible on rows
-- [ ] Selected row shows accent bar
+- [ ] `/sessions` lists native Claude/Codex rows when available
+- [ ] Import creates vault conversation and navigates to it
 
-## Accessibility
+## Harness run
 
-- [ ] Keyboard: sidebar → transcript → composer path works
-- [ ] VoiceOver reads chip labels on header and file rows
-- [ ] Reduce Motion: no essential information in animation-only cues
+- [ ] Send message starts turn; transcript refreshes on completion
+- [ ] Error state surfaces when daemon unreachable
 
-## Hero path
+## Not in this pass
 
-1. New conversation with Hermes
-2. Drop CSV in composer
-3. Ask for report
-4. Verify artifact preview inline; workdir CSV stays secondary
+- Artifact HTML webview panels, MCP Apps, consent cards, live token streaming, settings

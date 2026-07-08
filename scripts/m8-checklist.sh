@@ -4,26 +4,24 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-echo "== Milestone 8 checklist =="
+echo "== tamtri checklist (daemon + app surfaces) =="
 
-echo "[core] cargo test (single-threaded)"
+echo "[core] cargo test"
 cargo test -p tamtri-core -- --test-threads=1
 
 echo "[core] clippy"
-cargo clippy -p tamtri-core --all-targets -- -D warnings
-
-echo "[macos] swift build"
-cd macos && swift build && cd ..
-
-echo "[macos] swift test"
-cd macos && swift test && cd ..
+cargo clippy -p tamtri-core -p tamtri-daemon --all-targets -- -D warnings
 
 if command -v npm >/dev/null 2>&1; then
-  echo "[renderer] build"
-  bash scripts/build-renderer.sh
+  echo "[app] typecheck"
+  npm run typecheck --workspace @tamtri/app
+
+  echo "[desktop] typecheck"
+  npm run typecheck --workspace @tamtri/desktop
 else
-  echo "[renderer] skipped (npm unavailable)"
+  echo "[npm] skipped (npm unavailable)"
 fi
 
-echo "M8 checklist passed."
+echo "Checklist passed."
 echo "Manual visual pass: docs/visual-qa-checklist.md"
+echo "Desktop dev: npm run app:web + npm run desktop:dev"

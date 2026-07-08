@@ -4,10 +4,18 @@
     "slug": "tamtri",
     "scheme": "tamtri",
     "platforms": ["ios", "android", "web"],
+    "userInterfaceStyle": "dark",
     "web": {
       "bundler": "metro",
       "output": "static"
     },
-    "plugins": ["expo-router"]
+    "plugins": [
+      [
+        "expo-router",
+        {
+          "root": "./src/app"
+        }
+      ]
+    ]
   }
 }

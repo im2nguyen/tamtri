@@ -16,7 +16,10 @@
     "build": "npm run build --workspaces --if-present",
     "protocol:generate": "npm run generate --workspace @tamtri/protocol",
     "daemon:build": "cargo build -p tamtri-daemon",
-    "daemon:run": "cargo run -p tamtri-daemon"
+    "daemon:run": "cargo run -p tamtri-daemon",
+    "app:web": "npm run web --workspace @tamtri/app",
+    "desktop:dev": "TAMTRI_USE_DEV_SERVER=1 npm run start --workspace @tamtri/desktop",
+    "desktop:build": "npm run build --workspace @tamtri/desktop"
   },
   "devDependencies": {
     "typescript": "^5.8.3"

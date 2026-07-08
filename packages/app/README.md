@@ -1,29 +1,49 @@
 # @tamtri/app
 
-The single tamtri UI, built with Expo + React Native Web so one codebase renders
-on desktop (as the Electron renderer), web, and mobile (iOS/Android).
+The single tamtri UI — Expo + React Native Web, Paseo-inspired dark theme with green accent.
 
-## Planned structure (paseo-informed)
+One codebase renders on **desktop** (Electron renderer), **web**, and **mobile** (later).
+
+## Design
+
+Borrowed from [Paseo](https://github.com/nousresearch/paseo):
+
+- Layered surfaces (`surfaceSidebar` #141716, `surface0` #181B1A, green accent #20744A)
+- Left sidebar + centered transcript (max 820px) + bottom composer
+- Status dots on conversation rows, tool/thinking cards in the transcript
+
+## Dev (desktop)
+
+```bash
+# Terminal 1 — Expo web dev server
+npm run app:web
+
+# Terminal 2 — Electron shell (loads Metro via IPC bridge)
+npm run desktop:dev
+```
+
+Electron spawns `tamtri-daemon` and bridges the wire protocol; the app never sees the bearer token.
+
+## Dev (web-only, direct WS)
+
+Set `EXPO_PUBLIC_DAEMON_WS_URL` and optionally `EXPO_PUBLIC_DAEMON_TOKEN`, then `npm run web`.
+
+## Structure
 
 ```
 src/
-  app/           Expo Router routes (_layout, index, sessions, pair-scan, settings)
-  components/    shared UI primitives (cards, composer, sidebar, transcript)
-  screens/       full-screen compositions
-  stores/        zustand stores (session, panels, hosts) + react-query for server data
-  styles/        react-native-unistyles themes + design tokens
-  runtime/       host registry; builds @tamtri/client per connected daemon
-  desktop/       Electron-only glue (local IPC transport, titlebar drag region)
+  app/              Expo Router routes
+  components/       sidebar, transcript, composer, ui
+  runtime/          DaemonClient provider
+  desktop/          Electron IPC transport
+  styles/           Paseo-inspired tokens
+  hooks/            conversation list/detail
 ```
 
 ## Connectivity
 
-The UI never speaks the wire protocol directly. It constructs a `DaemonClient`
-from `@tamtri/client` over the right transport:
+The UI constructs a `DaemonClient` from `@tamtri/client`:
 
-- desktop: local IPC bridge to the Electron main process (which owns the socket)
-- web: direct localhost WebSocket to the daemon
-- mobile: relay E2EE channel after QR/URL pairing
-
-Deps (Expo, react-native, expo-router, unistyles, zustand, react-query, etc.)
-are added in the app build-out step.
+- **Desktop:** `window.tamtri.transport` (Electron IPC → main process → daemon)
+- **Web:** direct localhost WebSocket (when configured)
+- **Mobile (later):** relay E2EE channel after pairing

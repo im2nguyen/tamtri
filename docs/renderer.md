@@ -1,30 +1,30 @@
-# Renderer
+# UI surfaces
 
-Milestone 5 introduces the first artifact renderer. Swift still owns the app, vault, permissions, keychain, and harness lifecycle; renderer surfaces receive already-reduced transcript view models.
+tamtri's product UI lives in **`packages/app`** (Expo + React Native Web). Electron (`packages/desktop`) hosts the exported web bundle and bridges the daemon wire protocol over IPC.
 
-## Artifact Snapshots
+## Renderer boundary
 
-The renderer never reads from `workdir/`. Core snapshots renderable `FileChanged` outputs into `attachments/`, records size and SHA-256 in the transcript `Artifact` block, and emits an `artifact_snapshotted` audit receipt.
+Surfaces are dumb clients:
 
-## HTML Sandbox
+- They talk to `tamtri-daemon` via `@tamtri/client` only.
+- They render transcript view models from `conversation.load` and wire events.
+- They never read the vault directly, spawn harnesses, hold gateway credentials, or bypass consent.
 
-HTML and SVG artifacts render from the frozen inline snapshot when the artifact is small enough to inline. Larger file-backed HTML/SVG artifacts are read through core's verified attachment API, which rejects bad paths, missing files, size mismatches, and SHA-256 mismatches before Swift receives bytes. The `WKWebView` uses a non-persistent data store and no host bridge. Swift wraps the document with a strict Content Security Policy:
+Every UI-initiated action goes through the same daemon RPC path as a direct tool call.
 
-```text
-default-src 'none';
-img-src data:;
-style-src 'unsafe-inline';
-script-src 'none';
-base-uri 'none';
-form-action 'none'
-```
+## Artifact snapshots (core)
 
-The navigation delegate allows only the initial `about:` document and cancels all other top-level navigation. Blocked navigations are logged to `events.jsonl` as `artifact_navigation_blocked`. No artifact webview gets network access, cookies, persistent storage, popups, downloads, geolocation, camera, microphone, clipboard writes, or a host-call bridge.
+The UI never reads from `workdir/`. Core snapshots renderable `FileChanged` outputs into `attachments/`, records size and SHA-256 in the transcript `Artifact` block, and emits an `artifact_snapshotted` audit receipt.
 
-## Non-HTML Previews
+## HTML sandbox (future in Expo)
 
-Markdown and plain text render as selectable native text. CSV/TSV render as a capped native grid preview. PNG, JPEG, GIF, and WebP render natively after integrity verification. Unknown artifacts render as typed file cards with metadata rather than active content.
+HTML and SVG artifacts will render in a sandboxed webview with no network access, strict CSP, and verified attachment bytes before display. Milestone 5 rules still apply; the host moves from Swift `WKWebView` to a contained webview inside `@tamtri/app`.
 
-## Artifact Actions
+## Non-HTML previews
 
-Open and Reveal actions are available from artifact cards. They first resolve the artifact through core's verified attachment API; AppKit only receives a local file URL after the path is confirmed to be under `attachments/` and the file's size and SHA-256 match the transcript.
+Markdown, text, CSV grids, and images render as native/RN components where possible. Unknown artifacts show typed file cards with metadata.
+
+## Related
+
+- `docs/daemon-protocol.md` — wire contract
+- `packages/app/README.md` — dev loop

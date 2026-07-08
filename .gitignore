@@ -7,15 +7,15 @@ dist/
 build/
 *.tsbuildinfo
 
-# Expo / React Native (packages/app)
+# Expo / React Native Web (packages/app)
 .expo/
 web-build/
+packages/app/dist/
 *.orig.*
 
 # Electron (packages/desktop)
 out/
 release/
 
-# Legacy web renderer (superseded by packages/app)
-/renderer/node_modules/
-/renderer/dist/
+*.txt
+*.log

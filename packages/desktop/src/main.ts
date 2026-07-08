@@ -63,11 +63,20 @@ function registerIpc(): void {
 
 async function loadRenderer(window: BrowserWindow): Promise<void> {
   const devUrl = process.env.TAMTRI_DEV_URL;
-  if (devUrl) {
-    await window.loadURL(devUrl);
-  } else {
-    await window.loadFile(join(__dirname, "renderer", "index.html"));
+  const useDevServer = process.env.TAMTRI_USE_DEV_SERVER === "1" || Boolean(devUrl);
+  if (useDevServer) {
+    await window.loadURL(devUrl ?? "http://localhost:8081");
+    return;
   }
+
+  const { existsSync } = await import("node:fs");
+  const appIndex = join(__dirname, "renderer", "app", "index.html");
+  if (existsSync(appIndex)) {
+    await window.loadFile(appIndex);
+    return;
+  }
+
+  await window.loadFile(join(__dirname, "renderer", "index.html"));
 }
 
 async function createWindow(): Promise<void> {
@@ -77,7 +86,7 @@ async function createWindow(): Promise<void> {
     minWidth: 720,
     minHeight: 480,
     show: false,
-    backgroundColor: "#0b0b0e",
+    backgroundColor: "#181B1A",
     titleBarStyle: "hiddenInset",
     webPreferences: {
       preload: join(__dirname, "preload.js"),

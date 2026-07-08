@@ -1,14 +1,16 @@
-// Build the Electron desktop bundles with esbuild:
-//   - main process (dist/main.js, CJS, electron external)
-//   - preload (dist/preload.js, CJS, electron external)
-//   - bootstrap renderer (dist/renderer/bootstrap.js, ESM for the browser)
-// and copy the renderer HTML. Our TS sources import with ".js" specifiers (for
-// tsc's bundler resolution), so a small plugin remaps them to ".ts" on disk.
+// Build Electron main/preload and bundle the Expo web export for production.
+//
+// Dev loop (hot reload):
+//   Terminal 1: npm run web --workspace @tamtri/app
+//   Terminal 2: TAMTRI_USE_DEV_SERVER=1 npm run start --workspace @tamtri/desktop
+//
+// Production bundle copies packages/app/dist → dist/renderer/app.
 
-import { build } from "esbuild";
+import { execSync } from "node:child_process";
 import { cp, mkdir } from "node:fs/promises";
 import { existsSync } from "node:fs";
-import { resolve } from "node:path";
+import { resolve, join } from "node:path";
+import { build } from "esbuild";
 
 const jsToTs = {
   name: "js-to-ts",
@@ -22,6 +24,8 @@ const jsToTs = {
 };
 
 const common = { bundle: true, sourcemap: true, logLevel: "info", plugins: [jsToTs] };
+const repoRoot = resolve(import.meta.dirname, "..", "..");
+const appPackage = join(repoRoot, "packages", "app");
 
 await mkdir("dist/renderer", { recursive: true });
 
@@ -45,6 +49,17 @@ await build({
   external: ["electron"],
 });
 
+console.log("exporting @tamtri/app for web…");
+execSync("npm run export:web --workspace @tamtri/app", {
+  cwd: repoRoot,
+  stdio: "inherit",
+});
+
+const exported = join(appPackage, "dist");
+const target = join(import.meta.dirname, "dist", "renderer", "app");
+await cp(exported, target, { recursive: true });
+
+// Bootstrap splash kept as a fallback when the export is missing.
 await build({
   ...common,
   entryPoints: ["src/renderer/bootstrap.ts"],
@@ -55,3 +70,5 @@ await build({
 });
 
 await cp("src/renderer/index.html", "dist/renderer/index.html");
+
+console.log("desktop bundle ready");
