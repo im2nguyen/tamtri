@@ -7,6 +7,7 @@ use std::time::{Duration, UNIX_EPOCH};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use tokio::sync::oneshot;
 use typeshare::typeshare;
 use tokio::runtime::{Builder, Runtime};
 use url::Url;
@@ -53,6 +54,9 @@ use crate::mcp::endpoint::{GatewayEndpoint, start_loopback_gateway};
 use crate::mcp::capabilities::{FeatureStatus, ServerCapabilityReport};
 use crate::credentials::DurableCredentials;
 use crate::mcp::gateway::{GatewayEvent, McpGateway};
+use crate::orchestration::{
+    self, OrchestrationRunDto, OrchestrationRunMeta, OrchestrationRunStatus, RecipeSummary,
+};
 use crate::vault::events::{Event, EventKind};
 use crate::vault::fs::FilesystemVault;
 use crate::vault::{ConversationSummary, ConversationVault, VaultIssue};
@@ -96,6 +100,12 @@ pub struct ConversationDto {
 struct CachedConversationDto {
     updated_at: DateTime<Utc>,
     dto: ConversationDto,
+}
+
+#[typeshare]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RecipeLoadDto {
+    pub recipe_json: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -292,6 +302,8 @@ struct ActiveRun {
     gateway_blocks: Arc<Mutex<Vec<ContentBlock>>>,
 }
 
+type TurnWaiters = Arc<Mutex<HashMap<Id, Vec<oneshot::Sender<TurnEndReason>>>>>;
+
 pub struct TamtriCore {
     vault: Arc<FilesystemVault>,
     runtime: Runtime,
@@ -306,6 +318,7 @@ pub struct TamtriCore {
     app_bridge: SharedAppBridgeCoordinator,
     /// Shell-resolved root URIs (security-scoped bookmarks) keyed by conversation id.
     runtime_roots: Arc<Mutex<HashMap<Id, Vec<Root>>>>,
+    turn_waiters: TurnWaiters,
     tamtri_home: PathBuf,
     server_id: String,
 }
@@ -344,6 +357,7 @@ impl TamtriCore {
             gateway_status_cache: Arc::new(Mutex::new(HashMap::new())),
             app_bridge: shared_app_bridge_coordinator(),
             runtime_roots: Arc::new(Mutex::new(HashMap::new())),
+            turn_waiters: Arc::new(Mutex::new(HashMap::new())),
             tamtri_home,
             server_id,
         })
@@ -362,6 +376,36 @@ impl TamtriCore {
     ) -> FfiResult<ConversationDto> {
         self.import_native_session_inner(&provider, &path, &harness_id, &model_id)
             .map_err(ffi_err)
+    }
+
+    pub fn list_recipes(&self) -> FfiResult<Vec<RecipeSummary>> {
+        self.list_recipes_inner().map_err(ffi_err)
+    }
+
+    pub fn load_recipe(&self, recipe_id: String) -> FfiResult<RecipeLoadDto> {
+        self.load_recipe_inner(&recipe_id).map_err(ffi_err)
+    }
+
+    pub fn orchestration_run(
+        &self,
+        recipe_id: String,
+        source_conversation_id: String,
+        inputs_json: Option<String>,
+    ) -> FfiResult<OrchestrationRunDto> {
+        self.orchestration_run_inner(
+            &recipe_id,
+            &source_conversation_id,
+            inputs_json.as_deref(),
+        )
+        .map_err(ffi_err)
+    }
+
+    pub fn orchestration_status(&self, run_id: String) -> FfiResult<OrchestrationRunDto> {
+        self.orchestration_status_inner(&run_id).map_err(ffi_err)
+    }
+
+    pub fn orchestration_cancel(&self, run_id: String) -> FfiResult<OrchestrationRunDto> {
+        self.orchestration_cancel_inner(&run_id).map_err(ffi_err)
     }
 
     fn import_native_session_inner(
@@ -1046,6 +1090,7 @@ impl TamtriCore {
         let gateway_blocks = Arc::new(Mutex::new(Vec::<ContentBlock>::new()));
         let gateway_for_run = Arc::clone(&gateway);
         let runtime_roots = Arc::clone(&self.runtime_roots);
+        let turn_waiters = Arc::clone(&self.turn_waiters);
         let harness_id_for_run = harness_id.clone();
         let harness_display_for_run = harness_display_name.clone();
         self.runtime.spawn(async move {
@@ -1113,6 +1158,7 @@ impl TamtriCore {
                             );
                         }
                         if let HarnessEvent::TurnEnded { reason } = &event {
+                            signal_turn_completed(&turn_waiters, id, reason.clone());
                             if matches!(reason, TurnEndReason::Cancelled) {
                                 break;
                             }
@@ -1265,6 +1311,11 @@ impl TamtriCore {
                     }
                 }
                 Err(err) => {
+                    signal_turn_completed(
+                        &turn_waiters,
+                        id,
+                        TurnEndReason::Failed,
+                    );
                     let _ = vault.append_event(
                         id,
                         &Event::new(EventKind::Error, json!({ "message": err.to_string() })),
@@ -2001,6 +2052,115 @@ impl TamtriCore {
         Ok(it_admin_checklist(&health_entries_from_roster(
             &self.registered_agent_launch_specs()?,
         )))
+    }
+
+    pub fn list_recipes_inner(&self) -> Result<Vec<RecipeSummary>> {
+        orchestration::list_recipes(self.vault.root())
+    }
+
+    pub fn load_recipe_inner(&self, recipe_id: &str) -> Result<RecipeLoadDto> {
+        Ok(RecipeLoadDto {
+            recipe_json: orchestration::store::load_recipe_json(self.vault.root(), recipe_id)?,
+        })
+    }
+
+    pub fn orchestration_run_inner(
+        &self,
+        recipe_id: &str,
+        source_conversation_id: &str,
+        inputs_json: Option<&str>,
+    ) -> Result<OrchestrationRunDto> {
+        let _ = self.vault.load(parse_id(source_conversation_id)?)?;
+        let recipe = orchestration::load_recipe(self.vault.root(), recipe_id)?;
+        let inputs: HashMap<String, String> = inputs_json
+            .map(serde_json::from_str)
+            .transpose()?
+            .unwrap_or_default();
+        let run_id = Uuid::now_v7().to_string();
+        let mut run = OrchestrationRunMeta::new(
+            run_id,
+            recipe_id.to_string(),
+            source_conversation_id.to_string(),
+        );
+        orchestration::store::save_run(self.vault.root(), &run)?;
+        match orchestration::engine::execute(self, &recipe, &mut run, &inputs) {
+            Ok(()) => run.status = OrchestrationRunStatus::Completed,
+            Err(err) => {
+                run.status = OrchestrationRunStatus::Failed;
+                run.error = Some(err.to_string());
+            }
+        }
+        run.touch();
+        orchestration::store::save_run(self.vault.root(), &run)?;
+        Ok(run.to_dto())
+    }
+
+    pub fn orchestration_status_inner(&self, run_id: &str) -> Result<OrchestrationRunDto> {
+        Ok(orchestration::store::load_run(self.vault.root(), run_id)?.to_dto())
+    }
+
+    pub fn orchestration_cancel_inner(&self, run_id: &str) -> Result<OrchestrationRunDto> {
+        let mut run = orchestration::store::load_run(self.vault.root(), run_id)?;
+        if run.status != OrchestrationRunStatus::Running {
+            return Ok(run.to_dto());
+        }
+        let _ = self.cancel_run_inner(&run.latest_conversation_id);
+        run.status = OrchestrationRunStatus::Cancelled;
+        run.error = Some("cancelled by user".to_string());
+        run.touch();
+        orchestration::store::save_run(self.vault.root(), &run)?;
+        Ok(run.to_dto())
+    }
+
+    pub(crate) fn vault_root(&self) -> &Path {
+        self.vault.root()
+    }
+
+    pub(crate) fn register_turn_waiter(&self, id: Id, tx: oneshot::Sender<TurnEndReason>) {
+        if let Ok(mut waiters) = self.turn_waiters.lock() {
+            waiters.entry(id).or_default().push(tx);
+        }
+    }
+
+    pub(crate) fn send_message_and_wait_inner(
+        &self,
+        conversation_id: &str,
+        text: &str,
+    ) -> Result<TurnEndReason> {
+        let id = parse_id(conversation_id)?;
+        let (tx, rx) = oneshot::channel();
+        self.register_turn_waiter(id, tx);
+        if let Err(err) = self.send_message_inner(conversation_id, text) {
+            if let Ok(mut waiters) = self.turn_waiters.lock() {
+                waiters.remove(&id);
+            }
+            return Err(err);
+        }
+        self.wait_turn_receiver(conversation_id, rx)
+    }
+
+    pub(crate) fn wait_turn_receiver(
+        &self,
+        conversation_id: &str,
+        rx: oneshot::Receiver<TurnEndReason>,
+    ) -> Result<TurnEndReason> {
+        match self.runtime.block_on(async {
+            tokio::time::timeout(Duration::from_secs(TURN_WAIT_TIMEOUT_SECS), rx).await
+        }) {
+            Ok(Ok(reason)) => Ok(reason),
+            Ok(Err(_)) => Err(CoreError::Protocol(format!(
+                "turn waiter dropped for {conversation_id}"
+            ))),
+            Err(_) => {
+                if let (Ok(id), Ok(mut waiters)) = (parse_id(conversation_id), self.turn_waiters.lock())
+                {
+                    waiters.remove(&id);
+                }
+                Err(CoreError::Timeout {
+                    method: "turn_wait".to_string(),
+                })
+            }
+        }
     }
 
     pub fn vault_issues_inner(&self) -> Result<Vec<VaultIssueDto>> {
@@ -2943,6 +3103,18 @@ fn safe_workdir_filename(name: &str) -> String {
 fn parse_id(id: &str) -> Result<Id> {
     id.parse()
         .map_err(|err| CoreError::MalformedVault(format!("invalid conversation id: {err}")))
+}
+
+const TURN_WAIT_TIMEOUT_SECS: u64 = 3600;
+
+fn signal_turn_completed(turn_waiters: &TurnWaiters, id: Id, reason: TurnEndReason) {
+    if let Ok(mut waiters) = turn_waiters.lock()
+        && let Some(list) = waiters.remove(&id)
+    {
+        for tx in list {
+            let _ = tx.send(reason.clone());
+        }
+    }
 }
 
 fn summary_to_dto(summary: ConversationSummary) -> Result<ConversationSummaryDto> {

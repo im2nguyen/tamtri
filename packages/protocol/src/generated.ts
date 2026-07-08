@@ -274,10 +274,51 @@ export interface NativeSessionSummary {
 	cwd?: string;
 }
 
+export interface OrchestrationCancel {
+	run_id: string;
+}
+
+export interface OrchestrationRun {
+	recipe_id: string;
+	source_conversation_id: string;
+	inputs_json?: string;
+}
+
+export interface OrchestrationRunDto {
+	id: string;
+	recipe_id: string;
+	source_conversation_id: string;
+	status: string;
+	current_step: number;
+	latest_conversation_id: string;
+	branch_conversation_ids?: string[];
+	error?: string;
+	started_at: string;
+	updated_at: string;
+}
+
+export interface OrchestrationStatus {
+	run_id: string;
+}
+
 export interface PermissionRespond {
 	conversation_id: string;
 	request_id: string;
 	option_id: string;
+}
+
+export interface RecipeLoadDto {
+	recipe_json: string;
+}
+
+export interface RecipeSummary {
+	id: string;
+	title: string;
+	description?: string;
+}
+
+export interface RecipesLoad {
+	recipe_id: string;
 }
 
 export interface RootDto {

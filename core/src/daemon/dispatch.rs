@@ -377,6 +377,38 @@ pub async fn dispatch(
             .await
         }
 
+        method::RECIPES_LIST => {
+            let c = Arc::clone(&core);
+            run(move || c.list_recipes()).await
+        }
+        method::RECIPES_LOAD => {
+            let p: params::RecipesLoad = parse(params)?;
+            let c = Arc::clone(&core);
+            run(move || c.load_recipe(p.recipe_id)).await
+        }
+        method::ORCHESTRATION_RUN => {
+            let p: params::OrchestrationRun = parse(params)?;
+            let c = Arc::clone(&core);
+            run(move || {
+                c.orchestration_run(
+                    p.recipe_id,
+                    p.source_conversation_id,
+                    p.inputs_json,
+                )
+            })
+            .await
+        }
+        method::ORCHESTRATION_STATUS => {
+            let p: params::OrchestrationStatus = parse(params)?;
+            let c = Arc::clone(&core);
+            run(move || c.orchestration_status(p.run_id)).await
+        }
+        method::ORCHESTRATION_CANCEL => {
+            let p: params::OrchestrationCancel = parse(params)?;
+            let c = Arc::clone(&core);
+            run(move || c.orchestration_cancel(p.run_id)).await
+        }
+
         other => Err(rpc_err(METHOD_NOT_FOUND, format!("method not found: {other}"))),
     }
 }

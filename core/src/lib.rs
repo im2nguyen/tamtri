@@ -9,6 +9,7 @@ pub mod debug_log;
 pub mod error;
 pub mod harness;
 pub mod mcp;
+pub mod orchestration;
 pub mod protocol;
 pub mod relay;
 pub mod rpc;

@@ -112,5 +112,6 @@ npm run desktop:dev   # terminal 2
 
 - [daemon-protocol.md](./docs/daemon-protocol.md) — wire protocol
 - [provider-adapters.md](./docs/provider-adapters.md) — Claude/Codex native + ACP fallback
+- [orchestration.md](./docs/orchestration.md) — recipe schema and run-graph engine
 - [vault-format.md](./docs/vault-format.md) — legible conversation storage
 - [packages/app/README.md](./packages/app/README.md) — UI structure and design notes

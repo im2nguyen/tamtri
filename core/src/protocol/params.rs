@@ -302,3 +302,30 @@ pub struct SessionsImport {
     pub harness_id: String,
     pub model_id: String,
 }
+
+#[typeshare]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RecipesLoad {
+    pub recipe_id: String,
+}
+
+#[typeshare]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OrchestrationRun {
+    pub recipe_id: String,
+    pub source_conversation_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inputs_json: Option<String>,
+}
+
+#[typeshare]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OrchestrationStatus {
+    pub run_id: String,
+}
+
+#[typeshare]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OrchestrationCancel {
+    pub run_id: String,
+}

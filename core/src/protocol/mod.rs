@@ -112,6 +112,13 @@ pub mod method {
     // Native session import (Workstream B)
     pub const SESSIONS_LIST_NATIVE: &str = "sessions.list_native";
     pub const SESSIONS_IMPORT: &str = "sessions.import";
+
+    // Orchestration (Workstream C)
+    pub const RECIPES_LIST: &str = "recipes.list";
+    pub const RECIPES_LOAD: &str = "recipes.load";
+    pub const ORCHESTRATION_RUN: &str = "orchestration.run";
+    pub const ORCHESTRATION_STATUS: &str = "orchestration.status";
+    pub const ORCHESTRATION_CANCEL: &str = "orchestration.cancel";
 }
 
 /// Client kind, advertised in the [`Hello`] handshake. Mirrors paseo's

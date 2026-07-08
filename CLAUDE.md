@@ -18,7 +18,7 @@ Two protocols, two planes (see "Harness transport" and "MCP gateway" below):
 
 ## Golden rules (do not violate)
 
-1. **The client is a dumb shell.** It renders and stores. It does not implement an agent loop, model inference, or prompting strategy. All of that lives in a harness.
+1. **The client is a dumb shell.** It renders and stores. It does not implement an agent loop, model inference, or prompting strategy. All of that lives in a harness. **Exception:** the daemon may run a **prompt-free orchestration engine** that sequences harness runs (fork, send user-authored recipe text, wait, branch on structured signals). Coordination is not intelligence; the engine never generates prompts or model decisions.
 2. **The conversation is the portable unit, and the client owns it.** Harnesses read a conversation's context and start a run. They never own the conversation. Harness and model are fixed for a thread; to change either you fork (see "fork to change either" below). This is what makes the experimentation surface work without betting on native cross-harness resume.
 3. **The harness adapter interface is the future plugin contract.** Design every adapter as if a third party will implement it. No adapter may leak its process/parsing quirks past its own boundary; the core only ever sees normalized `HarnessEvent`s.
 4. **Layer boundaries are sacred.** Surfaces (Electron + Expo/React-Native-Web) -> wire protocol -> Daemon (Rust core) -> Harness adapters. Nothing in a surface talks to a harness process directly. Nothing in the core imports Electron, React Native, or renderer UI code.
@@ -40,7 +40,7 @@ Harness Adapters (Rust)              ← behind HarnessAdapter trait
 /packages                            ← TS: protocol, client, relay, app, desktop
 ```
 
-See `docs/daemon-protocol.md`, `docs/relay-threat-model.md`, `docs/provider-adapters.md`.
+See `docs/daemon-protocol.md`, `docs/relay-threat-model.md`, `docs/provider-adapters.md`, `docs/orchestration.md`.
 
 Surfaces are dumb: they render and emit intents. The daemon owns storage, gateway secrets, permission audit, and harness lifecycle.
 

@@ -83,10 +83,10 @@ impl Daemon {
             version: env!("CARGO_PKG_VERSION").to_string(),
             protocol_version: PROTOCOL_VERSION.to_string(),
             features: Features {
+                orchestration: true,
                 relay: true,
                 native_tools: true,
                 session_import: true,
-                ..Features::default()
             },
         }
     }
