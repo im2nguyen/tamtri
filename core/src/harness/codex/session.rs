@@ -64,11 +64,17 @@ async fn run_codex_session_inner(
 ) -> Result<()> {
     handshake(&rpc).await?;
 
-    let cwd = absolute_cwd(&ctx.working_dir_path)?;
     let model = resolve_model(&rpc, &ctx.model_id).await?;
-    let thread_id = start_thread(&rpc, &model, &cwd).await?;
+    let (thread_id, cwd) = resolve_thread(&rpc, &ctx, &model).await?;
+    let _ = event_tx
+        .send(HarnessEvent::NativeSessionBound {
+            provider: "codex".to_string(),
+            session_id: thread_id.clone(),
+            cwd: Some(cwd.clone()),
+        })
+        .await;
 
-    let prompt = render_prompt(&ctx.seed, &turn.user_message);
+    let prompt = select_prompt(&ctx, &turn);
     let turn_params = build_turn_start_params(&thread_id, &model, &cwd, &prompt);
 
     let (done_tx, mut done_rx) = oneshot::channel();
@@ -207,6 +213,55 @@ async fn resolve_model(rpc: &RpcHandle, configured: &str) -> Result<String> {
         .and_then(Value::as_str)
         .map(str::to_string)
         .ok_or_else(|| CoreError::Protocol("Codex app-server returned no models".to_string()))
+}
+
+async fn resolve_thread(
+    rpc: &RpcHandle,
+    ctx: &ConversationContext,
+    model: &str,
+) -> Result<(String, String)> {
+    if let Some(link) = &ctx.native_session
+        && link.provider == "codex"
+        && !link.session_id.is_empty()
+    {
+        let cwd = if link.cwd.is_empty() {
+            absolute_cwd(&ctx.working_dir_path)?
+        } else {
+            link.cwd.clone()
+        };
+        let _ = rpc
+            .request(
+                "thread/resume",
+                Some(json!({ "threadId": link.session_id, "cwd": cwd })),
+                CODEX_REQUEST_TIMEOUT,
+            )
+            .await;
+        return Ok((link.session_id.clone(), cwd));
+    }
+
+    let cwd = absolute_cwd(&spawn_cwd(ctx))?;
+    let thread_id = start_thread(rpc, model, &cwd).await?;
+    Ok((thread_id, cwd))
+}
+
+pub fn spawn_cwd(ctx: &ConversationContext) -> std::path::PathBuf {
+    if let Some(link) = &ctx.native_session
+        && !link.cwd.is_empty()
+    {
+        return std::path::PathBuf::from(&link.cwd);
+    }
+    ctx.working_dir_path.clone()
+}
+
+fn select_prompt(ctx: &ConversationContext, turn: &TurnInput) -> String {
+    if ctx
+        .native_session
+        .as_ref()
+        .is_some_and(|link| link.provider == "codex")
+    {
+        return render_message(&turn.user_message);
+    }
+    render_prompt(&ctx.seed, &turn.user_message)
 }
 
 async fn start_thread(rpc: &RpcHandle, model: &str, cwd: &str) -> Result<String> {

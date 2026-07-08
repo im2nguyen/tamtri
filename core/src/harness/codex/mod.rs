@@ -1,7 +1,10 @@
 //! Direct Codex adapter via `codex app-server` NDJSON JSON-RPC on stdio.
 
 mod events;
+mod history;
 mod session;
+
+pub use history::parse_codex_session_file;
 
 use std::path::Path;
 use std::time::Duration;
@@ -55,11 +58,12 @@ impl HarnessAdapter for CodexNativeAdapter {
 
     async fn run(&self, ctx: ConversationContext, turn: TurnInput) -> Result<HarnessRun> {
         let args = effective_args(&self.launch.args);
+        let cwd = session::spawn_cwd(&ctx);
         let transport = StdioTransport::spawn_with_cwd(
             &self.launch.command,
             &args,
             &self.launch.env,
-            Some(&ctx.working_dir_path),
+            Some(&cwd),
         )
         .await?;
         let (rpc, inbound) = RpcConnection::start(Box::new(transport));

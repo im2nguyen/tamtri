@@ -42,3 +42,6 @@ Params: `{ provider, path, harness_id, model_id }`.
   transport wired (`ClaudeNativeAdapter`). Set `adapter: claude_native`. Resume
   uses `native_session` from import or the first successful run. Integration
   tests: `TAMTRI_CLAUDE_COMMAND=claude`.
+- **Codex import:** rollout jsonl under `~/.codex/sessions/**.jsonl` parses into
+  the vault transcript; `native_session.session_id` is the Codex thread id for
+  `thread/resume` on the next run.
