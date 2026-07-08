@@ -18,6 +18,8 @@
     "daemon:build": "cargo build -p tamtri-daemon",
     "daemon:run": "cargo run -p tamtri-daemon",
     "app:web": "npm run web --workspace @tamtri/app",
+    "dev:web": "node scripts/dev-web.mjs",
+    "dev:desktop": "node scripts/dev-desktop.mjs",
     "desktop:dev": "TAMTRI_USE_DEV_SERVER=1 npm run start --workspace @tamtri/desktop",
     "desktop:build": "npm run build --workspace @tamtri/desktop"
   },

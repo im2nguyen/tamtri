@@ -61,7 +61,7 @@ function BlockView({ block }: { block: ContentBlock }) {
   }
 }
 
-function MessageBubble({ message }: { message: TranscriptMessage }) {
+function MessageBubble({ message, streaming }: { message: TranscriptMessage; streaming?: boolean }) {
   const isUser = message.role === "user";
   const blocks = message.content.map((raw) =>
     typeof raw === "object" && raw && "type" in raw
@@ -78,6 +78,7 @@ function MessageBubble({ message }: { message: TranscriptMessage }) {
         style={{
           maxWidth: "100%",
           width: isUser ? "auto" : "100%",
+          opacity: streaming ? 0.92 : 1,
           backgroundColor: isUser ? theme.colors.surface3 : "transparent",
           borderRadius: theme.radius.xl,
           padding: isUser ? theme.spacing[3] : 0,
@@ -92,8 +93,16 @@ function MessageBubble({ message }: { message: TranscriptMessage }) {
   );
 }
 
-export function MessageList({ messages }: { messages: TranscriptMessage[] }) {
-  if (messages.length === 0) {
+export function MessageList({
+  messages,
+  liveMessageId,
+  showWorkingIndicator,
+}: {
+  messages: TranscriptMessage[];
+  liveMessageId?: string;
+  showWorkingIndicator?: boolean;
+}) {
+  if (messages.length === 0 && !showWorkingIndicator) {
     return (
       <View style={{ flex: 1, alignItems: "center", justifyContent: "center", padding: theme.spacing[6] }}>
         <Text style={{ color: theme.colors.foregroundMuted, fontSize: theme.fontSize.base, textAlign: "center" }}>
@@ -106,8 +115,13 @@ export function MessageList({ messages }: { messages: TranscriptMessage[] }) {
   return (
     <View style={{ gap: theme.spacing[2] }}>
       {messages.map((message) => (
-        <MessageBubble key={message.id} message={message} />
+        <MessageBubble
+          key={message.id}
+          message={message}
+          streaming={message.id === liveMessageId}
+        />
       ))}
+      {showWorkingIndicator ? <ThinkingIndicator /> : null}
     </View>
   );
 }

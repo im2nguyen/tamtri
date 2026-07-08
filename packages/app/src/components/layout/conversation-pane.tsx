@@ -5,6 +5,7 @@ import { Pressable, ScrollView, Text, useWindowDimensions, View } from "react-na
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { Composer } from "@/components/composer/composer";
+import { PermissionCard } from "@/components/consent/permission-card";
 import { TitlebarDragRegion } from "@/components/desktop/titlebar-drag-region";
 import { MessageList } from "@/components/transcript/message-list";
 import { isCompact, MAX_CONTENT_WIDTH } from "@/constants/layout";
@@ -22,7 +23,19 @@ export function ConversationPane({ conversationId }: ConversationPaneProps) {
   const { width } = useWindowDimensions();
   const compact = isCompact(width);
   const toggleSidebar = useUiStore((s) => s.toggleSidebar);
-  const { conversation, messages, loading, sending, error, sendMessage } = useConversation(conversationId);
+  const {
+    conversation,
+    messages,
+    liveMessage,
+    loading,
+    sending,
+    isRunning,
+    pendingPermission,
+    respondingPermission,
+    error,
+    sendMessage,
+    respondPermission,
+  } = useConversation(conversationId);
 
   const onSend = useCallback(
     async (text: string) => {
@@ -88,11 +101,39 @@ export function ConversationPane({ conversationId }: ConversationPaneProps) {
         }}
       >
         <View style={{ width: "100%", maxWidth: MAX_CONTENT_WIDTH }}>
-          <MessageList messages={messages} />
+          <MessageList
+            messages={messages}
+            liveMessageId={liveMessage?.id}
+            showWorkingIndicator={isRunning && !liveMessage}
+          />
         </View>
       </ScrollView>
 
-      <Composer onSend={onSend} sending={sending} />
+      {pendingPermission ? (
+        <View
+          style={{
+            paddingHorizontal: theme.spacing[4],
+            paddingBottom: theme.spacing[3],
+            alignItems: "center",
+            backgroundColor: theme.colors.surfaceWorkspace,
+          }}
+        >
+          <View style={{ width: "100%", maxWidth: MAX_CONTENT_WIDTH }}>
+            <PermissionCard
+              permission={pendingPermission}
+              responding={respondingPermission}
+              onRespond={(optionId) => void respondPermission(optionId)}
+            />
+          </View>
+        </View>
+      ) : null}
+
+      <Composer
+        onSend={onSend}
+        sending={sending}
+        disabled={Boolean(pendingPermission) || isRunning}
+        placeholder={pendingPermission ? "Respond to the permission request above…" : undefined}
+      />
     </View>
   );
 }

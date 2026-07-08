@@ -12,21 +12,30 @@ Borrowed from [Paseo](https://github.com/nousresearch/paseo):
 - Left sidebar + centered transcript (max 820px) + bottom composer
 - Status dots on conversation rows, tool/thinking cards in the transcript
 
-## Dev (desktop)
+## Dev (recommended)
 
 ```bash
-# Terminal 1 — Expo web dev server
-npm run app:web
+# Browser — one command: daemon + Metro + auth env
+npm run dev:web
 
-# Terminal 2 — Electron shell (loads Metro via IPC bridge)
-npm run desktop:dev
+# Desktop — one command: Metro + Electron (Electron spawns the daemon)
+npm run dev:desktop
 ```
 
-Electron spawns `tamtri-daemon` and bridges the wire protocol; the app never sees the bearer token.
+Build the daemon once if you have not already: `npm run daemon:build`.
 
-## Dev (web-only, direct WS)
+### Manual split (two terminals)
 
-Set `EXPO_PUBLIC_DAEMON_WS_URL` and optionally `EXPO_PUBLIC_DAEMON_TOKEN`, then `npm run web`.
+```bash
+npm run app:web          # Metro only — browser still needs a daemon; prefer dev:web
+npm run desktop:dev      # Electron only — needs Metro already on :8081
+```
+
+Electron spawns `tamtri-daemon` and bridges the wire protocol over IPC; the renderer never sees the bearer token.
+
+## Dev (web-only, manual env)
+
+If you run the daemon yourself (`npm run daemon:run`), set `EXPO_PUBLIC_DAEMON_WS_URL` and `EXPO_PUBLIC_DAEMON_TOKEN` (from `~/.tamtri/daemon.token`), then `npm run app:web`.
 
 ## Structure
 

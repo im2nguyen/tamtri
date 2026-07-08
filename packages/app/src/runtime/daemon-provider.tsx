@@ -51,12 +51,18 @@ export function DaemonProvider({ children }: { children: ReactNode }) {
   }, []);
 
   if (error) {
+    const hint = error.includes("WebSocket")
+      ? "Browser mode needs the daemon. Run npm run dev:web from the repo root (starts daemon + Metro with auth). Or use npm run dev:desktop for the Electron shell, which spawns the daemon for you."
+      : "Make sure tamtri-daemon is running. Desktop: npm run dev:desktop. Browser: npm run dev:web.";
     return (
       <View style={{ flex: 1, alignItems: "center", justifyContent: "center", backgroundColor: theme.colors.surface0, padding: 24 }}>
         <Text style={{ color: theme.colors.destructive, fontSize: theme.fontSize.base, textAlign: "center" }}>
           Could not reach tamtri host
         </Text>
         <Text style={{ color: theme.colors.foregroundMuted, marginTop: 8, textAlign: "center" }}>{error}</Text>
+        <Text style={{ color: theme.colors.foregroundMuted, marginTop: 16, textAlign: "center", maxWidth: 420, lineHeight: 22 }}>
+          {hint}
+        </Text>
       </View>
     );
   }
