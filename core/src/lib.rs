@@ -15,5 +15,3 @@ pub mod vault;
 
 pub use app::{ConversationDto, ConversationObserver, ConversationSummaryDto, TamtriCore, UiEvent};
 pub use error::{CoreError, Result};
-
-uniffi::setup_scaffolding!();

@@ -57,19 +57,18 @@ use crate::debug_log::debug_log;
 use crate::diagnostics;
 use crate::{CoreError, Result};
 
-#[uniffi::export(foreign)]
 pub trait ConversationObserver: Send + Sync {
     fn on_event(&self, event: UiEvent);
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, uniffi::Record)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct UiEvent {
     pub conversation_id: String,
     pub kind: String,
     pub payload_json: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, uniffi::Record)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ConversationSummaryDto {
     pub id: String,
     pub title: String,
@@ -77,7 +76,7 @@ pub struct ConversationSummaryDto {
     pub active_harness_id: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, uniffi::Record)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ConversationDto {
     pub id: String,
     pub title: String,
@@ -93,7 +92,7 @@ struct CachedConversationDto {
     dto: ConversationDto,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, uniffi::Record)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct VaultIssueDto {
     pub kind: String,
     pub conversation_id: Option<String>,
@@ -104,7 +103,7 @@ pub struct VaultIssueDto {
     pub detail: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, uniffi::Record)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RootDto {
     pub id: String,
     pub name: String,
@@ -113,7 +112,7 @@ pub struct RootDto {
     pub scope: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, uniffi::Record)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WorkdirFileDto {
     pub relative_path: String,
     pub size: u64,
@@ -121,19 +120,19 @@ pub struct WorkdirFileDto {
     pub modified_at: u64,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, uniffi::Record)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WorkdirFileContentDto {
     pub mime_type: Option<String>,
     pub data: Vec<u8>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, uniffi::Record)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GatewayEnvVarDto {
     pub name: String,
     pub value: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, uniffi::Record)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HarnessHealthEntryDto {
     pub id: String,
     pub display_name: String,
@@ -142,7 +141,7 @@ pub struct HarnessHealthEntryDto {
     pub install_doc_url: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, uniffi::Record)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SearchHitDto {
     pub conversation_id: String,
     pub title: String,
@@ -150,43 +149,43 @@ pub struct SearchHitDto {
     pub match_field: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, uniffi::Record)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ImportWarningDto {
     pub kind: String,
     pub detail: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, uniffi::Record)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ImportResultDto {
     pub conversation: ConversationDto,
     pub warnings: Vec<ImportWarningDto>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, uniffi::Record)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentRosterEntryDto {
     pub id: String,
     pub display_name: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, uniffi::Record)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ModelInfoDto {
     pub id: String,
     pub display_name: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, uniffi::Record)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GatewayToolDto {
     pub exposed_name: String,
     pub server_id: String,
     pub original_name: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, uniffi::Record)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GatewaySettingsDto {
     pub default_call_timeout_secs: u64,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, uniffi::Record)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GatewayServerDto {
     pub id: String,
     pub display_name: String,
@@ -224,7 +223,7 @@ struct GatewayServerStatus {
     last_error: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, uniffi::Record)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OAuthHandoffDto {
     pub server_id: String,
     pub authorization_url: String,
@@ -232,13 +231,13 @@ pub struct OAuthHandoffDto {
     pub redirect_uri: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, uniffi::Record)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OAuthCompletionDto {
     pub server_id: String,
     pub oauth_status: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, uniffi::Record)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AppTemplateDto {
     pub template_ref: String,
     pub server_id: String,
@@ -249,7 +248,7 @@ pub struct AppTemplateDto {
     pub content_security_policy: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, uniffi::Record)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AppBridgeSubmissionDto {
     pub request_id: String,
     pub needs_consent: bool,
@@ -257,8 +256,7 @@ pub struct AppBridgeSubmissionDto {
 
 type FfiResult<T> = std::result::Result<T, TamtriError>;
 
-#[derive(Debug, thiserror::Error, uniffi::Error)]
-#[uniffi(flat_error)]
+#[derive(Debug, thiserror::Error)]
 pub enum TamtriError {
     #[error("{message}")]
     Core { message: String },
@@ -285,7 +283,6 @@ struct ActiveRun {
     gateway_blocks: Arc<Mutex<Vec<ContentBlock>>>,
 }
 
-#[derive(uniffi::Object)]
 pub struct TamtriCore {
     vault: Arc<FilesystemVault>,
     runtime: Runtime,
@@ -304,9 +301,7 @@ pub struct TamtriCore {
 
 const CONVERSATION_CACHE_LIMIT: usize = 32;
 
-#[uniffi::export]
 impl TamtriCore {
-    #[uniffi::constructor]
     pub fn new(vault_path: String, observer: Arc<dyn ConversationObserver>) -> FfiResult<Self> {
         Self::new_inner(vault_path.into(), observer).map_err(ffi_err)
     }
@@ -437,7 +432,6 @@ impl TamtriCore {
     }
 }
 
-#[uniffi::export]
 impl TamtriCore {
     pub fn register_acp_agent(
         &self,

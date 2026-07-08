@@ -6,7 +6,7 @@ rust-version = "1.89"
 license = "AGPL-3.0-or-later"
 
 [lib]
-crate-type = ["rlib", "staticlib", "cdylib"]
+crate-type = ["rlib"]
 
 [[bin]]
 name = "mock-mcp-server"
@@ -52,14 +52,10 @@ sha2 = "0.10"
 thiserror = "2"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "io-util", "sync", "time", "test-util"] }
 tracing = "0.1"
-uniffi = "0.32.0"
 url = "2"
 uuid = { version = "1", features = ["v7", "serde"] }
 zip = { version = "2", default-features = false, features = ["deflate"] }
 tempfile = "3"
-
-[build-dependencies]
-uniffi = { version = "0.32.0", features = ["build"] }
 
 [dev-dependencies]
 pretty_assertions = "1"
