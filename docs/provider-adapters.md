@@ -23,12 +23,22 @@ Never blur **gateway tools** (proxied, consent-gated, credential-brokered) vs
 
 ## Native session import
 
-` sessions.list_native` scans `~/.claude/projects` and `~/.codex/sessions` for
-on-ramp rows. Import into the vault (seeding a new conversation) is the next
-step; listing is available now.
+`sessions.list_native` scans Claude Code `~/.claude/projects/**/*.jsonl` and Codex
+`~/.codex/sessions` for on-ramp rows (title, cwd, session id when known).
+
+`sessions.import` seeds a new vault conversation from a native session file. Claude
+jsonl history becomes the tamtri transcript; `meta.json` stores a
+`native_session` link so the next run uses `claude --resume`.
+
+Params: `{ provider, path, harness_id, model_id }`.
 
 ## Status
 
 - **ACP:** production path today.
-- **Claude / Codex native:** roster + capability seams landed; subprocess/SDK
-  transport is the next implementation slice.
+- **Codex native:** `codex app-server` transport wired (`CodexNativeAdapter`).
+  Set `adapter: codex_native` and `command: codex` with `args: ["app-server"]`
+  in roster config. Integration tests: `TAMTRI_CODEX_COMMAND=codex`.
+- **Claude native:** `claude --print --output-format stream-json --verbose`
+  transport wired (`ClaudeNativeAdapter`). Set `adapter: claude_native`. Resume
+  uses `native_session` from import or the first successful run. Integration
+  tests: `TAMTRI_CLAUDE_COMMAND=claude`.

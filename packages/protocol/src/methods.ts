@@ -83,6 +83,7 @@ export const method = {
 
   // Native session import
   SESSIONS_LIST_NATIVE: "sessions.list_native",
+  SESSIONS_IMPORT: "sessions.import",
 } as const;
 
 export type MethodName = (typeof method)[keyof typeof method];

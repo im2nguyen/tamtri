@@ -368,6 +368,14 @@ pub async fn dispatch(
             let c = Arc::clone(&core);
             run(move || c.list_native_sessions()).await
         }
+        method::SESSIONS_IMPORT => {
+            let p: params::SessionsImport = parse(params)?;
+            let c = Arc::clone(&core);
+            run(move || {
+                c.import_native_session(p.provider, p.path, p.harness_id, p.model_id)
+            })
+            .await
+        }
 
         other => Err(rpc_err(METHOD_NOT_FOUND, format!("method not found: {other}"))),
     }

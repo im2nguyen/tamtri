@@ -270,6 +270,8 @@ export interface NativeSessionSummary {
 	path: string;
 	title: string;
 	updated_at: number;
+	session_id?: string;
+	cwd?: string;
 }
 
 export interface PermissionRespond {
@@ -322,6 +324,13 @@ export interface ServerInfo {
 	version: string;
 	protocol_version: string;
 	features?: Features;
+}
+
+export interface SessionsImport {
+	provider: string;
+	path: string;
+	harness_id: string;
+	model_id: string;
 }
 
 export interface TaskCancel {

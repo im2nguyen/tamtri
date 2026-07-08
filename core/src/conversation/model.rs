@@ -7,6 +7,17 @@ pub type Id = uuid::Uuid;
 
 pub const ARTIFACT_INLINE_MAX_BYTES: usize = 32 * 1024;
 
+/// Link to a provider-native session file (Claude jsonl, Codex thread, …).
+/// Stored in `meta.json` so native adapters can `--resume` on the next run.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NativeSessionLink {
+    pub provider: String,
+    pub session_id: String,
+    pub cwd: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_path: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Conversation {
     pub id: Id,
@@ -22,6 +33,8 @@ pub struct Conversation {
     pub roots: Vec<Root>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub forked_from: Option<Id>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub native_session: Option<NativeSessionLink>,
     pub messages: Vec<Message>,
 }
 

@@ -353,6 +353,32 @@ impl TamtriCore {
         Ok(crate::harness::sessions::list_native_sessions())
     }
 
+    pub fn import_native_session(
+        &self,
+        provider: String,
+        path: String,
+        harness_id: String,
+        model_id: String,
+    ) -> FfiResult<ConversationDto> {
+        self.import_native_session_inner(&provider, &path, &harness_id, &model_id)
+            .map_err(ffi_err)
+    }
+
+    fn import_native_session_inner(
+        &self,
+        provider: &str,
+        path: &str,
+        harness_id: &str,
+        model_id: &str,
+    ) -> Result<ConversationDto> {
+        let conversation =
+            crate::harness::sessions::import_native_session(provider, path, harness_id, model_id)?;
+        self.vault.create(&conversation)?;
+        let dto = conversation_to_dto(&conversation)?;
+        self.store_conversation_cache(conversation.updated_at, dto.clone());
+        Ok(dto)
+    }
+
     pub fn relay_pairing_offer(&self) -> FfiResult<crate::relay::ConnectionOffer> {
         self.relay_pairing_offer_inner().map_err(ffi_err)
     }
@@ -991,6 +1017,7 @@ impl TamtriCore {
             roots: conversation.roots.clone(),
             mcp_servers: vec![gateway_mcp_ref(&gateway_endpoint)],
             model_id,
+            native_session: conversation.native_session.clone(),
         };
 
         self.vault.append_event(
@@ -1062,6 +1089,20 @@ impl TamtriCore {
                             Some(&harness_display_for_run),
                         );
                         let _ = reducer.apply(&event);
+                        if let HarnessEvent::NativeSessionBound {
+                            provider,
+                            session_id,
+                            cwd,
+                        } = &event
+                        {
+                            let _ = persist_native_session_link(
+                                &vault,
+                                id,
+                                provider,
+                                session_id,
+                                cwd.as_deref(),
+                            );
+                        }
                         if let HarnessEvent::TurnEnded { reason } = &event {
                             if matches!(reason, TurnEndReason::Cancelled) {
                                 break;
@@ -2039,6 +2080,36 @@ fn vault_issue_to_dto(issue: &VaultIssue) -> VaultIssueDto {
     }
 }
 
+fn persist_native_session_link(
+    vault: &FilesystemVault,
+    conversation_id: Id,
+    provider: &str,
+    session_id: &str,
+    cwd: Option<&str>,
+) -> Result<()> {
+    let mut conversation = vault.load(conversation_id)?;
+    conversation.native_session = Some(crate::conversation::NativeSessionLink {
+        provider: provider.to_string(),
+        session_id: session_id.to_string(),
+        cwd: cwd
+            .map(str::to_string)
+            .filter(|value| !value.is_empty())
+            .or_else(|| {
+                conversation
+                    .native_session
+                    .as_ref()
+                    .map(|link| link.cwd.clone())
+            })
+            .unwrap_or_default(),
+        source_path: conversation
+            .native_session
+            .as_ref()
+            .and_then(|link| link.source_path.clone()),
+    });
+    vault.save_meta(&conversation)?;
+    Ok(())
+}
+
 fn emit(
     observer: &Arc<dyn ConversationObserver>,
     conversation_id: Id,
@@ -2375,6 +2446,7 @@ fn event_kind(event: &HarnessEvent) -> &'static str {
         HarnessEvent::PlanUpdated { .. } => "plan_updated",
         HarnessEvent::ModeChanged { .. } => "mode_changed",
         HarnessEvent::Error { .. } => "error",
+        HarnessEvent::NativeSessionBound { .. } => "native_session_bound",
         HarnessEvent::TurnEnded { .. } => "turn_ended",
     }
 }

@@ -16,6 +16,7 @@ impl Conversation {
             mcp_servers: Vec::new(),
             roots: Vec::new(),
             forked_from: None,
+            native_session: None,
             messages: Vec::new(),
         }
     }

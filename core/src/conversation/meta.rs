@@ -1,7 +1,7 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use crate::conversation::{Conversation, Id, McpServerRef, Message, Root, WorkingDir};
+use crate::conversation::{Conversation, Id, McpServerRef, Message, NativeSessionLink, Root, WorkingDir};
 use crate::{CoreError, Result};
 
 pub const SCHEMA_VERSION: u32 = 2;
@@ -22,6 +22,8 @@ pub struct ConversationMeta {
     pub roots: Vec<Root>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub forked_from: Option<Id>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub native_session: Option<NativeSessionLink>,
 }
 
 impl ConversationMeta {
@@ -38,6 +40,7 @@ impl ConversationMeta {
             mcp_servers: c.mcp_servers.clone(),
             roots: c.roots.clone(),
             forked_from: c.forked_from,
+            native_session: c.native_session.clone(),
         }
     }
 
@@ -94,6 +97,7 @@ impl Conversation {
             mcp_servers: meta.mcp_servers,
             roots: meta.roots,
             forked_from: meta.forked_from,
+            native_session: meta.native_session,
             messages,
         }
     }

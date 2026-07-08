@@ -111,6 +111,7 @@ pub mod method {
 
     // Native session import (Workstream B)
     pub const SESSIONS_LIST_NATIVE: &str = "sessions.list_native";
+    pub const SESSIONS_IMPORT: &str = "sessions.import";
 }
 
 /// Client kind, advertised in the [`Hello`] handshake. Mirrors paseo's
@@ -304,6 +305,7 @@ mod tests {
             method::DIAGNOSTICS_WRITE_BUNDLE,
             method::RELAY_PAIRING_OFFER,
             method::SESSIONS_LIST_NATIVE,
+            method::SESSIONS_IMPORT,
         ];
         let mut seen = std::collections::HashSet::new();
         for name in names {

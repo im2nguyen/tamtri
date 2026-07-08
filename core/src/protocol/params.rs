@@ -293,3 +293,12 @@ pub struct WorkdirFileContent {
 pub struct AttachmentContent {
     pub data_base64: String,
 }
+
+#[typeshare]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionsImport {
+    pub provider: String,
+    pub path: String,
+    pub harness_id: String,
+    pub model_id: String,
+}

@@ -158,7 +158,8 @@ impl TurnReducer {
             }
             HarnessEvent::TurnEnded { .. }
             | HarnessEvent::PlanUpdated { .. }
-            | HarnessEvent::ModeChanged { .. } => {
+            | HarnessEvent::ModeChanged { .. }
+            | HarnessEvent::NativeSessionBound { .. } => {
                 self.flush_deltas();
             }
         }

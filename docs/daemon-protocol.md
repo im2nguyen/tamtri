@@ -43,7 +43,7 @@ Notable groups:
 | Conversations | `conversation.create`, `conversation.load`, `conversation.send_message` |
 | Gateway | `gateway.set_credential`, `gateway.start_oauth`, `gateway.complete_oauth` |
 | Relay | `relay.pairing_offer` |
-| Sessions | `sessions.list_native` |
+| Sessions | `sessions.list_native`, `sessions.import` |
 
 ## Credentials
 

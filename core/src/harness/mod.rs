@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 
 use crate::Result;
-use crate::conversation::{Message, WorkingDir};
+use crate::conversation::{Message, NativeSessionLink, WorkingDir};
 
 #[async_trait]
 pub trait HarnessAdapter: Send + Sync {
@@ -52,6 +52,10 @@ pub struct ConversationContext {
     pub roots: Vec<crate::conversation::Root>,
     pub mcp_servers: Vec<crate::conversation::McpServerRef>,
     pub model_id: String,
+    /// When set, native adapters resume the provider session instead of replaying
+    /// the full vault transcript on the wire.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub native_session: Option<NativeSessionLink>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -153,6 +157,11 @@ pub enum HarnessEvent {
     },
     ModeChanged {
         mode: String,
+    },
+    NativeSessionBound {
+        provider: String,
+        session_id: String,
+        cwd: Option<String>,
     },
     Error {
         message: String,
