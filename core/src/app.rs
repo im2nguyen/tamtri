@@ -1008,6 +1008,14 @@ impl TamtriCore {
         self.vault.append_message(id, &user_message)?;
         self.invalidate_conversation_cache(id);
         conversation.messages.push(user_message.clone());
+        let tool_catalog = if adapter.capabilities().native_tools {
+            self.runtime
+                .block_on(gateway.list_tools())
+                .map(crate::harness::tools::from_gateway_tools)
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
         let ctx = ConversationContext {
             seed: ContextSeed::FreshTranscript {
                 messages: conversation.messages.clone(),
@@ -1018,6 +1026,7 @@ impl TamtriCore {
             mcp_servers: vec![gateway_mcp_ref(&gateway_endpoint)],
             model_id,
             native_session: conversation.native_session.clone(),
+            tool_catalog,
         };
 
         self.vault.append_event(

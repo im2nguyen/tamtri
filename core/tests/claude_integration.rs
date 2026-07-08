@@ -35,6 +35,7 @@ fn ctx_in(path: PathBuf) -> ConversationContext {
         mcp_servers: Vec::new(),
         model_id: String::new(),
         native_session: None,
+        tool_catalog: Vec::new(),
     }
 }
 

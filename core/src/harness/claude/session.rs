@@ -41,6 +41,11 @@ pub async fn run_claude_session(
     for (key, value) in &launch.env {
         cmd.env(key, value);
     }
+    if !ctx.tool_catalog.is_empty()
+        && let Ok(encoded) = serde_json::to_string(&ctx.tool_catalog)
+    {
+        cmd.env("TAMTRI_NATIVE_TOOL_CATALOG", encoded);
+    }
 
     let mut child = match cmd.spawn() {
         Ok(child) => child,
@@ -301,6 +306,7 @@ mod tests {
                 cwd: "/tmp".into(),
                 source_path: None,
             }),
+            tool_catalog: Vec::new(),
         };
         let turn = TurnInput {
             user_message: Message {
@@ -333,6 +339,7 @@ mod tests {
                 cwd: "/tmp".into(),
                 source_path: None,
             }),
+            tool_catalog: Vec::new(),
         };
         let args = build_claude_args(
             "hello",

@@ -97,6 +97,13 @@ fn sealed_path(home: &Path) -> PathBuf {
 }
 
 fn ensure_master_key(home: &Path) -> Result<[u8; 32]> {
+    #[cfg(target_os = "macos")]
+    {
+        if let Some(key) = crate::credentials::keychain::load_master_key()? {
+            return Ok(key);
+        }
+    }
+
     let path = key_path(home);
     if path.exists() {
         let bytes = fs::read(&path)?;
@@ -107,12 +114,26 @@ fn ensure_master_key(home: &Path) -> Result<[u8; 32]> {
         }
         let mut key = [0u8; 32];
         key.copy_from_slice(&bytes);
+        #[cfg(target_os = "macos")]
+        {
+            crate::credentials::keychain::store_master_key(&key)?;
+            let _ = crate::credentials::keychain::delete_master_key_file_fallback(&path);
+        }
         return Ok(key);
     }
+
     let mut key = [0u8; 32];
     OsRng.fill_bytes(&mut key);
-    write_private(&path, &key)?;
-    Ok(key)
+    #[cfg(target_os = "macos")]
+    {
+        crate::credentials::keychain::store_master_key(&key)?;
+        Ok(key)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        write_private(&path, &key)?;
+        Ok(key)
+    }
 }
 
 fn load_sealed(home: &Path) -> Result<HashMap<String, String>> {
@@ -179,6 +200,7 @@ fn persist_sealed(home: &Path, cache: &HashMap<String, String>) -> Result<()> {
     Ok(())
 }
 
+#[cfg(not(target_os = "macos"))]
 fn write_private(path: &Path, bytes: &[u8]) -> Result<()> {
     fs::write(path, bytes)?;
     #[cfg(unix)]

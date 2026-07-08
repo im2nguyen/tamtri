@@ -2,4 +2,5 @@
 //! tested. The binary in `main.rs` is a thin wrapper over these modules.
 
 pub mod runtime_dir;
+pub mod relay_attachment;
 pub mod server;

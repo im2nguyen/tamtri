@@ -51,6 +51,7 @@ fn ctx_in(path: PathBuf) -> ConversationContext {
         mcp_servers: Vec::new(),
         model_id: "mock".into(),
         native_session: None,
+        tool_catalog: Vec::new(),
     }
 }
 

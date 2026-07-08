@@ -8,7 +8,7 @@ typeshare into `packages/protocol`.
 ## Transport
 
 - **Direct (localhost):** `ws://127.0.0.1:<port>/ws?token=<bearer>`
-- **Remote (relay):** `wss://<relay-endpoint>/...` with E2E encryption after QR/URL pairing (see [relay-threat-model.md](./relay-threat-model.md))
+- **Remote (relay):** `wss://<relay-endpoint>/...` with E2E encryption after QR/URL pairing (see [relay-threat-model.md](./relay-threat-model.md)). The daemon maintains an outbound registration connection when `TAMTRI_RELAY_ENDPOINT` is set (disable with `TAMTRI_RELAY_DISABLE=1`).
 
 Endpoint discovery: `~/.tamtri/daemon.port` and `~/.tamtri/daemon.token` (0600).
 
@@ -48,7 +48,9 @@ Notable groups:
 ## Credentials
 
 The **daemon owns durable secrets**. Gateway credentials and OAuth tokens persist
-in `~/.tamtri/credentials.sealed` (ChaCha20-Poly1305 under `credentials.key`).
+in `~/.tamtri/credentials.sealed` (ChaCha20-Poly1305). On macOS the master key
+lives in the login keychain (`dev.tamtri.credentials`); on other platforms it
+falls back to `credentials.key` (0600).
 Surfaces send values via `gateway.set_credential`; the daemon injects them
 downstream and never writes raw secrets to `events.jsonl` or logs.
 

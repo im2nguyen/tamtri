@@ -8,6 +8,7 @@ use tokio::sync::{mpsc, oneshot};
 use crate::conversation::{ContentBlock, Message};
 use crate::harness::acp::AgentLaunchSpec;
 use super::events::{is_approval_request, notification_events, permission_decision, permission_event};
+use crate::harness::tools::ToolCatalogEntry;
 use crate::harness::{
     ContextSeed, ConversationContext, HarnessEvent, RunCommand, TurnEndReason, TurnInput,
 };
@@ -75,7 +76,7 @@ async fn run_codex_session_inner(
         .await;
 
     let prompt = select_prompt(&ctx, &turn);
-    let turn_params = build_turn_start_params(&thread_id, &model, &cwd, &prompt);
+    let turn_params = build_turn_start_params(&thread_id, &model, &cwd, &prompt, &ctx.tool_catalog);
 
     let (done_tx, mut done_rx) = oneshot::channel();
     let turn_rpc = rpc.clone();
@@ -284,8 +285,14 @@ async fn start_thread(rpc: &RpcHandle, model: &str, cwd: &str) -> Result<String>
         .ok_or_else(|| CoreError::Protocol("Codex app-server did not return thread id".to_string()))
 }
 
-fn build_turn_start_params(thread_id: &str, model: &str, cwd: &str, prompt: &str) -> Value {
-    json!({
+fn build_turn_start_params(
+    thread_id: &str,
+    model: &str,
+    cwd: &str,
+    prompt: &str,
+    tool_catalog: &[ToolCatalogEntry],
+) -> Value {
+    let mut params = json!({
         "threadId": thread_id,
         "model": model,
         "cwd": cwd,
@@ -295,7 +302,26 @@ fn build_turn_start_params(thread_id: &str, model: &str, cwd: &str, prompt: &str
             "networkAccess": false,
         },
         "input": [text_input(prompt)],
-    })
+    });
+    if !tool_catalog.is_empty() {
+        params["tools"] = codex_tools_json(tool_catalog);
+    }
+    params
+}
+
+fn codex_tools_json(catalog: &[ToolCatalogEntry]) -> Value {
+    Value::Array(
+        catalog
+            .iter()
+            .map(|tool| {
+                json!({
+                    "name": tool.exposed_name,
+                    "description": tool.description.clone().unwrap_or_else(|| tool.original_name.clone()),
+                    "parameters": tool.input_schema,
+                })
+            })
+            .collect(),
+    )
 }
 
 fn text_input(text: &str) -> Value {

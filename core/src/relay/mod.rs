@@ -11,5 +11,5 @@ mod server_id;
 
 pub use crypto::{KeyPair, decode_base64, encode_base64};
 pub use keypair::{load_or_create_keypair, keypair_path, KeypairFile};
-pub use pairing::{ConnectionOffer, RelayEndpoint, build_pairing_offer, DEFAULT_RELAY_ENDPOINT};
+pub use pairing::{ConnectionOffer, RelayEndpoint, build_pairing_offer, relay_endpoint_from_env, DEFAULT_RELAY_ENDPOINT};
 pub use server_id::load_or_create_server_id;

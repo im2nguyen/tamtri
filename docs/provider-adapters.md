@@ -21,6 +21,21 @@ tool catalog directly. When false, tamtri passes itself as the sole MCP server
 Never blur **gateway tools** (proxied, consent-gated, credential-brokered) vs
 **agent-native tools** (harness's own servers) in the UI.
 
+## Native tool catalog
+
+When `native_tools: true`, the core lists gateway tools into
+`ConversationContext.tool_catalog` before each run. Codex receives them on
+`turn/start` as a `tools` array; Claude receives JSON in
+`TAMTRI_NATIVE_TOOL_CATALOG`. ACP adapters continue to receive tamtri as an MCP
+server via `mcp_servers`.
+
+## Roster discovery
+
+`seed_agent_roster_if_empty` prefers native entries when binaries are present:
+
+- `claude-native` (`claude_native`) before `claude-code-acp`
+- `codex-native` (`codex_native`) when `codex` is on PATH
+
 ## Native session import
 
 `sessions.list_native` scans Claude Code `~/.claude/projects/**/*.jsonl` and Codex

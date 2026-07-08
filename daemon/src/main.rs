@@ -7,7 +7,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use tamtri_core::daemon::Daemon;
-use tamtri_daemon::{runtime_dir, server};
+use tamtri_daemon::{relay_attachment, runtime_dir, server};
 
 /// Default localhost port. Override with `TAMTRI_PORT`; `0` binds an ephemeral
 /// port (the actual port is written to `daemon.port`).
@@ -24,6 +24,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // tokio runtime internally; constructing (and later dropping) it must happen
     // off any async executor, which is why `main` is a plain fn.
     let daemon = Arc::new(Daemon::new(paths.vault.to_string_lossy().to_string())?);
+    let server_id = daemon.core().server_id().to_string();
 
     let port: u16 = std::env::var("TAMTRI_PORT")
         .ok()
@@ -36,6 +37,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .build()?;
 
     let result = rt.block_on(async {
+        relay_attachment::spawn_if_enabled(server_id, paths.home.clone());
         let listener = server::bind(addr).await?;
         let local = listener.local_addr()?;
         runtime_dir::write_endpoint_files(&paths, local.port())?;

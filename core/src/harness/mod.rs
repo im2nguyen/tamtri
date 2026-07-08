@@ -4,6 +4,7 @@ pub mod codex;
 pub mod health;
 pub mod registry;
 pub mod sessions;
+pub mod tools;
 
 use std::path::PathBuf;
 
@@ -56,6 +57,10 @@ pub struct ConversationContext {
     /// the full vault transcript on the wire.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub native_session: Option<NativeSessionLink>,
+    /// Gateway tool catalog for adapters with `native_tools: true`. ACP adapters
+    /// receive tools via `mcp_servers` instead.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tool_catalog: Vec<tools::ToolCatalogEntry>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

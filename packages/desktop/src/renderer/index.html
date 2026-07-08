@@ -49,6 +49,16 @@
       dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; word-break: break-all; }
       .status { margin-top: 16px; font-weight: 600; }
       .hidden { display: none; }
+      .native-section { margin-top: 22px; padding-top: 18px; border-top: 1px solid var(--border); }
+      .native-heading { font-weight: 600; margin-bottom: 8px; }
+      .native-empty { color: var(--muted); margin: 0; }
+      .native-row { display: flex; gap: 12px; align-items: center; justify-content: space-between; padding: 10px 0; border-bottom: 1px solid var(--border); }
+      .native-row:last-child { border-bottom: 0; }
+      .native-title { font-weight: 500; }
+      .native-detail { color: var(--muted); font-size: 12px; margin-top: 2px; }
+      .native-row button { background: var(--accent); color: #0b0b0e; border: 0; border-radius: 8px; padding: 6px 12px; font-weight: 600; cursor: pointer; }
+      .native-row button:disabled { opacity: 0.6; cursor: default; }
+      .import-status { margin-top: 10px; color: var(--muted); font-size: 12px; word-break: break-word; }
       body[data-state="connecting"] .when-connected,
       body[data-state="connecting"] .when-error { display: none; }
       body[data-state="connected"] .when-connecting,
@@ -79,6 +89,11 @@
           <dt>features</dt><dd id="features">—</dd>
           <dt>conversations</dt><dd id="conversation-count">—</dd>
         </dl>
+        <section class="native-section when-connected">
+          <div class="native-heading">Import native sessions</div>
+          <div id="native-sessions"></div>
+          <div class="import-status" id="import-status"></div>
+        </section>
       </div>
 
       <div class="when-error">

@@ -6,4 +6,7 @@
 
 mod sealed;
 
+#[cfg(target_os = "macos")]
+mod keychain;
+
 pub use sealed::DurableCredentials;

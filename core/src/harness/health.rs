@@ -40,6 +40,8 @@ pub fn probe_agent_launch_spec(spec: &AgentLaunchSpec) -> HarnessHealthStatus {
 pub fn install_doc_url(agent_id: &str) -> &'static str {
     match agent_id {
         "claude-code-acp" => "https://docs.anthropic.com/en/docs/claude-code",
+        "claude-native" => "https://docs.anthropic.com/en/docs/claude-code",
+        "codex-native" => "https://developers.openai.com/codex",
         "goose" | "goose-acp" => "https://block.github.io/goose/docs/getting-started/installation/",
         "hermes" | "hermes-acp" => "https://github.com/NousResearch/hermes-agent",
         "mock-acp" => "https://github.com/tamtri/tamtri/tree/main/fixtures/mock-acp-agent",
@@ -52,7 +54,7 @@ pub fn it_admin_checklist(entries: &[HarnessHealthEntry]) -> String {
         "tamtri harness setup checklist".to_string(),
         String::new(),
         "Install at least one ACP-capable agent and confirm tamtri can find its binary.".to_string(),
-        "Gateway MCP servers live in <vault>/config.json; credentials stay in macOS Keychain.".to_string(),
+        "Gateway MCP servers live in <vault>/config.json; credentials stay in the daemon store.".to_string(),
         String::new(),
         "Configured agents:".to_string(),
     ];
@@ -80,14 +82,32 @@ pub fn discover_known_agents() -> Vec<AgentLaunchSpec> {
             adapter: AdapterKind::default(),
         });
     }
-    if which_command("claude").is_some() {
+    if let Some(command) = which_command("claude") {
+        found.push(AgentLaunchSpec {
+            id: "claude-native".into(),
+            display_name: "Claude Code".into(),
+            command: command.to_string_lossy().into_owned(),
+            args: Vec::new(),
+            env: Vec::new(),
+            adapter: AdapterKind::ClaudeNative,
+        });
         found.push(AgentLaunchSpec {
             id: "claude-code-acp".into(),
-            display_name: "Claude Code".into(),
-            command: "claude".into(),
+            display_name: "Claude Code (ACP)".into(),
+            command: command.to_string_lossy().into_owned(),
             args: vec!["acp".into()],
             env: Vec::new(),
             adapter: AdapterKind::default(),
+        });
+    }
+    if let Some(command) = which_command("codex") {
+        found.push(AgentLaunchSpec {
+            id: "codex-native".into(),
+            display_name: "Codex".into(),
+            command: command.to_string_lossy().into_owned(),
+            args: vec!["app-server".into()],
+            env: Vec::new(),
+            adapter: AdapterKind::CodexNative,
         });
     }
     if which_command("goose").is_some() {
