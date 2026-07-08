@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'unsafe-inline';" />
+    <title>tamtri</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #0b0b0e;
+        --panel: #16161c;
+        --border: #26262f;
+        --text: #e7e7ea;
+        --muted: #8a8a94;
+        --accent: #6ea8fe;
+        --ok: #57d18f;
+        --err: #ff6b6b;
+      }
+      * { box-sizing: border-box; }
+      html, body { height: 100%; margin: 0; }
+      body {
+        font: 14px/1.5 -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
+        background: var(--bg);
+        color: var(--text);
+        display: grid;
+        place-items: center;
+        -webkit-user-select: none;
+        user-select: none;
+      }
+      .card {
+        width: 360px;
+        padding: 28px;
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 14px;
+        box-shadow: 0 20px 60px rgba(0, 0, 0, 0.45);
+      }
+      .brand { font-size: 18px; font-weight: 600; letter-spacing: 0.3px; }
+      .sub { color: var(--muted); margin-top: 4px; }
+      .spinner {
+        width: 18px; height: 18px; margin: 20px auto 0;
+        border: 2px solid var(--border); border-top-color: var(--accent);
+        border-radius: 50%; animation: spin 0.8s linear infinite;
+      }
+      @keyframes spin { to { transform: rotate(360deg); } }
+      @media (prefers-reduced-motion: reduce) { .spinner { animation: none; } }
+      dl { margin: 18px 0 0; display: grid; grid-template-columns: auto 1fr; gap: 6px 14px; }
+      dt { color: var(--muted); }
+      dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; word-break: break-all; }
+      .status { margin-top: 16px; font-weight: 600; }
+      .hidden { display: none; }
+      body[data-state="connecting"] .when-connected,
+      body[data-state="connecting"] .when-error { display: none; }
+      body[data-state="connected"] .when-connecting,
+      body[data-state="connected"] .when-error { display: none; }
+      body[data-state="error"] .when-connecting,
+      body[data-state="error"] .when-connected { display: none; }
+      body[data-state="connected"] .status { color: var(--ok); }
+      body[data-state="error"] .status { color: var(--err); }
+      .error-detail { margin-top: 8px; color: var(--muted); word-break: break-word; }
+    </style>
+  </head>
+  <body data-state="connecting">
+    <main class="card">
+      <div class="brand">tamtri</div>
+      <div class="sub">desktop shell</div>
+
+      <div class="when-connecting">
+        <div class="spinner"></div>
+        <div class="status" style="text-align: center">Connecting to host…</div>
+      </div>
+
+      <div class="when-connected">
+        <div class="status">Connected to host</div>
+        <dl>
+          <dt>server</dt><dd id="server-id">—</dd>
+          <dt>version</dt><dd id="server-version">—</dd>
+          <dt>protocol</dt><dd id="protocol-version">—</dd>
+          <dt>features</dt><dd id="features">—</dd>
+          <dt>conversations</dt><dd id="conversation-count">—</dd>
+        </dl>
+      </div>
+
+      <div class="when-error">
+        <div class="status">Could not reach host</div>
+        <div class="error-detail" id="error-message">—</div>
+      </div>
+    </main>
+    <script type="module" src="./bootstrap.js"></script>
+  </body>
+</html>
