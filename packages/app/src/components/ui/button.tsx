@@ -34,12 +34,12 @@ export function Button({ label, variant = "default", compact, style, ...props }:
   return (
     <Pressable
       {...props}
-      style={({ pressed, hovered }) => [
+      style={({ pressed }) => [
         {
           borderRadius: theme.radius.lg,
           paddingHorizontal: compact ? theme.spacing[3] : theme.spacing[4],
           paddingVertical: compact ? theme.spacing[2] : theme.spacing[3],
-          opacity: pressed ? 0.85 : hovered ? 0.95 : 1,
+          opacity: pressed ? 0.85 : 1,
           alignItems: "center",
           justifyContent: "center",
         },

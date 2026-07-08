@@ -21,7 +21,7 @@ export function ConversationRow({ conversation, selected, onPress }: Conversatio
   return (
     <Pressable
       onPress={onPress}
-      style={({ pressed, hovered }) => ({
+      style={({ pressed }) => ({
         flexDirection: "row",
         alignItems: "center",
         gap: theme.spacing[3],
@@ -30,7 +30,7 @@ export function ConversationRow({ conversation, selected, onPress }: Conversatio
         borderRadius: theme.radius.lg,
         backgroundColor: selected
           ? theme.colors.surface2
-          : pressed || hovered
+          : pressed
             ? theme.colors.surfaceSidebarHover
             : "transparent",
       })}

@@ -14,6 +14,7 @@ import { method, type ConversationDto } from "@tamtri/protocol";
 
 import { TitlebarDragRegion } from "@/components/desktop/titlebar-drag-region";
 import { ConversationRow } from "@/components/sidebar/conversation-row";
+import { NewConversationSheet } from "@/components/sidebar/new-conversation-sheet";
 import { Button } from "@/components/ui/button";
 import { isCompact, SIDEBAR_WIDTH } from "@/constants/layout";
 import { useConversationList } from "@/hooks/use-conversations";
@@ -32,27 +33,25 @@ export function LeftSidebar({ onClose }: LeftSidebarProps) {
   const { client } = useDaemon();
   const { conversations, loading, refresh } = useConversationList();
   const [query, setQuery] = useState("");
-  const [creating, setCreating] = useState(false);
+  const [sheetOpen, setSheetOpen] = useState(false);
 
   const filtered = conversations.filter((row) =>
     row.title.toLowerCase().includes(query.trim().toLowerCase()),
   );
 
-  const createConversation = useCallback(async () => {
-    setCreating(true);
-    try {
+  const createConversation = useCallback(
+    async (harnessId: string, modelId: string, title: string) => {
       const created = await client.request<ConversationDto>(method.CONVERSATION_CREATE, {
-        title: "New conversation",
-        harness_id: "claude-native",
-        model_id: "default",
+        title,
+        harness_id: harnessId,
+        model_id: modelId,
       });
       await refresh();
       router.push(`/conversation/${created.id}`);
       onClose?.();
-    } finally {
-      setCreating(false);
-    }
-  }, [client, onClose, refresh, router]);
+    },
+    [client, onClose, refresh, router],
+  );
 
   return (
     <View
@@ -102,12 +101,14 @@ export function LeftSidebar({ onClose }: LeftSidebarProps) {
             style={{ flex: 1, color: theme.colors.foreground, paddingVertical: theme.spacing[3], fontSize: theme.fontSize.sm }}
           />
         </View>
-        <Button
-          label={creating ? "Creating…" : "New conversation"}
-          onPress={() => void createConversation()}
-          disabled={creating}
-        />
+        <Button label="New conversation" onPress={() => setSheetOpen(true)} />
       </View>
+
+      <NewConversationSheet
+        visible={sheetOpen}
+        onClose={() => setSheetOpen(false)}
+        onCreate={createConversation}
+      />
 
       <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingHorizontal: theme.spacing[2], paddingBottom: 24 }}>
         {loading ? (
@@ -137,26 +138,26 @@ export function LeftSidebar({ onClose }: LeftSidebarProps) {
             router.push("/sessions");
             onClose?.();
           }}
-          style={({ hovered, pressed }) => ({
+          style={({ pressed }) => ({
             flexDirection: "row",
             alignItems: "center",
             gap: theme.spacing[3],
             padding: theme.spacing[3],
             borderRadius: theme.radius.lg,
-            backgroundColor: pressed || hovered ? theme.colors.surfaceSidebarHover : "transparent",
+            backgroundColor: pressed ? theme.colors.surfaceSidebarHover : "transparent",
           })}
         >
           <Download color={theme.colors.foregroundMuted} size={16} />
           <Text style={{ color: theme.colors.foreground, fontSize: theme.fontSize.sm }}>Import sessions</Text>
         </Pressable>
         <Pressable
-          style={({ hovered, pressed }) => ({
+          style={({ pressed }) => ({
             flexDirection: "row",
             alignItems: "center",
             gap: theme.spacing[3],
             padding: theme.spacing[3],
             borderRadius: theme.radius.lg,
-            backgroundColor: pressed || hovered ? theme.colors.surfaceSidebarHover : "transparent",
+            backgroundColor: pressed ? theme.colors.surfaceSidebarHover : "transparent",
           })}
         >
           <Settings2 color={theme.colors.foregroundMuted} size={16} />
