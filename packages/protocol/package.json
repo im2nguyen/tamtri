@@ -11,7 +11,7 @@
     "./generated": "./src/generated.ts"
   },
   "scripts": {
-    "generate": "typeshare ../../core --lang typescript --output-file src/generated.ts",
+    "generate": "typeshare ../../core --lang typescript --config-file typeshare.toml --output-file src/generated.ts",
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {

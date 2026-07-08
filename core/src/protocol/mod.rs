@@ -15,12 +15,19 @@
 //!   was added in so the full cleanup list is one grep away.
 
 use serde::{Deserialize, Serialize};
+use typeshare::typeshare;
 
 pub mod params;
 
 /// Wire protocol version. Bump the minor on additive changes, the major only on
 /// a break (which the compatibility contract is designed to avoid).
 pub const PROTOCOL_VERSION: &str = "1.0";
+
+/// A 64-bit unsigned wire integer (byte sizes, timeouts). Transparent alias for
+/// `u64` so the Rust side stays exact. typeshare hard-rejects the bare `u64`
+/// token, so the wire structs use this alias and typeshare.toml maps it to the
+/// TypeScript `number` (our u64 values never approach 2^53).
+pub type WireU64 = u64;
 
 /// Method names for client-to-daemon requests and daemon-to-client
 /// notifications. Names are dotted and namespaced by domain. JSON-RPC correlates
@@ -102,6 +109,7 @@ pub mod method {
 
 /// Client kind, advertised in the [`Hello`] handshake. Mirrors paseo's
 /// `clientType` so the daemon can reason about who is connected.
+#[typeshare]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ClientType {
@@ -117,6 +125,7 @@ pub enum ClientType {
 
 /// First frame a client sends after connecting. The daemon replies with
 /// [`ServerInfo`].
+#[typeshare]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Hello {
     pub client_id: String,
@@ -133,6 +142,7 @@ pub struct Hello {
 ///
 /// COMPAT(features): every field added here is gated at the call site with a
 /// `// COMPAT(<feature>): added in v<x>` marker so the cleanup list is greppable.
+#[typeshare]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct Features {
     /// Daemon exposes the configurable orchestration engine (Workstream C).
@@ -152,6 +162,7 @@ pub struct Features {
 }
 
 /// Daemon identity + capabilities, returned in response to [`Hello`].
+#[typeshare]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ServerInfo {
     pub server_id: String,
@@ -164,6 +175,7 @@ pub struct ServerInfo {
 /// Params for a [`method::EVENT`] notification: the daemon-to-client push that
 /// replaces the in-process `ConversationObserver` callback. `payload_json`
 /// carries the reduced event content exactly as the shell already parses it.
+#[typeshare]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EventNotification {
     pub conversation_id: String,

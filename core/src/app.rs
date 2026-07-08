@@ -7,6 +7,7 @@ use std::time::{Duration, UNIX_EPOCH};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use typeshare::typeshare;
 use tokio::runtime::{Builder, Runtime};
 use url::Url;
 use uuid::Uuid;
@@ -61,6 +62,7 @@ pub trait ConversationObserver: Send + Sync {
     fn on_event(&self, event: UiEvent);
 }
 
+#[typeshare]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct UiEvent {
     pub conversation_id: String,
@@ -68,6 +70,7 @@ pub struct UiEvent {
     pub payload_json: String,
 }
 
+#[typeshare]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ConversationSummaryDto {
     pub id: String,
@@ -76,6 +79,7 @@ pub struct ConversationSummaryDto {
     pub active_harness_id: Option<String>,
 }
 
+#[typeshare]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ConversationDto {
     pub id: String,
@@ -103,6 +107,7 @@ pub struct VaultIssueDto {
     pub detail: String,
 }
 
+#[typeshare]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RootDto {
     pub id: String,
@@ -126,6 +131,7 @@ pub struct WorkdirFileContentDto {
     pub data: Vec<u8>,
 }
 
+#[typeshare]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GatewayEnvVarDto {
     pub name: String,
@@ -185,6 +191,7 @@ pub struct GatewaySettingsDto {
     pub default_call_timeout_secs: u64,
 }
 
+#[typeshare]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GatewayServerDto {
     pub id: String,
@@ -214,7 +221,7 @@ pub struct GatewayServerDto {
     pub cap_sampling: String,
     pub connection_status: String,
     pub last_error: String,
-    pub timeout_secs: Option<u64>,
+    pub timeout_secs: Option<crate::protocol::WireU64>,
 }
 
 #[derive(Debug, Clone)]
