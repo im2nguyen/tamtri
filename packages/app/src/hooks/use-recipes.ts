@@ -9,7 +9,7 @@ export function useRecipes() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const enabled = Boolean(serverInfo?.features.orchestration);
+  const enabled = Boolean(serverInfo?.features?.orchestration);
 
   const refresh = useCallback(async () => {
     if (!enabled) {

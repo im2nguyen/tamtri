@@ -1,10 +1,11 @@
 import { useEffect, useState } from "react";
 import { Text, View } from "react-native";
 
+import { ArtifactCard } from "@/components/transcript/artifact-card";
 import { normalizeBlock, type ContentBlock, type TranscriptMessage } from "@/lib/transcript";
 import { theme } from "@/styles/theme";
 
-function BlockView({ block }: { block: ContentBlock }) {
+function BlockView({ block, conversationId }: { block: ContentBlock; conversationId?: string }) {
   switch (block.type) {
     case "text":
       return (
@@ -41,7 +42,9 @@ function BlockView({ block }: { block: ContentBlock }) {
         </View>
       );
     case "artifact":
-      return (
+      return conversationId ? (
+        <ArtifactCard conversationId={conversationId} artifact={block} />
+      ) : (
         <View style={{ backgroundColor: theme.colors.surface2, borderRadius: theme.radius.lg, padding: theme.spacing[4], borderWidth: 1, borderColor: theme.colors.border }}>
           <Text style={{ color: theme.colors.foreground, fontWeight: "600" }}>{block.path.split("/").pop()}</Text>
           <Text style={{ color: theme.colors.foregroundMuted, fontSize: theme.fontSize.xs, marginTop: 4 }}>
@@ -61,7 +64,15 @@ function BlockView({ block }: { block: ContentBlock }) {
   }
 }
 
-function MessageBubble({ message, streaming }: { message: TranscriptMessage; streaming?: boolean }) {
+function MessageBubble({
+  message,
+  streaming,
+  conversationId,
+}: {
+  message: TranscriptMessage;
+  streaming?: boolean;
+  conversationId?: string;
+}) {
   const isUser = message.role === "user";
   const blocks = message.content.map((raw) =>
     typeof raw === "object" && raw && "type" in raw
@@ -86,7 +97,7 @@ function MessageBubble({ message, streaming }: { message: TranscriptMessage; str
         }}
       >
         {blocks.map((block, index) => (
-          <BlockView key={`${message.id}-${index}`} block={block} />
+          <BlockView key={`${message.id}-${index}`} block={block} conversationId={conversationId} />
         ))}
       </View>
     </View>
@@ -97,16 +108,18 @@ export function MessageList({
   messages,
   liveMessageId,
   showWorkingIndicator,
+  conversationId,
 }: {
   messages: TranscriptMessage[];
   liveMessageId?: string;
   showWorkingIndicator?: boolean;
+  conversationId?: string;
 }) {
   if (messages.length === 0 && !showWorkingIndicator) {
     return (
       <View style={{ flex: 1, alignItems: "center", justifyContent: "center", padding: theme.spacing[6] }}>
         <Text style={{ color: theme.colors.foregroundMuted, fontSize: theme.fontSize.base, textAlign: "center" }}>
-          Send a message to start. Attach files from your working folder in a later milestone.
+          Send a message to start. Drop a CSV or data file onto the composer to seed the workdir.
         </Text>
       </View>
     );
@@ -119,6 +132,7 @@ export function MessageList({
           key={message.id}
           message={message}
           streaming={message.id === liveMessageId}
+          conversationId={conversationId}
         />
       ))}
       {showWorkingIndicator ? <ThinkingIndicator /> : null}

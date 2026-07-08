@@ -390,6 +390,12 @@ export interface WorkdirCopyFile {
 	source_path: string;
 }
 
+export interface WorkdirWriteFile {
+	conversation_id: string;
+	filename: string;
+	data_base64: string;
+}
+
 export interface WorkdirFileContent {
 	mime_type?: string;
 	data_base64: string;

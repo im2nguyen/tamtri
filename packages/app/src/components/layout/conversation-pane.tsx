@@ -1,19 +1,23 @@
 import { useRouter } from "expo-router";
-import { GitBranch, PanelLeft, Workflow } from "lucide-react-native";
-import { useCallback, useState, type ReactNode } from "react";
+import { GitBranch, PanelLeft, Share2, Workflow } from "lucide-react-native";
+import { useCallback, useMemo, useState, type ReactNode } from "react";
 import { Pressable, ScrollView, Text, useWindowDimensions, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import type { ConversationDto } from "@tamtri/protocol";
+import { method, type ConversationDto } from "@tamtri/protocol";
 
 import { Composer } from "@/components/composer/composer";
 import { ElicitationCard } from "@/components/consent/elicitation-card";
 import { PermissionCard } from "@/components/consent/permission-card";
 import { TitlebarDragRegion } from "@/components/desktop/titlebar-drag-region";
+import { ErrorCard } from "@/components/errors/error-card";
 import { RunRecipeSheet } from "@/components/orchestration/run-recipe-sheet";
 import { ForkConversationSheet } from "@/components/sidebar/fork-conversation-sheet";
 import { MessageList } from "@/components/transcript/message-list";
 import { isCompact, MAX_CONTENT_WIDTH } from "@/constants/layout";
 import { useConversation } from "@/hooks/use-conversation";
+import { useWorkdir } from "@/hooks/use-workdir";
+import { classifyDaemonError } from "@/lib/errors";
+import { shellBridge } from "@/lib/shell";
 import { useDaemon } from "@/runtime/daemon-provider";
 import { useUiStore } from "@/stores/ui-store";
 import { theme } from "@/styles/theme";
@@ -59,10 +63,19 @@ export function ConversationPane({ conversationId }: ConversationPaneProps) {
   const { width } = useWindowDimensions();
   const compact = isCompact(width);
   const toggleSidebar = useUiStore((s) => s.toggleSidebar);
-  const { serverInfo } = useDaemon();
-  const orchestrationEnabled = Boolean(serverInfo?.features.orchestration);
+  const { client, serverInfo } = useDaemon();
+  const orchestrationEnabled = Boolean(serverInfo?.features?.orchestration);
   const [forkOpen, setForkOpen] = useState(false);
   const [recipeOpen, setRecipeOpen] = useState(false);
+  const [attaching, setAttaching] = useState(false);
+  const [exporting, setExporting] = useState(false);
+  const {
+    files,
+    attachBrowserFiles,
+    pickAndAttach,
+    canPickFile,
+  } = useWorkdir(conversationId);
+  const attachedNames = useMemo(() => files.map((file) => file.relative_path.split("/").pop() ?? file.relative_path), [files]);
   const {
     conversation,
     messages,
@@ -81,6 +94,7 @@ export function ConversationPane({ conversationId }: ConversationPaneProps) {
   } = useConversation(conversationId);
 
   const blockedByConsent = Boolean(pendingPermission || pendingElicitation);
+  const classifiedError = error ? classifyDaemonError(error) : null;
 
   const onSend = useCallback(
     async (text: string) => {
@@ -95,6 +109,57 @@ export function ConversationPane({ conversationId }: ConversationPaneProps) {
     },
     [router],
   );
+
+  const attachFiles = useCallback(
+    async (browserFiles: File[]) => {
+      setAttaching(true);
+      try {
+        await attachBrowserFiles(browserFiles);
+      } finally {
+        setAttaching(false);
+      }
+    },
+    [attachBrowserFiles],
+  );
+
+  const exportConversation = useCallback(async () => {
+    const shell = shellBridge();
+    if (!shell?.pickSaveFile) return;
+    const defaultName = `${conversation?.title?.replace(/[^\w.-]+/g, "-") || "conversation"}.tamtri`;
+    const destPath = await shell.pickSaveFile({
+      title: "Export conversation bundle",
+      defaultPath: defaultName,
+      filters: [{ name: "tamtri bundle", extensions: ["tamtri"] }],
+    });
+    if (!destPath) return;
+    setExporting(true);
+    try {
+      await client.request(method.CONVERSATION_EXPORT_BUNDLE, {
+        conversation_id: conversationId,
+        dest_path: destPath,
+      });
+    } finally {
+      setExporting(false);
+    }
+  }, [client, conversation?.title, conversationId]);
+
+  const handleErrorAction = useCallback(async () => {
+    if (!classifiedError) return;
+    if (classifiedError.kind === "conversation_busy") {
+      await client.request(method.RUN_CANCEL, { conversation_id: conversationId });
+      return;
+    }
+    if (classifiedError.kind === "harness_missing") {
+      router.push("/health");
+      return;
+    }
+    if (classifiedError.kind === "malformed_vault") {
+      const folder = await client.request<string>(method.CONVERSATION_FOLDER_PATH, {
+        conversation_id: conversationId,
+      });
+      await shellBridge()?.showItemInFolder?.(folder);
+    }
+  }, [classifiedError, client, conversationId, router]);
 
   if (loading && !conversation) {
     return (
@@ -147,6 +212,11 @@ export function ConversationPane({ conversationId }: ConversationPaneProps) {
                 onPress={() => setRecipeOpen(true)}
               />
             ) : null}
+            <HeaderAction
+              label={exporting ? "Saving…" : "Export"}
+              icon={<Share2 color={theme.colors.accentBright} size={14} />}
+              onPress={() => void exportConversation()}
+            />
           </View>
         ) : (
           <View style={{ flexDirection: "row", alignItems: "center", gap: theme.spacing[1] }}>
@@ -165,9 +235,19 @@ export function ConversationPane({ conversationId }: ConversationPaneProps) {
         </Pressable>
       </View>
 
-      {error ? (
-        <View style={{ padding: theme.spacing[3], backgroundColor: theme.colors.destructive }}>
-          <Text style={{ color: theme.colors.destructiveForeground }}>{error}</Text>
+      {classifiedError ? (
+        <View style={{ padding: theme.spacing[4], alignItems: "center" }}>
+          <View style={{ width: "100%", maxWidth: MAX_CONTENT_WIDTH }}>
+            <ErrorCard
+              error={classifiedError}
+              compact
+              onAction={
+                classifiedError.actionLabel
+                  ? () => void handleErrorAction()
+                  : undefined
+              }
+            />
+          </View>
         </View>
       ) : null}
 
@@ -184,6 +264,7 @@ export function ConversationPane({ conversationId }: ConversationPaneProps) {
             messages={messages}
             liveMessageId={liveMessage?.id}
             showWorkingIndicator={isRunning && !liveMessage}
+            conversationId={conversationId}
           />
         </View>
       </ScrollView>
@@ -229,6 +310,10 @@ export function ConversationPane({ conversationId }: ConversationPaneProps) {
       <Composer
         onSend={onSend}
         sending={sending}
+        attaching={attaching}
+        attachedFiles={attachedNames}
+        onPickFile={canPickFile ? () => void pickAndAttach() : undefined}
+        onDropFiles={attachFiles}
         disabled={blockedByConsent || isRunning}
         placeholder={
           pendingPermission

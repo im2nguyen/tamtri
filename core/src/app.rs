@@ -753,6 +753,16 @@ impl TamtriCore {
             .map_err(ffi_err)
     }
 
+    pub fn write_workdir_file(
+        &self,
+        conversation_id: String,
+        filename: String,
+        data: Vec<u8>,
+    ) -> FfiResult<String> {
+        self.write_workdir_file_inner(&conversation_id, &filename, &data)
+            .map_err(ffi_err)
+    }
+
     pub fn list_workdir_files(
         &self,
         conversation_id: String,
@@ -1908,6 +1918,23 @@ impl TamtriCore {
             .ok_or_else(|| CoreError::Protocol("source file has no filename".to_string()))?;
         let safe_name = safe_workdir_filename(filename);
         fs::copy(&source_path, workdir.join(&safe_name))?;
+        Ok(safe_name)
+    }
+
+    pub fn write_workdir_file_inner(
+        &self,
+        conversation_id: &str,
+        filename: &str,
+        data: &[u8],
+    ) -> Result<String> {
+        let id = parse_id(conversation_id)?;
+        let workdir = self
+            .vault
+            .conversation_workdir(id)?
+            .ok_or_else(|| CoreError::Protocol("conversation has no workdir".to_string()))?;
+        fs::create_dir_all(&workdir)?;
+        let safe_name = safe_workdir_filename(filename);
+        fs::write(workdir.join(&safe_name), data)?;
         Ok(safe_name)
     }
 

@@ -24,6 +24,11 @@ const bridge: TamtriBridge = {
     },
     close: () => ipcRenderer.send(IPC.transportClose),
   },
+  shell: {
+    pickOpenFile: (options) => ipcRenderer.invoke(IPC.shellPickOpenFile, options),
+    pickSaveFile: (options) => ipcRenderer.invoke(IPC.shellPickSaveFile, options),
+    showItemInFolder: (path) => ipcRenderer.invoke(IPC.shellShowItemInFolder, path),
+  },
 };
 
 contextBridge.exposeInMainWorld("tamtri", bridge);

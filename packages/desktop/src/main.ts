@@ -12,7 +12,7 @@
 import { join } from "node:path";
 
 import { webSocketTransport, type DaemonTransport } from "@tamtri/client";
-import { app, BrowserWindow, ipcMain, type IpcMainInvokeEvent } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, shell, type IpcMainInvokeEvent } from "electron";
 
 import { DaemonManager, type DaemonEndpoint } from "./daemon-manager.js";
 import { IPC } from "./bridge.js";
@@ -58,6 +58,30 @@ function registerIpc(): void {
   ipcMain.on(IPC.transportClose, () => {
     transport?.close();
     transport = undefined;
+  });
+  ipcMain.handle(IPC.shellPickOpenFile, async (_event, options?: { title?: string; filters?: { name: string; extensions: string[] }[] }) => {
+    const result = await dialog.showOpenDialog({
+      title: options?.title,
+      properties: ["openFile", "openDirectory"],
+      filters: options?.filters,
+    });
+    if (result.canceled || result.filePaths.length === 0) return null;
+    return result.filePaths[0] ?? null;
+  });
+  ipcMain.handle(
+    IPC.shellPickSaveFile,
+    async (_event, options?: { title?: string; defaultPath?: string; filters?: { name: string; extensions: string[] }[] }) => {
+      const result = await dialog.showSaveDialog({
+        title: options?.title,
+        defaultPath: options?.defaultPath,
+        filters: options?.filters,
+      });
+      if (result.canceled || !result.filePath) return null;
+      return result.filePath;
+    },
+  );
+  ipcMain.handle(IPC.shellShowItemInFolder, async (_event, filePath: string) => {
+    shell.showItemInFolder(filePath);
   });
 }
 

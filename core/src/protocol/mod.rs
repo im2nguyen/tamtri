@@ -69,6 +69,7 @@ pub mod method {
 
     // Workdir / attachments / artifacts
     pub const WORKDIR_COPY_FILE: &str = "workdir.copy_file";
+    pub const WORKDIR_WRITE_FILE: &str = "workdir.write_file";
     pub const WORKDIR_LIST_FILES: &str = "workdir.list_files";
     pub const WORKDIR_PATH: &str = "workdir.path";
     pub const WORKDIR_READ_FILE: &str = "workdir.read_file";
@@ -280,6 +281,7 @@ mod tests {
             method::ROOTS_REMOVE,
             method::ROOTS_SYNC_RUNTIME,
             method::WORKDIR_COPY_FILE,
+            method::WORKDIR_WRITE_FILE,
             method::WORKDIR_LIST_FILES,
             method::WORKDIR_PATH,
             method::WORKDIR_READ_FILE,

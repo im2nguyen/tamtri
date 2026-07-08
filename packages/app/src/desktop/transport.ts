@@ -26,6 +26,18 @@ declare global {
         onMessage(handler: (data: string) => void): () => void;
         onClose(handler: () => void): () => void;
       };
+      shell?: {
+        pickOpenFile?: (options?: {
+          title?: string;
+          filters?: { name: string; extensions: string[] }[];
+        }) => Promise<string | null>;
+        pickSaveFile?: (options?: {
+          title?: string;
+          defaultPath?: string;
+          filters?: { name: string; extensions: string[] }[];
+        }) => Promise<string | null>;
+        showItemInFolder?: (path: string) => Promise<void>;
+      };
     };
   }
 }

@@ -1,6 +1,6 @@
 import { useRouter, usePathname } from "expo-router";
-import { Download, MessageSquarePlus, PanelLeft, Search, Settings2 } from "lucide-react-native";
-import { useCallback, useState } from "react";
+import { Download, MessageSquarePlus, PanelLeft, Search, Settings2, Upload } from "lucide-react-native";
+import { useCallback, useEffect, useState } from "react";
 import {
   ActivityIndicator,
   Pressable,
@@ -15,9 +15,12 @@ import { method, type ConversationDto } from "@tamtri/protocol";
 import { TitlebarDragRegion } from "@/components/desktop/titlebar-drag-region";
 import { ConversationRow } from "@/components/sidebar/conversation-row";
 import { NewConversationSheet } from "@/components/sidebar/new-conversation-sheet";
+import { SearchResultRow } from "@/components/sidebar/search-result-row";
 import { Button } from "@/components/ui/button";
 import { isCompact, SIDEBAR_WIDTH } from "@/constants/layout";
 import { useConversationList } from "@/hooks/use-conversations";
+import { useSearch } from "@/hooks/use-search";
+import { useVaultIssues } from "@/hooks/use-vault-issues";
 import { useDaemon } from "@/runtime/daemon-provider";
 import { theme } from "@/styles/theme";
 
@@ -32,9 +35,19 @@ export function LeftSidebar({ onClose }: LeftSidebarProps) {
   const compact = isCompact(width);
   const { client } = useDaemon();
   const { conversations, loading, refresh } = useConversationList();
+  const { hits, loading: searchLoading, scopeMessage, search } = useSearch();
+  const { issues } = useVaultIssues();
   const [query, setQuery] = useState("");
   const [sheetOpen, setSheetOpen] = useState(false);
 
+  useEffect(() => {
+    const handle = setTimeout(() => {
+      void search(query);
+    }, 250);
+    return () => clearTimeout(handle);
+  }, [query, search]);
+
+  const isSearching = query.trim().length > 0;
   const filtered = conversations.filter((row) =>
     row.title.toLowerCase().includes(query.trim().toLowerCase()),
   );
@@ -68,6 +81,20 @@ export function LeftSidebar({ onClose }: LeftSidebarProps) {
       <View style={{ paddingHorizontal: theme.spacing[4], paddingBottom: theme.spacing[3] }}>
         <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
           <Text style={{ color: theme.colors.foreground, fontSize: theme.fontSize.lg, fontWeight: "700" }}>tamtri</Text>
+          {issues.length > 0 ? (
+            <View
+              style={{
+                paddingHorizontal: 8,
+                paddingVertical: 2,
+                borderRadius: theme.radius.full,
+                backgroundColor: theme.colors.destructive,
+              }}
+            >
+              <Text style={{ color: theme.colors.destructiveForeground, fontSize: 10, fontWeight: "700" }}>
+                {issues.length} vault issue{issues.length === 1 ? "" : "s"}
+              </Text>
+            </View>
+          ) : null}
           {compact ? (
             <Pressable onPress={onClose} hitSlop={8}>
               <PanelLeft color={theme.colors.foregroundMuted} size={18} />
@@ -111,11 +138,29 @@ export function LeftSidebar({ onClose }: LeftSidebarProps) {
       />
 
       <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingHorizontal: theme.spacing[2], paddingBottom: 24 }}>
-        {loading ? (
+        {loading || (isSearching && searchLoading) ? (
           <ActivityIndicator color={theme.colors.accentBright} style={{ marginTop: 24 }} />
+        ) : isSearching ? (
+          hits.length === 0 ? (
+            <Text style={{ color: theme.colors.foregroundMuted, textAlign: "center", marginTop: 24, fontSize: theme.fontSize.sm }}>
+              No matches. {scopeMessage}
+            </Text>
+          ) : (
+            hits.map((hit) => (
+              <SearchResultRow
+                key={`${hit.conversation_id}-${hit.match_field}`}
+                hit={hit}
+                selected={pathname === `/conversation/${hit.conversation_id}`}
+                onPress={() => {
+                  router.push(`/conversation/${hit.conversation_id}`);
+                  onClose?.();
+                }}
+              />
+            ))
+          )
         ) : filtered.length === 0 ? (
           <Text style={{ color: theme.colors.foregroundMuted, textAlign: "center", marginTop: 24, fontSize: theme.fontSize.sm }}>
-            {query ? "No matches" : "No conversations yet"}
+            No conversations yet
           </Text>
         ) : (
           filtered.map((conversation) => (
@@ -133,6 +178,23 @@ export function LeftSidebar({ onClose }: LeftSidebarProps) {
       </ScrollView>
 
       <View style={{ borderTopWidth: 1, borderTopColor: theme.colors.border, padding: theme.spacing[3], gap: theme.spacing[2] }}>
+        <Pressable
+          onPress={() => {
+            router.push("/import");
+            onClose?.();
+          }}
+          style={({ pressed }) => ({
+            flexDirection: "row",
+            alignItems: "center",
+            gap: theme.spacing[3],
+            padding: theme.spacing[3],
+            borderRadius: theme.radius.lg,
+            backgroundColor: pressed ? theme.colors.surfaceSidebarHover : "transparent",
+          })}
+        >
+          <Upload color={theme.colors.foregroundMuted} size={16} />
+          <Text style={{ color: theme.colors.foreground, fontSize: theme.fontSize.sm }}>Import bundle</Text>
+        </Pressable>
         <Pressable
           onPress={() => {
             router.push("/sessions");

@@ -12,6 +12,7 @@ use serde::de::DeserializeOwned;
 use serde_json::Value;
 
 use crate::app::{TamtriCore, TamtriError};
+use crate::CoreError;
 use crate::protocol::{method, params};
 use crate::rpc::jsonrpc::{JsonRpcError, METHOD_NOT_FOUND};
 
@@ -180,6 +181,23 @@ pub async fn dispatch(
             let p: params::WorkdirCopyFile = parse(params)?;
             let c = Arc::clone(&core);
             run(move || c.copy_file_to_workdir(p.conversation_id, p.source_path)).await
+        }
+        method::WORKDIR_WRITE_FILE => {
+            let p: params::WorkdirWriteFile = parse(params)?;
+            let c = Arc::clone(&core);
+            match tokio::task::spawn_blocking(move || {
+                use base64::Engine;
+                let bytes = base64::engine::general_purpose::STANDARD
+                    .decode(p.data_base64.as_bytes())
+                    .map_err(|err| CoreError::Protocol(format!("invalid base64: {err}")))?;
+                c.write_workdir_file_inner(&p.conversation_id, &p.filename, &bytes)
+            })
+            .await
+            {
+                Ok(Ok(name)) => to_value(name),
+                Ok(Err(err)) => Err(rpc_err(CORE_ERROR, err.to_string())),
+                Err(join) => Err(rpc_err(INTERNAL_ERROR, format!("task join error: {join}"))),
+            }
         }
         method::WORKDIR_LIST_FILES => {
             let p: params::WorkdirListFiles = parse(params)?;

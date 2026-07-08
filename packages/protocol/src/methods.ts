@@ -41,6 +41,7 @@ export const method = {
 
   // Workdir / attachments / artifacts
   WORKDIR_COPY_FILE: "workdir.copy_file",
+  WORKDIR_WRITE_FILE: "workdir.write_file",
   WORKDIR_LIST_FILES: "workdir.list_files",
   WORKDIR_PATH: "workdir.path",
   WORKDIR_READ_FILE: "workdir.read_file",

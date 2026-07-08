@@ -20,8 +20,22 @@ export interface TamtriTransportBridge {
   close(): void;
 }
 
+export interface TamtriShellBridge {
+  pickOpenFile?: (options?: {
+    title?: string;
+    filters?: { name: string; extensions: string[] }[];
+  }) => Promise<string | null>;
+  pickSaveFile?: (options?: {
+    title?: string;
+    defaultPath?: string;
+    filters?: { name: string; extensions: string[] }[];
+  }) => Promise<string | null>;
+  showItemInFolder?: (path: string) => Promise<void>;
+}
+
 export interface TamtriBridge {
   transport: TamtriTransportBridge;
+  shell?: TamtriShellBridge;
 }
 
 declare global {
@@ -36,4 +50,7 @@ export const IPC = {
   transportClose: "tamtri:transport:close",
   transportMessage: "tamtri:transport:message",
   transportClosed: "tamtri:transport:closed",
+  shellPickOpenFile: "tamtri:shell:pick-open-file",
+  shellPickSaveFile: "tamtri:shell:pick-save-file",
+  shellShowItemInFolder: "tamtri:shell:show-item-in-folder",
 } as const;

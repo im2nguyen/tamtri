@@ -142,6 +142,14 @@ pub struct WorkdirCopyFile {
 
 #[typeshare]
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkdirWriteFile {
+    pub conversation_id: String,
+    pub filename: String,
+    pub data_base64: String,
+}
+
+#[typeshare]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkdirListFiles {
     pub conversation_id: String,
 }

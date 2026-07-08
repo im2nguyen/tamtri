@@ -16,6 +16,7 @@ import { TitlebarDragRegion } from "@/components/desktop/titlebar-drag-region";
 import { Button } from "@/components/ui/button";
 import { MAX_CONTENT_WIDTH } from "@/constants/layout";
 import { useHarnessHealth, type HarnessHealthEntry } from "@/hooks/use-harness-health";
+import { useVaultIssues } from "@/hooks/use-vault-issues";
 import { theme } from "@/styles/theme";
 
 function statusColor(status: string): string {
@@ -86,6 +87,7 @@ function HealthRow({ entry }: { entry: HarnessHealthEntry }) {
 export default function HealthScreen() {
   const router = useRouter();
   const { entries, checklist, loading, error, refresh } = useHarnessHealth();
+  const { issues } = useVaultIssues();
 
   const copyChecklist = useCallback(async () => {
     if (!checklist) return;
@@ -114,6 +116,26 @@ export default function HealthScreen() {
               you need help.
             </Text>
           </View>
+
+          {issues.length > 0 ? (
+            <View
+              style={{
+                padding: theme.spacing[4],
+                backgroundColor: theme.colors.surface1,
+                borderRadius: theme.radius.lg,
+                borderWidth: 1,
+                borderColor: theme.colors.destructive,
+                gap: theme.spacing[2],
+              }}
+            >
+              <Text style={{ color: theme.colors.destructive, fontWeight: "700" }}>Vault issues</Text>
+              {issues.map((issue, index) => (
+                <Text key={`${issue.kind}-${index}`} style={{ color: theme.colors.foregroundMuted, fontSize: theme.fontSize.sm }}>
+                  {issue.kind}: {issue.detail}
+                </Text>
+              ))}
+            </View>
+          ) : null}
 
           {error ? <Text style={{ color: theme.colors.destructive }}>{error}</Text> : null}
 

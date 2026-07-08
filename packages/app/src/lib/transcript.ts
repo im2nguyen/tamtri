@@ -11,7 +11,15 @@ export type ContentBlock =
   | { type: "thinking"; text: string }
   | { type: "tool_call"; id: string; name: string; input: unknown }
   | { type: "tool_result"; call_id: string; output: unknown }
-  | { type: "artifact"; path: string; mime_type: string; size: number }
+  | {
+      type: "artifact";
+      path: string;
+      mime_type: string;
+      size: number;
+      sha256?: string;
+      inline?: string;
+      integrity_failed?: boolean;
+    }
   | { type: "elicitation_request"; request_id: string; message: string; mode: string }
   | { type: "unknown"; raw: unknown };
 
@@ -50,6 +58,9 @@ export function normalizeBlock(raw: Record<string, unknown>): ContentBlock {
         path: String(raw.path ?? ""),
         mime_type: String(raw.mime_type ?? ""),
         size: Number(raw.size ?? 0),
+        sha256: raw.sha256 ? String(raw.sha256) : undefined,
+        inline: raw.inline ? String(raw.inline) : undefined,
+        integrity_failed: raw.integrity_failed === true,
       };
     case "elicitation_request":
       return {
