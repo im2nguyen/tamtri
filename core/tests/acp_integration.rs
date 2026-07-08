@@ -20,6 +20,7 @@ fn adapter() -> AcpAdapter {
         command: env!("CARGO_BIN_EXE_mock-acp-agent").into(),
         args: Vec::new(),
         env: Vec::new(),
+        adapter: Default::default(),
     })
 }
 
@@ -35,6 +36,7 @@ fn real_adapter_from_env() -> Option<AcpAdapter> {
         command,
         args,
         env: Vec::new(),
+        adapter: Default::default(),
     }))
 }
 

@@ -1,5 +1,9 @@
 pub mod acp;
+pub mod claude;
+pub mod codex;
 pub mod health;
+pub mod registry;
+pub mod sessions;
 
 use std::path::PathBuf;
 
@@ -28,6 +32,10 @@ pub struct HarnessCapabilities {
     pub tools: bool,
     pub permissions: bool,
     pub thinking: bool,
+    /// When true, the adapter accepts a runtime tool catalog directly instead of
+    /// relying solely on tamtri's MCP gateway surface.
+    #[serde(default)]
+    pub native_tools: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

@@ -45,7 +45,6 @@ impl ConversationObserver for BroadcastObserver {
 pub struct Daemon {
     core: Arc<TamtriCore>,
     events_tx: broadcast::Sender<EventNotification>,
-    server_id: String,
 }
 
 impl Daemon {
@@ -62,7 +61,6 @@ impl Daemon {
         Ok(Self {
             core: Arc::new(core),
             events_tx,
-            server_id: uuid::Uuid::now_v7().simple().to_string(),
         })
     }
 
@@ -81,10 +79,15 @@ impl Daemon {
     /// protocol is available and no optional capability is advertised yet.
     pub fn server_info(&self) -> ServerInfo {
         ServerInfo {
-            server_id: self.server_id.clone(),
+            server_id: self.core.server_id().to_string(),
             version: env!("CARGO_PKG_VERSION").to_string(),
             protocol_version: PROTOCOL_VERSION.to_string(),
-            features: Features::default(),
+            features: Features {
+                relay: true,
+                native_tools: true,
+                session_import: true,
+                ..Features::default()
+            },
         }
     }
 

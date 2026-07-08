@@ -6,14 +6,14 @@ Project name: **tamtri**. Core crate: `tamtri-core`. License: **AGPL** (with a c
 
 ## What this is
 
-An open-source, native macOS desktop app that is a model-agnostic UI shell for pluggable agent harnesses, with first-class rendering of modern MCP features (Apps, Elicitation, Tasks, Roots; Sampling deferred) and of artifacts a harness produces. Think "open Claude Desktop / open Codex": the harness and model are swappable, and the client owns the conversation.
+An open-source, cross-surface agent UI shell for pluggable harnesses, with first-class rendering of modern MCP features (Apps, Elicitation, Tasks, Roots; Sampling deferred) and of artifacts a harness produces. Think "open Claude Desktop / open Codex": the harness and model are swappable, and the client owns the conversation.
 
 Who it's for: **technical-adjacent knowledge workers**, not consumers and not terminal-native engineers. The marketer, analyst, ops, or PM who has agent tools available (Codex, Claude Cowork, Claude Code) and wants to turn a dataset into a report, but is far more comfortable in a UI than a terminal.
 
 Hero use case: **report from data, not code.** "Turn this CSV into a report" and have tamtri render the report inline, instead of a terminal printing "I created report.html." tamtri is general-first; coding is just one thing the harnesses happen to do well.
 
 Two protocols, two planes (see "Harness transport" and "MCP gateway" below):
-- **ACP** connects tamtri to harnesses. One adapter (`AcpAdapter`) covers every ACP agent.
+- **Harness adapters** connect the daemon to agents. Heterogeneous registry: direct Claude/Codex native adapters for flagship fidelity; **ACP** is the long-tail fallback.
 - **MCP** is owned by tamtri as a gateway. tamtri proxies the agent's tool calls and renders the rich primitives itself.
 
 ## Golden rules (do not violate)
@@ -21,55 +21,49 @@ Two protocols, two planes (see "Harness transport" and "MCP gateway" below):
 1. **The client is a dumb shell.** It renders and stores. It does not implement an agent loop, model inference, or prompting strategy. All of that lives in a harness.
 2. **The conversation is the portable unit, and the client owns it.** Harnesses read a conversation's context and start a run. They never own the conversation. Harness and model are fixed for a thread; to change either you fork (see "fork to change either" below). This is what makes the experimentation surface work without betting on native cross-harness resume.
 3. **The harness adapter interface is the future plugin contract.** Design every adapter as if a third party will implement it. No adapter may leak its process/parsing quirks past its own boundary; the core only ever sees normalized `HarnessEvent`s.
-4. **Layer boundaries are sacred.** Shell (SwiftUI + WebKit renderer islands) -> Core (Rust) -> Harness adapters. Nothing in the shell talks to a harness process directly. Nothing in the core imports SwiftUI, WebKit, or renderer code.
+4. **Layer boundaries are sacred.** Surfaces (Electron + Expo/React-Native-Web) -> wire protocol -> Daemon (Rust core) -> Harness adapters. Nothing in a surface talks to a harness process directly. Nothing in the core imports Electron, React Native, or renderer UI code.
 5. **Security is not optional.** Model-generated HTML runs sandboxed. This covers both MCP Apps and harness-produced artifacts (e.g. a `report.html` written by the harness). Harness-written artifacts render with **no network access at all** (a report must be self-contained; no CDN fetches, even for the hero demo). MCP Apps may reach only their pre-declared origins. UI-initiated actions go through the same consent/audit path as direct tool calls. Never route secrets through elicitation form mode; use URL mode to a trusted domain.
 6. **Storage is a legible vault, not an app database.** Conversations live as user-visible files in a folder the user owns, openable in Finder, syncable via their own iCloud/Dropbox/Git. Never make storage opaque. This legibility is a core trust promise, not an implementation detail.
 7. **tamtri owns the capability plane.** It is the MCP gateway for rich primitives (Apps, elicitation, tasks). The agent connects to tamtri as its one MCP server; tamtri proxies downstream. Never depend on the harness to carry or render these primitives.
 
 ## Architecture
 
-Single repo (monorepo). Rust core exposed to a native Swift shell via UniFFI. The Swift shell owns the Mac app, lifecycle, vault access, keychain, bookmarks, permissions, and app chrome. Rich AI rendering may live in React/TypeScript inside sandboxed `WKWebView` islands owned by the Swift shell. Precedent for the core/shell split: Ghostty (libghostty core + native Swift/GTK shells in one repo).
+Monorepo. Rust **tamtri-daemon** owns the vault, MCP gateway, harness processes, durable credentials, and wire protocol. Every surface is a thin client over WebSocket (localhost) or E2E relay (remote).
 
 ```
-Shell (SwiftUI + WebKit, macOS 14+)   ← platform-specific, replaceable
-  app lifecycle, windows, sidebar, composer, settings, keychain/bookmarks,
-  sandboxed webview host, optional React transcript/artifact/App renderer
-Core (Rust, portable)        ← platform-agnostic, reused by future shells
-  conversation model + vault, ACP client, MCP gateway, harness manager
-Harness Adapters (Rust)      ← behind the HarnessAdapter seam
-  AcpAdapter (first + only V1 impl; covers every ACP agent at once)
+Surfaces (thin clients)              ← Electron desktop, web, mobile (Expo RN Web)
+  @tamtri/client over WS or relay
+Daemon (tamtri-daemon, Rust)         ← single writer, credential owner
+  TamtriCore: vault, gateway, dispatch
+Harness Adapters (Rust)              ← behind HarnessAdapter trait
+  ClaudeNative, CodexNative, AcpAdapter (fallback)
+/packages                            ← TS: protocol, client, relay, app, desktop
 ```
 
-The web renderer is a renderer, not an app brain. It receives sanitized view state and emits user intents (approve, deny, expand, open, submit) back to Swift/core. It never owns the vault, gateway, credentials, permission decisions, or harness process lifecycle.
+See `docs/daemon-protocol.md`, `docs/relay-threat-model.md`, `docs/provider-adapters.md`.
 
-Keep the core free of platform assumptions so Linux (GTK) and Windows (WinUI) shells can reuse it later without a rewrite. If UniFFI iteration speed becomes a V1 blocker, an all-Swift core is an acceptable fallback, but the three layer boundaries above stay identical either way.
+Surfaces are dumb: they render and emit intents. The daemon owns storage, gateway secrets, permission audit, and harness lifecycle.
 
 ## Tech stack
 
-- Core: Rust. Bindings: UniFFI (Rust -> Swift).
-- Shell: Swift, SwiftUI, WebKit. Target macOS 14+.
-- Rich renderer islands: React/TypeScript inside sandboxed `WKWebView` where the web ecosystem materially speeds up transcript cards, markdown, diffs, tables, code blocks, artifacts, and MCP Apps.
-- MCP App and artifact rendering: sandboxed `WKWebView`.
-- Local persistence: a legible vault (folder per conversation) with `meta.json` + append-only `messages.jsonl` + `attachments/`. Any SQLite index is a rebuildable cache, never a source of truth.
+- Core + daemon: Rust (`tamtri-core`, `tamtri-daemon`). Wire protocol in `core/src/protocol`; types shared via typeshare.
+- Surfaces: TypeScript. Electron desktop shell (`packages/desktop`); shared UI via Expo + React Native Web (`packages/app`, later).
+- Client SDK: `@tamtri/client` (WebSocket + relay E2EE transport).
+- Local persistence: legible vault under `~/.tamtri/vault`. Daemon runtime: `~/.tamtri/` (token, port, sealed credentials, relay keypair).
 - No cloud, no accounts, no telemetry in V1.
 
 ## Repo layout
 
 ```
-/core            (Rust)
-  /mcp           MCP: downstream client + gateway (server to agent, client to downstream); tools, elicitation, apps, tasks, roots
-  /harness       HarnessAdapter trait + AcpAdapter (ACP client)
-  /conversation  model + jsonl/meta (de)serialization + fork logic
-  /vault         legible file-per-conversation storage (meta.json + messages.jsonl + attachments)
-  /ffi           UniFFI bindings surface
-/macos           (SwiftUI + WebKit)
-  /App           window, sidebar, composer, settings, app lifecycle
-  /Render        native render wrappers, webview hosts, accessibility fallbacks
-  /Harness       fork-into-harness / model picker UI
-  /Bridge        generated bindings to /core
-/renderer        (optional React/TypeScript web renderer)
-  transcript, cards, markdown/diff/table/code rendering, artifact/App frames
-/docs            architecture + adapter authoring guide (seeds V2 plugin docs)
+/core            Rust: TamtriCore, protocol, vault, MCP gateway, harness adapters
+/daemon          Rust: tamtri-daemon binary (axum WebSocket server)
+/packages
+  /protocol      typeshare-generated wire types + JSON-RPC helpers
+  /client        DaemonClient SDK
+  /relay         E2EE relay crypto (tweetnacl)
+  /app           Expo RN Web UI (desktop/web/mobile — in progress)
+  /desktop       Electron shell (spawns daemon, IPC bridge)
+/docs            architecture + protocol + adapter docs
 ```
 
 ## Core abstractions
@@ -278,20 +272,21 @@ Full outline with per-milestone scope in `/docs/milestone-3-9-outline.md`. Miles
 Keep this section current as tooling lands:
 
 ```
-# core
-cargo build            # build core
-cargo test             # run core tests
+# core + daemon
+cargo build
+cargo test
 cargo clippy --all-targets -- -D warnings
+cargo run -p tamtri-daemon
 
-# bindings
-cargo build -p tamtri-core
-uniffi-bindgen generate target/debug/libtamtri_core.dylib --language swift --out-dir macos/Sources/Tamtri/Generated
-
-# macos
-cd macos && swift build
+# TypeScript surfaces
+npm install
+npm run protocol:generate
+npm run typecheck --workspaces --if-present
+npm run build --workspace @tamtri/desktop
+npm test --workspace @tamtri/client
 ```
 
-Install the binding generator with `cargo install uniffi --version 0.32.0 --features cli`. Always run `cargo test`, `cargo clippy --all-targets -- -D warnings`, and `cd macos && swift build` before considering M3+ shell work done.
+Always run `cargo test`, `cargo clippy --all-targets -- -D warnings`, and `npm run typecheck --workspaces` before considering surface work done.
 
 ## Code style
 

@@ -62,6 +62,18 @@ export interface AttachmentVerifiedPath {
 	sha256: string;
 }
 
+export interface RelayEndpoint {
+	endpoint: string;
+	use_tls: boolean;
+}
+
+export interface ConnectionOffer {
+	v: number;
+	server_id: string;
+	daemon_public_key_b64: string;
+	relay: RelayEndpoint;
+}
+
 export interface ConversationCreate {
 	title: string;
 	harness_id: string;
@@ -251,6 +263,13 @@ export interface Hello {
 	client_type: ClientType;
 	protocol_version: string;
 	app_version?: string;
+}
+
+export interface NativeSessionSummary {
+	provider: string;
+	path: string;
+	title: string;
+	updated_at: number;
 }
 
 export interface PermissionRespond {

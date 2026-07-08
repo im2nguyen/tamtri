@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, UNIX_EPOCH};
 
@@ -29,7 +29,8 @@ use crate::conversation::{
     attach_root, remove_root, validate_root, ContentBlock, Conversation, ElicitationAction, Id,
     McpServerRef, Message, Role, Root, RootKind, RootScope, WorkingDir,
 };
-use crate::harness::acp::{AcpAdapter, AgentLaunchSpec};
+use crate::harness::acp::AgentLaunchSpec;
+use crate::harness::registry::build_adapter;
 use crate::harness::{
     ContextSeed, ConversationContext, HarnessAdapter, HarnessEvent, RunControl, TurnEndReason,
     TurnInput,
@@ -50,7 +51,8 @@ use crate::mcp::app_bridge::{
 use crate::mcp::app::{app_bridge_bootstrap_script, app_sandbox_csp, AppTemplate};
 use crate::mcp::endpoint::{GatewayEndpoint, start_loopback_gateway};
 use crate::mcp::capabilities::{FeatureStatus, ServerCapabilityReport};
-use crate::mcp::gateway::{GatewayEvent, McpGateway, MemoryCredentials};
+use crate::credentials::DurableCredentials;
+use crate::mcp::gateway::{GatewayEvent, McpGateway};
 use crate::vault::events::{Event, EventKind};
 use crate::vault::fs::FilesystemVault;
 use crate::vault::{ConversationSummary, ConversationVault, VaultIssue};
@@ -295,7 +297,7 @@ pub struct TamtriCore {
     runtime: Runtime,
     adapters: Arc<Mutex<HashMap<String, Arc<dyn HarnessAdapter>>>>,
     active_runs: Arc<Mutex<HashMap<Id, ActiveRun>>>,
-    credentials: Arc<MemoryCredentials>,
+    credentials: Arc<DurableCredentials>,
     observer: Arc<dyn ConversationObserver>,
     conversation_cache: Arc<Mutex<HashMap<Id, CachedConversationDto>>>,
     pending_oauth: Arc<Mutex<HashMap<String, PendingOAuthFlow>>>,
@@ -304,6 +306,8 @@ pub struct TamtriCore {
     app_bridge: SharedAppBridgeCoordinator,
     /// Shell-resolved root URIs (security-scoped bookmarks) keyed by conversation id.
     runtime_roots: Arc<Mutex<HashMap<Id, Vec<Root>>>>,
+    tamtri_home: PathBuf,
+    server_id: String,
 }
 
 const CONVERSATION_CACHE_LIMIT: usize = 32;
@@ -322,14 +326,17 @@ impl TamtriCore {
         let config = load_app_config(&vault_path)?;
         let mut adapters: HashMap<String, Arc<dyn HarnessAdapter>> = HashMap::new();
         for spec in &config.agent_roster {
-            adapters.insert(spec.id.clone(), Arc::new(AcpAdapter::new(spec.clone())));
+            adapters.insert(spec.id.clone(), build_adapter(spec));
         }
+        let tamtri_home = tamtri_home_for_vault(&vault_path);
+        let credentials = Arc::new(DurableCredentials::open(&tamtri_home)?);
+        let server_id = crate::relay::load_or_create_server_id(&tamtri_home)?;
         Ok(Self {
             vault,
             runtime,
             adapters: Arc::new(Mutex::new(adapters)),
             active_runs: Arc::new(Mutex::new(HashMap::new())),
-            credentials: Arc::new(MemoryCredentials::default()),
+            credentials,
             observer,
             conversation_cache: Arc::new(Mutex::new(HashMap::new())),
             pending_oauth: Arc::new(Mutex::new(HashMap::new())),
@@ -337,7 +344,26 @@ impl TamtriCore {
             gateway_status_cache: Arc::new(Mutex::new(HashMap::new())),
             app_bridge: shared_app_bridge_coordinator(),
             runtime_roots: Arc::new(Mutex::new(HashMap::new())),
+            tamtri_home,
+            server_id,
         })
+    }
+
+    pub fn list_native_sessions(&self) -> FfiResult<Vec<crate::harness::sessions::NativeSessionSummary>> {
+        Ok(crate::harness::sessions::list_native_sessions())
+    }
+
+    pub fn relay_pairing_offer(&self) -> FfiResult<crate::relay::ConnectionOffer> {
+        self.relay_pairing_offer_inner().map_err(ffi_err)
+    }
+
+    pub fn server_id(&self) -> &str {
+        &self.server_id
+    }
+
+    fn relay_pairing_offer_inner(&self) -> Result<crate::relay::ConnectionOffer> {
+        let keypair = crate::relay::load_or_create_keypair(&self.tamtri_home)?;
+        Ok(crate::relay::build_pairing_offer(&self.server_id, &keypair))
     }
 
     fn record_gateway_server_status(&self, server_id: &str, connection_status: &str, last_error: &str) {
@@ -430,7 +456,7 @@ impl TamtriCore {
     }
 
     fn register_acp_agent_spec(&self, spec: AgentLaunchSpec) -> Result<()> {
-        let adapter = Arc::new(AcpAdapter::new(spec.clone()));
+        let adapter = build_adapter(&spec);
         self.adapters
             .lock()
             .map_err(|_| CoreError::Protocol("adapter registry lock poisoned".to_string()))?
@@ -453,6 +479,7 @@ impl TamtriCore {
             command,
             args,
             env: Vec::new(),
+            adapter: Default::default(),
         })
         .map_err(ffi_err)
     }
@@ -474,6 +501,7 @@ impl TamtriCore {
                 .into_iter()
                 .map(|pair| (pair.name, pair.value))
                 .collect(),
+            adapter: Default::default(),
         })
         .map_err(ffi_err)
     }
@@ -2458,7 +2486,7 @@ fn capability_label(
 
 fn gateway_server_to_dto(
     server: &GatewayServerConfig,
-    credentials: &MemoryCredentials,
+    credentials: &DurableCredentials,
     capability_report: Option<&ServerCapabilityReport>,
     status: &GatewayServerStatus,
 ) -> Result<GatewayServerDto> {
@@ -2978,6 +3006,22 @@ fn root_scope_label(scope: &RootScope) -> &'static str {
     match scope {
         RootScope::Conversation => "conversation",
         RootScope::User => "user",
+    }
+}
+
+/// Resolve the tamtri home directory for runtime files (credentials, relay keys).
+/// Production vaults live at `~/.tamtri/vault`; tests often use a temp dir as the vault root.
+fn tamtri_home_for_vault(vault_path: &Path) -> PathBuf {
+    if vault_path
+        .file_name()
+        .is_some_and(|name| name.eq_ignore_ascii_case("vault"))
+    {
+        vault_path
+            .parent()
+            .map(PathBuf::from)
+            .unwrap_or_else(|| vault_path.to_path_buf())
+    } else {
+        vault_path.to_path_buf()
     }
 }
 

@@ -748,7 +748,7 @@ fn gateway_credential_reload_smoke_after_set_and_fresh_core() {
     let servers = core.refresh_gateway_capabilities().expect("refresh");
     assert!(servers[0].missing_credential_refs.is_empty());
 
-    // Fresh core simulates relaunch before keychain preload (reloadGatewayServers).
+    // Fresh core reloads durable credentials from the sealed store (daemon owns secrets).
     let observer2 = Arc::new(RecordingObserver::default());
     let reloaded = TamtriCore::new(
         temp.path().to_string_lossy().into_owned(),
@@ -756,7 +756,13 @@ fn gateway_credential_reload_smoke_after_set_and_fresh_core() {
     )
     .expect("reloaded core");
     let servers = reloaded.list_gateway_servers().expect("servers");
-    assert_eq!(servers[0].missing_credential_refs, vec!["keychain://mock"]);
+    assert!(servers[0].missing_credential_refs.is_empty());
+    assert_eq!(
+        reloaded
+            .export_gateway_credential("keychain://mock".to_string())
+            .expect("export after reload"),
+        Some("first-value".to_string())
+    );
 
     reloaded
         .set_gateway_credential("keychain://mock".to_string(), "reloaded-value".to_string())

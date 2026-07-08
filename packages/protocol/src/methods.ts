@@ -77,6 +77,12 @@ export const method = {
   VAULT_ISSUES: "vault.issues",
   VAULT_PATH: "vault.path",
   DIAGNOSTICS_WRITE_BUNDLE: "diagnostics.write_bundle",
+
+  // Relay (remote access)
+  RELAY_PAIRING_OFFER: "relay.pairing_offer",
+
+  // Native session import
+  SESSIONS_LIST_NATIVE: "sessions.list_native",
 } as const;
 
 export type MethodName = (typeof method)[keyof typeof method];

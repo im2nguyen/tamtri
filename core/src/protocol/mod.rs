@@ -105,6 +105,12 @@ pub mod method {
     pub const VAULT_ISSUES: &str = "vault.issues";
     pub const VAULT_PATH: &str = "vault.path";
     pub const DIAGNOSTICS_WRITE_BUNDLE: &str = "diagnostics.write_bundle";
+
+    // Relay (remote access)
+    pub const RELAY_PAIRING_OFFER: &str = "relay.pairing_offer";
+
+    // Native session import (Workstream B)
+    pub const SESSIONS_LIST_NATIVE: &str = "sessions.list_native";
 }
 
 /// Client kind, advertised in the [`Hello`] handshake. Mirrors paseo's
@@ -296,6 +302,8 @@ mod tests {
             method::VAULT_ISSUES,
             method::VAULT_PATH,
             method::DIAGNOSTICS_WRITE_BUNDLE,
+            method::RELAY_PAIRING_OFFER,
+            method::SESSIONS_LIST_NATIVE,
         ];
         let mut seen = std::collections::HashSet::new();
         for name in names {

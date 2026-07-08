@@ -387,6 +387,7 @@ mod tests {
                 command: "/tmp/mock".into(),
                 args: Vec::new(),
                 env: Vec::new(),
+                adapter: Default::default(),
             }],
             gateway: GatewayConfig::default(),
         };

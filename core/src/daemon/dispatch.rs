@@ -360,6 +360,14 @@ pub async fn dispatch(
             let c = Arc::clone(&core);
             run(move || c.write_diagnostics_bundle(p.dest_path, p.system_info_json)).await
         }
+        method::RELAY_PAIRING_OFFER => {
+            let c = Arc::clone(&core);
+            run(move || c.relay_pairing_offer()).await
+        }
+        method::SESSIONS_LIST_NATIVE => {
+            let c = Arc::clone(&core);
+            run(move || c.list_native_sessions()).await
+        }
 
         other => Err(rpc_err(METHOD_NOT_FOUND, format!("method not found: {other}"))),
     }

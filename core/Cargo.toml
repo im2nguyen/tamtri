@@ -43,6 +43,9 @@ path = "../fixtures/m7-app-mcp/src/main.rs"
 [dependencies]
 async-trait = "0.1"
 base64 = "0.22"
+crypto_box = { version = "0.9", features = ["serde", "rand_core"] }
+rand = "0.8"
+chacha20poly1305 = "0.10"
 chrono = { version = "0.4", features = ["serde"] }
 futures-util = "0.3"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
@@ -55,6 +58,7 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "io
 tracing = "0.1"
 url = "2"
 uuid = { version = "1", features = ["v7", "serde"] }
+dirs = "6"
 zip = { version = "2", default-features = false, features = ["deflate"] }
 tempfile = "3"
 

@@ -20,6 +20,15 @@ use crate::{CoreError, Result};
 
 const ACP_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum AdapterKind {
+    #[default]
+    Acp,
+    ClaudeNative,
+    CodexNative,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentLaunchSpec {
     pub id: String,
@@ -29,6 +38,8 @@ pub struct AgentLaunchSpec {
     pub args: Vec<String>,
     #[serde(default)]
     pub env: Vec<(String, String)>,
+    #[serde(default)]
+    pub adapter: AdapterKind,
 }
 
 pub struct AcpAdapter {
@@ -72,6 +83,7 @@ impl HarnessAdapter for AcpAdapter {
             tools: true,
             permissions: true,
             thinking: true,
+            native_tools: false,
         }
     }
 

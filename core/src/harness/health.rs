@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use crate::harness::acp::AgentLaunchSpec;
+use crate::harness::acp::{AdapterKind, AgentLaunchSpec};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HarnessHealthStatus {
@@ -77,6 +77,7 @@ pub fn discover_known_agents() -> Vec<AgentLaunchSpec> {
             command,
             args: vec!["acp".into()],
             env: Vec::new(),
+            adapter: AdapterKind::default(),
         });
     }
     if which_command("claude").is_some() {
@@ -86,6 +87,7 @@ pub fn discover_known_agents() -> Vec<AgentLaunchSpec> {
             command: "claude".into(),
             args: vec!["acp".into()],
             env: Vec::new(),
+            adapter: AdapterKind::default(),
         });
     }
     if which_command("goose").is_some() {
@@ -95,6 +97,7 @@ pub fn discover_known_agents() -> Vec<AgentLaunchSpec> {
             command: "goose".into(),
             args: Vec::new(),
             env: Vec::new(),
+            adapter: AdapterKind::default(),
         });
     }
     found
@@ -174,6 +177,7 @@ mod tests {
                 command: ready_path.to_string_lossy().into_owned(),
                 args: Vec::new(),
                 env: Vec::new(),
+                adapter: AdapterKind::default(),
             }),
             HarnessHealthStatus::Ready
         );
@@ -184,6 +188,7 @@ mod tests {
                 command: temp.path().join("nope").to_string_lossy().into_owned(),
                 args: Vec::new(),
                 env: Vec::new(),
+                adapter: AdapterKind::default(),
             }),
             HarnessHealthStatus::Missing
         );

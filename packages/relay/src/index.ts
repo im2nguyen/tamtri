@@ -7,6 +7,12 @@
  */
 
 export type { EncryptedChannel, KeyPair } from "./e2ee.js";
+export {
+  createClientChannel,
+  decryptFromBase64,
+  encryptToBase64,
+  generateKeyPair,
+} from "./e2ee.js";
 
 /** Pairing offer encoded into a QR code / deep-link URL fragment. */
 export interface ConnectionOffer {
