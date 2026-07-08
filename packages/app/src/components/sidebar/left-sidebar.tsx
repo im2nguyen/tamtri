@@ -151,6 +151,10 @@ export function LeftSidebar({ onClose }: LeftSidebarProps) {
           <Text style={{ color: theme.colors.foreground, fontSize: theme.fontSize.sm }}>Import sessions</Text>
         </Pressable>
         <Pressable
+          onPress={() => {
+            router.push("/health");
+            onClose?.();
+          }}
           style={({ pressed }) => ({
             flexDirection: "row",
             alignItems: "center",
@@ -161,7 +165,7 @@ export function LeftSidebar({ onClose }: LeftSidebarProps) {
           })}
         >
           <Settings2 color={theme.colors.foregroundMuted} size={16} />
-          <Text style={{ color: theme.colors.foregroundMuted, fontSize: theme.fontSize.sm }}>Settings (soon)</Text>
+          <Text style={{ color: theme.colors.foreground, fontSize: theme.fontSize.sm }}>Harness health</Text>
         </Pressable>
         <View style={{ flexDirection: "row", alignItems: "center", gap: theme.spacing[2], paddingHorizontal: theme.spacing[2] }}>
           <MessageSquarePlus color={theme.colors.accentBright} size={14} />

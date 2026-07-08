@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { method, type ConversationDto } from "@tamtri/protocol";
 
 import { parsePermissionRequested, type PendingPermission } from "@/lib/permissions";
+import { parseElicitationRequested, type PendingElicitation } from "@/lib/elicitation";
 import {
   applyHarnessPayload,
   createLiveTurn,
@@ -20,6 +21,8 @@ export function useConversation(conversationId: string | undefined) {
   const [isRunning, setIsRunning] = useState(false);
   const [pendingPermission, setPendingPermission] = useState<PendingPermission | null>(null);
   const [respondingPermission, setRespondingPermission] = useState(false);
+  const [pendingElicitation, setPendingElicitation] = useState<PendingElicitation | null>(null);
+  const [respondingElicitation, setRespondingElicitation] = useState(false);
   const [loading, setLoading] = useState(Boolean(conversationId));
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -54,6 +57,7 @@ export function useConversation(conversationId: string | undefined) {
           setIsRunning(true);
           setLiveTurn(createLiveTurn());
           setPendingPermission(null);
+          setPendingElicitation(null);
           break;
 
         case "text_delta":
@@ -76,6 +80,17 @@ export function useConversation(conversationId: string | undefined) {
         case "permission_resolved":
           setPendingPermission(null);
           setRespondingPermission(false);
+          break;
+
+        case "elicitation_requested": {
+          const parsed = parseElicitationRequested(event.payload_json);
+          if (parsed) setPendingElicitation(parsed);
+          break;
+        }
+
+        case "elicitation_resolved":
+          setPendingElicitation(null);
+          setRespondingElicitation(false);
           break;
 
         case "message_committed": {
@@ -152,6 +167,26 @@ export function useConversation(conversationId: string | undefined) {
     [client, conversationId, pendingPermission],
   );
 
+  const respondElicitation = useCallback(
+    async (action: "accept" | "decline" | "cancel", dataJson?: string) => {
+      if (!conversationId || !pendingElicitation) return;
+      setRespondingElicitation(true);
+      setError(null);
+      try {
+        await client.request(method.ELICITATION_RESPOND, {
+          conversation_id: conversationId,
+          request_id: pendingElicitation.requestId,
+          action,
+          data_json: dataJson,
+        });
+      } catch (err) {
+        setRespondingElicitation(false);
+        setError(err instanceof Error ? err.message : String(err));
+      }
+    },
+    [client, conversationId, pendingElicitation],
+  );
+
   return {
     conversation,
     messages: displayMessages,
@@ -161,9 +196,12 @@ export function useConversation(conversationId: string | undefined) {
     isRunning,
     pendingPermission,
     respondingPermission,
+    pendingElicitation,
+    respondingElicitation,
     error,
     refresh,
     sendMessage,
     respondPermission,
+    respondElicitation,
   };
 }
