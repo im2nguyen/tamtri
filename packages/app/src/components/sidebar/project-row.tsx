@@ -60,59 +60,66 @@ export function ProjectRow({
 
   return (
     <View>
-      <Pressable
-        accessibilityRole="button"
-        accessibilityLabel={`${node.name} project`}
-        accessibilityState={{ expanded, selected }}
-        onHoverIn={() => setHovered(true)}
-        onHoverOut={() => setHovered(false)}
-        onPress={onToggle}
-        style={({ pressed }) => [
-          styles.row,
-          selected ? styles.active : null,
-          pressed ? styles.pressed : null,
-        ]}
+      <View
+        style={[styles.row, selected ? styles.active : null]}
+        onPointerEnter={() => setHovered(true)}
+        onPointerLeave={() => setHovered(false)}
       >
-        <View style={{ transform: [{ rotate: expanded ? "90deg" : "0deg" }] }}>
-          <ChevronRight color={theme.colors.foregroundMuted} size={13} strokeWidth={1.8} />
-        </View>
-        <Folder color={theme.colors.foregroundMuted} size={14} strokeWidth={1.7} />
-        {renaming ? (
-          <TextInput
-            autoFocus
-            value={name}
-            onChangeText={setName}
-            onBlur={() => void submitRename()}
-            onSubmitEditing={() => void submitRename()}
-            selectTextOnFocus
-            style={{
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={`${node.name} project`}
+          accessibilityState={{ expanded, selected }}
+          onPress={onToggle}
+          style={({ pressed }) => [
+            {
               flex: 1,
+              flexDirection: "row",
+              alignItems: "center",
+              gap: theme.spacing[2],
               minWidth: 0,
-              paddingVertical: 0,
-              color: theme.colors.foreground,
-              fontSize: theme.fontSize.xs,
-            }}
-          />
-        ) : (
-          <Text numberOfLines={1} style={[styles.label, { flex: 1 }]}>
-            {node.name}
-          </Text>
-        )}
-        {!showActions ? (
-          <Text style={{ color: theme.colors.foregroundMuted, fontSize: 10 }}>
-            {node.conversations.length || ""}
-          </Text>
-        ) : (
+            },
+            pressed ? styles.pressed : null,
+          ]}
+        >
+          <View style={{ transform: [{ rotate: expanded ? "90deg" : "0deg" }] }}>
+            <ChevronRight color={theme.colors.foregroundMuted} size={13} strokeWidth={1.8} />
+          </View>
+          <Folder color={theme.colors.foregroundMuted} size={14} strokeWidth={1.7} />
+          {renaming ? (
+            <TextInput
+              autoFocus
+              value={name}
+              onChangeText={setName}
+              onBlur={() => void submitRename()}
+              onSubmitEditing={() => void submitRename()}
+              selectTextOnFocus
+              style={{
+                flex: 1,
+                minWidth: 0,
+                paddingVertical: 0,
+                color: theme.colors.foreground,
+                fontSize: theme.fontSize.xs,
+              }}
+            />
+          ) : (
+            <Text numberOfLines={1} style={[styles.label, { flex: 1 }]}>
+              {node.name}
+            </Text>
+          )}
+          {!showActions ? (
+            <Text style={{ color: theme.colors.foregroundMuted, fontSize: theme.fontSize.xs }}>
+              {node.conversations.length || ""}
+            </Text>
+          ) : null}
+        </Pressable>
+        {showActions ? (
           <View style={{ flexDirection: "row", alignItems: "center" }}>
             {canAttachRoot && onAttachRoot ? (
               <CompactIconButton
                 icon={FolderPlus}
                 label={`Add shared root to ${node.name}`}
                 size={13}
-                onPress={(event) => {
-                  event.stopPropagation();
-                  void onAttachRoot();
-                }}
+                onPress={() => void onAttachRoot()}
               />
             ) : null}
             {onRename ? (
@@ -120,10 +127,7 @@ export function ProjectRow({
                 icon={Pencil}
                 label={`Rename ${node.name}`}
                 size={12}
-                onPress={(event) => {
-                  event.stopPropagation();
-                  setRenaming(true);
-                }}
+                onPress={() => setRenaming(true)}
               />
             ) : null}
             {onDelete ? (
@@ -131,10 +135,7 @@ export function ProjectRow({
                 icon={Trash2}
                 label={`Delete ${node.name}`}
                 size={12}
-                onPress={(event) => {
-                  event.stopPropagation();
-                  void onDelete();
-                }}
+                onPress={() => void onDelete()}
               />
             ) : null}
             {onNewThread ? (
@@ -142,15 +143,12 @@ export function ProjectRow({
                 icon={Plus}
                 label={`New thread in ${node.name}`}
                 size={14}
-                onPress={(event) => {
-                  event.stopPropagation();
-                  onNewThread();
-                }}
+                onPress={() => onNewThread()}
               />
             ) : null}
           </View>
-        )}
-      </Pressable>
+        ) : null}
+      </View>
       {expanded ? <View style={{ gap: 2, paddingTop: 2 }}>{children}</View> : null}
     </View>
   );

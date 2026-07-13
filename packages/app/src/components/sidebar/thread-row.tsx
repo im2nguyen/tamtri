@@ -30,13 +30,8 @@ export function ThreadRow({ conversation, selected, onPress, onMove }: ThreadRow
   const [hovered, setHovered] = useState(false);
   const showMove = Boolean(onMove) && (hovered || Platform.OS !== "web");
   return (
-    <Pressable
-      accessibilityRole="button"
-      accessibilityState={{ selected }}
-      onHoverIn={() => setHovered(true)}
-      onHoverOut={() => setHovered(false)}
-      onPress={onPress}
-      style={({ pressed }) => [
+    <View
+      style={[
         styles.row,
         {
           minHeight: theme.density.rowHeight,
@@ -44,31 +39,45 @@ export function ThreadRow({ conversation, selected, onPress, onMove }: ThreadRow
           paddingRight: theme.spacing[2],
         },
         selected ? styles.active : null,
-        pressed ? styles.pressed : null,
       ]}
+      onPointerEnter={() => setHovered(true)}
+      onPointerLeave={() => setHovered(false)}
     >
-      <MessageSquare
-        color={selected ? theme.colors.foreground : theme.colors.foregroundMuted}
-        size={13}
-        strokeWidth={1.7}
-      />
-      <Text numberOfLines={1} style={[styles.label, { flex: 1 }]}>
-        {conversation.title || "Untitled"}
-      </Text>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityState={{ selected }}
+        onPress={onPress}
+        style={({ pressed }) => [
+          {
+            flex: 1,
+            flexDirection: "row",
+            alignItems: "center",
+            gap: theme.spacing[2],
+            minWidth: 0,
+          },
+          pressed ? styles.pressed : null,
+        ]}
+      >
+        <MessageSquare
+          color={selected ? theme.colors.foreground : theme.colors.foregroundMuted}
+          size={13}
+          strokeWidth={1.7}
+        />
+        <Text numberOfLines={1} style={[styles.label, { flex: 1 }]}>
+          {conversation.title || "Untitled"}
+        </Text>
+      </Pressable>
       {showMove ? (
         <CompactIconButton
           icon={ArrowRightLeft}
           label={`Move ${conversation.title || "thread"}`}
           size={12}
-          onPress={(event) => {
-            event.stopPropagation();
-            onMove?.();
-          }}
+          onPress={() => onMove?.()}
         />
       ) : null}
-      <Text style={{ color: theme.colors.foregroundMuted, fontSize: 10 }}>
+      <Text style={{ color: theme.colors.foregroundMuted, fontSize: theme.fontSize.xs }}>
         {relativeTime(conversation.updated_at)}
       </Text>
-    </Pressable>
+    </View>
   );
 }
