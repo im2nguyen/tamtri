@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useCallback } from "react";
+import { useCallback, useMemo } from "react";
 import { method, type ConversationDto, type ProjectDto, type RootDto } from "@tamtri/protocol";
 
 import { invalidateConversationList } from "@/hooks/conversation-list-invalidation";
@@ -10,7 +10,10 @@ export function useProjects() {
   const { client, serverInfo } = useDaemon();
   const queryClient = useQueryClient();
   const projectsSupported = Boolean(serverInfo.features?.projects);
-  const queryKey = ["projects", serverInfo.server_id] as const;
+  const queryKey = useMemo(
+    () => ["projects", serverInfo.server_id] as const,
+    [serverInfo.server_id],
+  );
   const query = useQuery({
     queryKey,
     queryFn: () => client.request<ProjectDto[]>(method.PROJECT_LIST),
