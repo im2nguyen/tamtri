@@ -1,67 +1,83 @@
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, UNIX_EPOCH};
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use tokio::runtime::{Builder, Runtime};
 use tokio::sync::oneshot;
 use typeshare::typeshare;
-use tokio::runtime::{Builder, Runtime};
 use url::Url;
 use uuid::Uuid;
 
 use crate::artifact::{
-    detect_mime, list_renderable_workdir_paths, new_renderable_workdir_paths,
-    verify_inline_artifact, verify_attachment, ArtifactSnapshot, ArtifactSnapshotter,
+    ArtifactSnapshot, ArtifactSnapshotter, detect_mime, list_renderable_workdir_paths,
+    new_renderable_workdir_paths, verify_attachment, verify_inline_artifact,
 };
 use crate::config::{
+    GatewayScope, GatewayServerConfig, GatewayTransport, OAuthConfig, add_agent_to_roster,
     load_app_config, replace_gateway_servers, save_app_config, seed_agent_roster_if_empty,
-    GatewayScope, GatewayServerConfig,
-    GatewayTransport, OAuthConfig,
+    set_agent_enabled,
 };
-use crate::harness::health::{health_entries_from_roster, it_admin_checklist, HarnessHealthStatus};
-use crate::search::{search_conversations, SearchMatchField, SEARCH_SCOPE_MESSAGE};
-use crate::vault::bundle::{export_conversation_bundle, import_bundle_or_folder_as_new};
 use crate::conversation::reduce::TurnReducer;
 use crate::conversation::{
-    attach_root, remove_root, validate_root, ContentBlock, Conversation, ElicitationAction, Id,
-    McpServerRef, Message, Role, Root, RootKind, RootScope, WorkingDir,
+    ContentBlock, Conversation, ConversationKind, ElicitationAction, Id, McpServerRef, Message,
+    Role, Root, RootKind, RootOrigin, RootScope, WorkingDir, attach_root, remove_root,
+    validate_root,
 };
+use crate::credentials::DurableCredentials;
+use crate::debug_log::debug_log;
+use crate::diagnostics;
 use crate::harness::acp::AgentLaunchSpec;
+use crate::harness::health::{
+    HarnessHealthStatus, adapter_kind_label, adapter_type_label, health_entries_from_roster,
+    it_admin_checklist,
+};
+use crate::harness::readiness::{
+    ReadinessState, RecommendableAgent, diagnose_agent, recommend_agent,
+};
 use crate::harness::registry::build_adapter;
+use crate::harness::usage::{HarnessUsageEntry, list_harness_usage};
 use crate::harness::{
     ContextSeed, ConversationContext, HarnessAdapter, HarnessEvent, RunControl, TurnEndReason,
     TurnInput,
 };
+use crate::mcp::app::{AppTemplate, app_bridge_bootstrap_script, app_sandbox_csp};
+use crate::mcp::app_bridge::{
+    AppBridgeBeginResult, AppBridgeResolution, SharedAppBridgeCoordinator, execute_action,
+    finish_execution, parse_app_bridge_rpc, shared_app_bridge_coordinator,
+};
+use crate::mcp::capabilities::{FeatureStatus, ServerCapabilityReport};
 use crate::mcp::elicitation::{
     audit_safe_elicitation_url, elicitation_request_block, elicitation_response_block,
 };
+use crate::mcp::endpoint::{GatewayEndpoint, start_loopback_gateway};
+use crate::mcp::gateway::{GatewayEvent, McpGateway};
 use crate::mcp::oauth::{
     PkceChallenge, build_authorization_url, exchange_authorization_code, generate_pkce,
     oauth_connection_status, oauth_status_label, parse_stored_oauth, serialize_stored_oauth,
     stored_oauth_from_token_response, validate_callback_url,
 };
+use crate::mcp::protocol::CallToolResult;
 use crate::mcp::url_handoff::validate_handoff_url;
-use crate::mcp::app_bridge::{
-    execute_action, finish_execution, parse_app_bridge_rpc, shared_app_bridge_coordinator,
-    AppBridgeBeginResult, AppBridgeResolution, SharedAppBridgeCoordinator,
+use crate::orchestration::events::{orchestration_finished, orchestration_started};
+use crate::orchestration::mcp_tools::{
+    TOOL_ORCHESTRATION_CANCEL, TOOL_ORCHESTRATION_HANDOFF, TOOL_ORCHESTRATION_RUN,
+    TOOL_ORCHESTRATION_STATUS, native_original_name, tool_result_error, tool_result_structured,
 };
-use crate::mcp::app::{app_bridge_bootstrap_script, app_sandbox_csp, AppTemplate};
-use crate::mcp::endpoint::{GatewayEndpoint, start_loopback_gateway};
-use crate::mcp::capabilities::{FeatureStatus, ServerCapabilityReport};
-use crate::credentials::DurableCredentials;
-use crate::mcp::gateway::{GatewayEvent, McpGateway};
 use crate::orchestration::{
     self, OrchestrationRunDto, OrchestrationRunMeta, OrchestrationRunStatus, RecipeSummary,
 };
+use crate::project::{Project, ProjectStore, effective_roots, unfiled_project_id};
+use crate::search::{SEARCH_SCOPE_MESSAGE, SearchMatchField, search_conversations};
+use crate::vault::bundle::{export_conversation_bundle_with_roots, import_bundle_or_folder_as_new};
 use crate::vault::events::{Event, EventKind};
-use crate::vault::fs::FilesystemVault;
+use crate::vault::fs::{FilesystemVault, copy_attachments_dir};
 use crate::vault::{ConversationSummary, ConversationVault, VaultIssue};
-use crate::debug_log::debug_log;
-use crate::diagnostics;
 use crate::{CoreError, Result};
 
 pub trait ConversationObserver: Send + Sync {
@@ -82,7 +98,10 @@ pub struct ConversationSummaryDto {
     pub id: String,
     pub title: String,
     pub updated_at: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_id: Option<String>,
     pub active_harness_id: Option<String>,
+    pub kind: String,
 }
 
 #[typeshare]
@@ -90,9 +109,12 @@ pub struct ConversationSummaryDto {
 pub struct ConversationDto {
     pub id: String,
     pub title: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_id: Option<String>,
     pub active_harness_id: Option<String>,
     pub model_id: Option<String>,
     pub forked_from: Option<String>,
+    pub kind: String,
     pub transcript_json: String,
 }
 
@@ -127,6 +149,18 @@ pub struct RootDto {
     pub uri: String,
     pub kind: String,
     pub scope: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin: Option<String>,
+}
+
+#[typeshare]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProjectDto {
+    pub id: String,
+    pub name: String,
+    pub created_at: String,
+    pub updated_at: String,
+    pub roots: Vec<RootDto>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -159,6 +193,82 @@ pub struct HarnessHealthEntryDto {
     pub install_doc_url: String,
 }
 
+#[typeshare]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct HarnessProviderEntryDto {
+    pub id: String,
+    pub display_name: String,
+    pub command: String,
+    pub status: String,
+    pub readiness_state: String,
+    pub recovery_action: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub readiness_message: Option<String>,
+    pub install_doc_url: String,
+    pub adapter_type: String,
+    pub adapter_kind: String,
+    pub enabled: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_count: Option<u32>,
+}
+
+#[typeshare]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HarnessReadinessRecommendDto {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_id: Option<String>,
+    pub display_name: String,
+    pub readiness_state: String,
+    pub recovery_action: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+    pub install_doc_url: String,
+}
+
+#[typeshare]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct HarnessUsageWindowDto {
+    pub id: String,
+    pub label: String,
+    pub utilization_pct: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resets_at: Option<String>,
+    pub tone: String,
+}
+
+#[typeshare]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct HarnessUsageBalanceDto {
+    pub id: String,
+    pub label: String,
+    pub remaining: f64,
+    pub unit: String,
+    pub tone: String,
+}
+
+#[typeshare]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct HarnessUsageEntryDto {
+    pub provider_id: String,
+    pub display_name: String,
+    pub status: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan_label: Option<String>,
+    #[serde(default)]
+    pub windows: Vec<HarnessUsageWindowDto>,
+    #[serde(default)]
+    pub balances: Vec<HarnessUsageBalanceDto>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    pub fetched_at: String,
+}
+
+#[typeshare]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct HarnessUsageListDto {
+    pub providers: Vec<HarnessUsageEntryDto>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SearchHitDto {
     pub conversation_id: String,
@@ -183,6 +293,7 @@ pub struct ImportResultDto {
 pub struct AgentRosterEntryDto {
     pub id: String,
     pub display_name: String,
+    pub runtime_model_switch: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -304,8 +415,20 @@ struct ActiveRun {
 
 type TurnWaiters = Arc<Mutex<HashMap<Id, Vec<oneshot::Sender<TurnEndReason>>>>>;
 
+struct OrchestrationRunHandle {
+    cancelled: Arc<AtomicBool>,
+}
+
+type OrchestrationRunRegistry = Arc<Mutex<HashMap<String, OrchestrationRunHandle>>>;
+type PendingOrchestrationConsents = Arc<Mutex<HashMap<String, oneshot::Sender<bool>>>>;
+
+static SHARED_CORE: OnceLock<Arc<TamtriCore>> = OnceLock::new();
+
+const ORCHESTRATION_CONSENT_TIMEOUT_SECS: u64 = 600;
+
 pub struct TamtriCore {
     vault: Arc<FilesystemVault>,
+    projects: Arc<ProjectStore>,
     runtime: Runtime,
     adapters: Arc<Mutex<HashMap<String, Arc<dyn HarnessAdapter>>>>,
     active_runs: Arc<Mutex<HashMap<Id, ActiveRun>>>,
@@ -319,6 +442,8 @@ pub struct TamtriCore {
     /// Shell-resolved root URIs (security-scoped bookmarks) keyed by conversation id.
     runtime_roots: Arc<Mutex<HashMap<Id, Vec<Root>>>>,
     turn_waiters: TurnWaiters,
+    active_orchestration_runs: OrchestrationRunRegistry,
+    pending_orchestration_consents: PendingOrchestrationConsents,
     tamtri_home: PathBuf,
     server_id: String,
 }
@@ -334,8 +459,9 @@ impl TamtriCore {
 impl TamtriCore {
     pub fn new_inner(vault_path: PathBuf, observer: Arc<dyn ConversationObserver>) -> Result<Self> {
         let runtime = Builder::new_multi_thread().enable_all().build()?;
-        let vault = Arc::new(FilesystemVault::new(vault_path.clone())?);
         seed_agent_roster_if_empty(&vault_path)?;
+        let vault = Arc::new(FilesystemVault::new(vault_path.clone())?);
+        let projects = Arc::new(ProjectStore::new(&vault_path)?);
         let config = load_app_config(&vault_path)?;
         let mut adapters: HashMap<String, Arc<dyn HarnessAdapter>> = HashMap::new();
         for spec in &config.agent_roster {
@@ -346,6 +472,7 @@ impl TamtriCore {
         let server_id = crate::relay::load_or_create_server_id(&tamtri_home)?;
         Ok(Self {
             vault,
+            projects,
             runtime,
             adapters: Arc::new(Mutex::new(adapters)),
             active_runs: Arc::new(Mutex::new(HashMap::new())),
@@ -358,12 +485,16 @@ impl TamtriCore {
             app_bridge: shared_app_bridge_coordinator(),
             runtime_roots: Arc::new(Mutex::new(HashMap::new())),
             turn_waiters: Arc::new(Mutex::new(HashMap::new())),
+            active_orchestration_runs: Arc::new(Mutex::new(HashMap::new())),
+            pending_orchestration_consents: Arc::new(Mutex::new(HashMap::new())),
             tamtri_home,
             server_id,
         })
     }
 
-    pub fn list_native_sessions(&self) -> FfiResult<Vec<crate::harness::sessions::NativeSessionSummary>> {
+    pub fn list_native_sessions(
+        &self,
+    ) -> FfiResult<Vec<crate::harness::sessions::NativeSessionSummary>> {
         Ok(crate::harness::sessions::list_native_sessions())
     }
 
@@ -392,12 +523,8 @@ impl TamtriCore {
         source_conversation_id: String,
         inputs_json: Option<String>,
     ) -> FfiResult<OrchestrationRunDto> {
-        self.orchestration_run_inner(
-            &recipe_id,
-            &source_conversation_id,
-            inputs_json.as_deref(),
-        )
-        .map_err(ffi_err)
+        self.orchestration_run_inner(&recipe_id, &source_conversation_id, inputs_json.as_deref())
+            .map_err(ffi_err)
     }
 
     pub fn orchestration_status(&self, run_id: String) -> FfiResult<OrchestrationRunDto> {
@@ -436,7 +563,12 @@ impl TamtriCore {
         Ok(crate::relay::build_pairing_offer(&self.server_id, &keypair))
     }
 
-    fn record_gateway_server_status(&self, server_id: &str, connection_status: &str, last_error: &str) {
+    fn record_gateway_server_status(
+        &self,
+        server_id: &str,
+        connection_status: &str,
+        last_error: &str,
+    ) {
         if let Ok(mut cache) = self.gateway_status_cache.lock() {
             cache.insert(
                 server_id.to_string(),
@@ -470,14 +602,23 @@ impl TamtriCore {
     }
 
     fn list_acp_agents_inner(&self) -> Result<Vec<AgentRosterEntryDto>> {
+        let config = load_app_config(self.vault.root())?;
+        let enabled_ids: HashSet<&str> = config
+            .agent_roster
+            .iter()
+            .filter(|spec| spec.enabled)
+            .map(|spec| spec.id.as_str())
+            .collect();
         let mut agents = self
             .adapters
             .lock()
             .map_err(|_| CoreError::Protocol("adapter registry lock poisoned".to_string()))?
             .iter()
+            .filter(|(id, _)| enabled_ids.contains(id.as_str()))
             .map(|(id, adapter)| AgentRosterEntryDto {
                 id: id.clone(),
                 display_name: adapter.display_name().to_string(),
+                runtime_model_switch: adapter.capabilities().runtime_model_switch,
             })
             .collect::<Vec<_>>();
         agents.sort_by(|left, right| left.display_name.cmp(&right.display_name));
@@ -550,6 +691,7 @@ impl TamtriCore {
             args,
             env: Vec::new(),
             adapter: Default::default(),
+            enabled: true,
         })
         .map_err(ffi_err)
     }
@@ -572,6 +714,7 @@ impl TamtriCore {
                 .map(|pair| (pair.name, pair.value))
                 .collect(),
             adapter: Default::default(),
+            enabled: true,
         })
         .map_err(ffi_err)
     }
@@ -614,6 +757,68 @@ impl TamtriCore {
         model_id: String,
     ) -> FfiResult<ConversationDto> {
         self.fork_conversation_inner(&id, &harness_id, &model_id)
+            .map_err(ffi_err)
+    }
+
+    pub fn list_projects(&self) -> FfiResult<Vec<ProjectDto>> {
+        self.list_projects_inner().map_err(ffi_err)
+    }
+
+    pub fn create_project(&self, name: String) -> FfiResult<ProjectDto> {
+        self.create_project_inner(&name).map_err(ffi_err)
+    }
+
+    pub fn update_project(&self, id: String, name: String) -> FfiResult<ProjectDto> {
+        self.update_project_inner(&id, &name).map_err(ffi_err)
+    }
+
+    pub fn delete_project(&self, id: String) -> FfiResult<()> {
+        self.delete_project_inner(&id).map_err(ffi_err)
+    }
+
+    pub fn attach_project_root(
+        &self,
+        project_id: String,
+        name: String,
+        uri: String,
+        kind: String,
+        scope: String,
+    ) -> FfiResult<RootDto> {
+        self.attach_project_root_inner(&project_id, &name, &uri, &kind, &scope)
+            .map_err(ffi_err)
+    }
+
+    pub fn remove_project_root(&self, project_id: String, root_id: String) -> FfiResult<()> {
+        self.remove_project_root_inner(&project_id, &root_id)
+            .map_err(ffi_err)
+    }
+
+    pub fn move_conversation_to_project(
+        &self,
+        conversation_id: String,
+        project_id: String,
+    ) -> FfiResult<ConversationDto> {
+        self.move_conversation_to_project_inner(&conversation_id, &project_id)
+            .map_err(ffi_err)
+    }
+
+    pub fn create_conversation_in_project(
+        &self,
+        project_id: String,
+        title: String,
+        harness_id: String,
+        model_id: String,
+    ) -> FfiResult<ConversationDto> {
+        self.create_conversation_in_project_inner(&project_id, &title, &harness_id, &model_id)
+            .map_err(ffi_err)
+    }
+
+    pub fn set_conversation_model(
+        &self,
+        id: String,
+        model_id: String,
+    ) -> FfiResult<ConversationDto> {
+        self.set_conversation_model_inner(&id, &model_id)
             .map_err(ffi_err)
     }
 
@@ -700,10 +905,7 @@ impl TamtriCore {
             .map_err(ffi_err)
     }
 
-    pub fn complete_oauth_callback(
-        &self,
-        callback_url: String,
-    ) -> FfiResult<OAuthCompletionDto> {
+    pub fn complete_oauth_callback(&self, callback_url: String) -> FfiResult<OAuthCompletionDto> {
         self.complete_oauth_callback_inner(&callback_url)
             .map_err(ffi_err)
     }
@@ -763,10 +965,7 @@ impl TamtriCore {
             .map_err(ffi_err)
     }
 
-    pub fn list_workdir_files(
-        &self,
-        conversation_id: String,
-    ) -> FfiResult<Vec<WorkdirFileDto>> {
+    pub fn list_workdir_files(&self, conversation_id: String) -> FfiResult<Vec<WorkdirFileDto>> {
         self.list_workdir_files_inner(&conversation_id)
             .map_err(ffi_err)
     }
@@ -812,6 +1011,15 @@ impl TamtriCore {
             .map_err(ffi_err)
     }
 
+    pub fn resolve_artifact_path(
+        &self,
+        conversation_id: String,
+        path: String,
+    ) -> FfiResult<String> {
+        self.resolve_artifact_path_inner(&conversation_id, &path)
+            .map_err(ffi_err)
+    }
+
     pub fn verify_artifact_inline(
         &self,
         size: u64,
@@ -830,10 +1038,7 @@ impl TamtriCore {
         self.vault
             .append_event(
                 id,
-                &Event::new(
-                    EventKind::ArtifactNavigationBlocked,
-                    json!({ "url": url }),
-                ),
+                &Event::new(EventKind::ArtifactNavigationBlocked, json!({ "url": url })),
             )
             .map_err(ffi_err)
     }
@@ -909,11 +1114,21 @@ impl TamtriCore {
         dest_path: String,
     ) -> FfiResult<()> {
         let id = parse_id(&conversation_id)?;
-        export_conversation_bundle(&self.vault, id, PathBuf::from(dest_path).as_path())
-            .map_err(ffi_err)
+        let conversation = self.vault.load(id)?;
+        let roots = self.effective_roots_for_conversation(&conversation)?;
+        export_conversation_bundle_with_roots(
+            &self.vault,
+            &conversation,
+            roots,
+            PathBuf::from(dest_path).as_path(),
+        )
+        .map_err(ffi_err)
     }
 
-    pub fn import_bundle_or_folder_as_new(&self, source_path: String) -> FfiResult<ImportResultDto> {
+    pub fn import_bundle_or_folder_as_new(
+        &self,
+        source_path: String,
+    ) -> FfiResult<ImportResultDto> {
         self.import_bundle_or_folder_as_new_inner(source_path.into())
             .map_err(ffi_err)
     }
@@ -928,6 +1143,23 @@ impl TamtriCore {
 
     pub fn list_harness_health(&self) -> FfiResult<Vec<HarnessHealthEntryDto>> {
         self.list_harness_health_inner().map_err(ffi_err)
+    }
+
+    pub fn list_harness_providers(&self) -> FfiResult<Vec<HarnessProviderEntryDto>> {
+        self.list_harness_providers_inner().map_err(ffi_err)
+    }
+
+    pub fn harness_roster_set_enabled(&self, agent_id: String, enabled: bool) -> FfiResult<()> {
+        self.harness_roster_set_enabled_inner(&agent_id, enabled)
+            .map_err(ffi_err)
+    }
+
+    pub fn harness_roster_add(&self, spec: AgentLaunchSpec) -> FfiResult<()> {
+        self.harness_roster_add_inner(spec).map_err(ffi_err)
+    }
+
+    pub fn list_harness_usage(&self) -> FfiResult<HarnessUsageListDto> {
+        self.list_harness_usage_inner().map_err(ffi_err)
     }
 
     pub fn harness_health_checklist(&self) -> FfiResult<String> {
@@ -955,17 +1187,16 @@ impl TamtriCore {
 impl TamtriCore {
     pub fn load_conversation_inner(&self, id: &str) -> Result<ConversationDto> {
         let id = parse_id(id)?;
-        let updated_at = self.vault.meta_updated_at(id)?;
+        let conversation = self.vault.load(id)?;
         if let Ok(cache) = self.conversation_cache.lock()
             && let Some(cached) = cache.get(&id)
-            && cached.updated_at == updated_at
+            && cached.updated_at == conversation.updated_at
         {
             debug_log(format!("[tamtri] load_conversation cache hit {id}"));
             return Ok(cached.dto.clone());
         }
 
         let started = std::time::Instant::now();
-        let conversation = self.vault.load(id)?;
         let dto = conversation_to_dto(&conversation)?;
         self.store_conversation_cache(conversation.updated_at, dto.clone());
         debug_log(format!(
@@ -998,7 +1229,11 @@ impl TamtriCore {
         model_id: &str,
     ) -> Result<ConversationDto> {
         let id = parse_id(id)?;
-        let mut fork = self.vault.load(id)?.fork();
+        let source = self.vault.load(id)?;
+        if source.kind == ConversationKind::Example {
+            return Err(CoreError::ExampleImmutable(id));
+        }
+        let mut fork = source.fork();
         fork.active_harness_id = Some(harness_id.to_string());
         fork.model_id = Some(model_id.to_string());
         self.vault.create(&fork)?;
@@ -1007,8 +1242,138 @@ impl TamtriCore {
         Ok(dto)
     }
 
-    pub fn send_message_inner(&self, conversation_id: &str, text: &str) -> Result<()> {
-        let id = parse_id(conversation_id)?;
+    pub fn list_projects_inner(&self) -> Result<Vec<ProjectDto>> {
+        Ok(self.projects.list()?.iter().map(project_to_dto).collect())
+    }
+
+    fn effective_roots_for_conversation(&self, conversation: &Conversation) -> Result<Vec<Root>> {
+        let Some(project_id) = conversation.project_id else {
+            return Ok(conversation.roots.clone());
+        };
+        let project = match self.projects.load(project_id) {
+            Ok(project) => project,
+            Err(CoreError::ProjectNotFound(_)) => return Ok(conversation.roots.clone()),
+            Err(err) => return Err(err),
+        };
+        Ok(effective_roots(&project.roots, &conversation.roots))
+    }
+
+    pub fn create_project_inner(&self, name: &str) -> Result<ProjectDto> {
+        let project = Project::new(name)?;
+        self.projects.create(&project)?;
+        Ok(project_to_dto(&project))
+    }
+
+    pub fn update_project_inner(&self, id: &str, name: &str) -> Result<ProjectDto> {
+        let project = self.projects.update_name(parse_id(id)?, name.to_string())?;
+        Ok(project_to_dto(&project))
+    }
+
+    pub fn delete_project_inner(&self, id: &str) -> Result<()> {
+        let project_id = parse_id(id)?;
+        let project = self.projects.load(project_id)?;
+        if project_id == unfiled_project_id() {
+            return Err(CoreError::UnfiledProjectImmutable);
+        }
+        let project_roots = project.roots.clone();
+        for summary in self.vault.list()? {
+            if summary.project_id != Some(project_id) {
+                continue;
+            }
+            let mut conversation = self.vault.load(summary.id)?;
+            let merged = effective_roots(&project_roots, &conversation.roots)
+                .into_iter()
+                .map(|mut root| {
+                    if root.origin == RootOrigin::Project {
+                        root.origin = RootOrigin::ProjectSnapshot;
+                    }
+                    root
+                })
+                .collect();
+            conversation.roots = merged;
+            conversation.project_id = None;
+            conversation.touch();
+            self.vault.save_meta(&conversation)?;
+            self.invalidate_conversation_cache(conversation.id);
+        }
+        self.projects.delete(project_id)
+    }
+
+    pub fn attach_project_root_inner(
+        &self,
+        project_id: &str,
+        name: &str,
+        uri: &str,
+        kind: &str,
+        scope: &str,
+    ) -> Result<RootDto> {
+        let root = self.projects.attach_root(
+            parse_id(project_id)?,
+            name.to_string(),
+            uri.to_string(),
+            parse_root_kind(kind)?,
+            parse_root_scope(scope)?,
+        )?;
+        Ok(root_to_dto(&root))
+    }
+
+    pub fn remove_project_root_inner(&self, project_id: &str, root_id: &str) -> Result<()> {
+        self.projects.remove_root(parse_id(project_id)?, root_id)?;
+        Ok(())
+    }
+
+    pub fn move_conversation_to_project_inner(
+        &self,
+        conversation_id: &str,
+        project_id: &str,
+    ) -> Result<ConversationDto> {
+        let conversation_id = parse_id(conversation_id)?;
+        let project_id = parse_id(project_id)?;
+        self.projects.load(project_id)?;
+        let mut conversation = self.vault.load(conversation_id)?;
+        conversation.project_id = (project_id != unfiled_project_id()).then_some(project_id);
+        conversation.touch();
+        self.vault.save_meta(&conversation)?;
+        self.invalidate_conversation_cache(conversation_id);
+        let dto = conversation_to_dto(&conversation)?;
+        self.store_conversation_cache(conversation.updated_at, dto.clone());
+        Ok(dto)
+    }
+
+    pub fn create_conversation_in_project_inner(
+        &self,
+        project_id: &str,
+        title: &str,
+        harness_id: &str,
+        model_id: &str,
+    ) -> Result<ConversationDto> {
+        let project_id = parse_id(project_id)?;
+        self.projects.load(project_id)?;
+        let mut conversation = Conversation::new(title);
+        conversation.project_id = (project_id != unfiled_project_id()).then_some(project_id);
+        conversation.active_harness_id = Some(harness_id.to_string());
+        conversation.model_id = Some(model_id.to_string());
+        self.vault.create(&conversation)?;
+        let dto = conversation_to_dto(&conversation)?;
+        self.store_conversation_cache(conversation.updated_at, dto.clone());
+        Ok(dto)
+    }
+
+    pub fn set_conversation_model_inner(
+        &self,
+        id: &str,
+        model_id: &str,
+    ) -> Result<ConversationDto> {
+        let id = parse_id(id)?;
+        let trimmed = model_id.trim();
+        if trimmed.is_empty() {
+            return Err(CoreError::Protocol("model_id required".to_string()));
+        }
+
+        let mut conversation = self.vault.load(id)?;
+        if conversation.kind == ConversationKind::Example {
+            return Err(CoreError::ExampleImmutable(id));
+        }
         if self
             .active_runs
             .lock()
@@ -1018,7 +1383,79 @@ impl TamtriCore {
             return Err(CoreError::ConversationBusy(id));
         }
 
-        let mut conversation = self.vault.load(id)?;
+        let harness_id = conversation
+            .active_harness_id
+            .clone()
+            .ok_or_else(|| CoreError::Protocol("conversation has no active harness".to_string()))?;
+        let adapter = self.adapter(&harness_id)?;
+        if !adapter.capabilities().runtime_model_switch {
+            return Err(CoreError::Protocol(format!(
+                "harness {harness_id} does not support runtime model switching"
+            )));
+        }
+
+        conversation.model_id = Some(trimmed.to_string());
+        conversation.touch();
+        self.vault.save_meta(&conversation)?;
+        self.invalidate_conversation_cache(id);
+        let dto = conversation_to_dto(&conversation)?;
+        self.store_conversation_cache(conversation.updated_at, dto.clone());
+        Ok(dto)
+    }
+
+    pub fn copy_example_conversation(&self, id: String) -> FfiResult<ConversationDto> {
+        self.copy_example_conversation_inner(&id).map_err(ffi_err)
+    }
+
+    pub fn copy_example_conversation_inner(&self, id: &str) -> Result<ConversationDto> {
+        let id = parse_id(id)?;
+        let source = self.vault.load(id)?;
+        if source.kind != ConversationKind::Example {
+            return Err(CoreError::Protocol(
+                "conversation is not an example".to_string(),
+            ));
+        }
+        let mut copy = source.fork();
+        copy.kind = ConversationKind::User;
+        copy.title = source
+            .title
+            .strip_prefix("Example: ")
+            .unwrap_or(&source.title)
+            .to_string();
+        copy.active_harness_id = None;
+        copy.model_id = None;
+        let source_dir = self.vault.conversation_folder(id)?;
+        self.vault.create(&copy)?;
+        let copy_dir = self.vault.conversation_folder(copy.id)?;
+        copy_attachments_dir(
+            &source_dir.join("attachments"),
+            &copy_dir.join("attachments"),
+        )?;
+        let dto = conversation_to_dto(&copy)?;
+        self.store_conversation_cache(copy.updated_at, dto.clone());
+        Ok(dto)
+    }
+
+    pub fn harness_readiness_recommend(&self) -> FfiResult<HarnessReadinessRecommendDto> {
+        self.harness_readiness_recommend_inner().map_err(ffi_err)
+    }
+
+    pub fn send_message_inner(&self, conversation_id: &str, text: &str) -> Result<()> {
+        let id = parse_id(conversation_id)?;
+        let conversation = self.vault.load(id)?;
+        if conversation.kind == ConversationKind::Example {
+            return Err(CoreError::ExampleImmutable(id));
+        }
+        if self
+            .active_runs
+            .lock()
+            .map_err(|_| CoreError::Protocol("run registry lock poisoned".to_string()))?
+            .contains_key(&id)
+        {
+            return Err(CoreError::ConversationBusy(id));
+        }
+
+        let mut conversation = conversation;
         let harness_id = conversation
             .active_harness_id
             .clone()
@@ -1027,6 +1464,7 @@ impl TamtriCore {
             .model_id
             .clone()
             .unwrap_or_else(|| "default".to_string());
+        let effective_roots = self.effective_roots_for_conversation(&conversation)?;
         let adapter = self.adapter(&harness_id)?;
         let harness_display_name = adapter.display_name().to_string();
         let conversation_dir = self.vault.conversation_folder(id)?;
@@ -1042,11 +1480,12 @@ impl TamtriCore {
             Some(gateway_event_tx),
         )?);
         self.runtime
-            .block_on(gateway.set_roots(roots_for_gateway(
-                &self.runtime_roots,
-                id,
-                &conversation.roots,
-            )));
+            .block_on(gateway.set_agent_context(id.to_string(), true));
+        self.runtime.block_on(gateway.set_roots(roots_for_gateway(
+            &self.runtime_roots,
+            id,
+            &effective_roots,
+        )));
         let gateway_endpoint = self
             .runtime
             .block_on(start_loopback_gateway(Arc::clone(&gateway)))?;
@@ -1076,7 +1515,7 @@ impl TamtriCore {
             },
             working_dir: WorkingDir::VaultLocal,
             working_dir_path: workdir_path.clone(),
-            roots: conversation.roots.clone(),
+            roots: effective_roots,
             mcp_servers: vec![gateway_mcp_ref(&gateway_endpoint)],
             model_id,
             native_session: conversation.native_session.clone(),
@@ -1110,16 +1549,12 @@ impl TamtriCore {
             let mut gateway_event_rx = gateway_event_rx;
             let gateway_event_task = tokio::spawn(async move {
                 while let Some(event) = gateway_event_rx.recv().await {
-                    record_gateway_content_block(
-                        &gateway_blocks_for_events,
-                        &event,
-                    );
+                    record_gateway_content_block(&gateway_blocks_for_events, &event);
                     let _ = append_event_for_gateway_event(&gateway_vault, id, &event);
                     observer_emit_gateway(&gateway_observer, id, &event);
                 }
             });
-            let workdir_baseline = list_renderable_workdir_paths(&workdir_path)
-                .unwrap_or_default();
+            let workdir_baseline = list_renderable_workdir_paths(&workdir_path).unwrap_or_default();
             let run = adapter.run(ctx, TurnInput { user_message }).await;
             match run {
                 Ok(mut run) => {
@@ -1246,8 +1681,7 @@ impl TamtriCore {
                                         .iter()
                                         .map(String::as_str)
                                         .filter(|path| !already_tracked.contains(*path));
-                                    match snapshotter.snapshot_referenced_paths(paths_to_snapshot)
-                                    {
+                                    match snapshotter.snapshot_referenced_paths(paths_to_snapshot) {
                                         Ok(snapshots) => {
                                             for snapshot in snapshots {
                                                 if snapshotted
@@ -1321,11 +1755,7 @@ impl TamtriCore {
                     }
                 }
                 Err(err) => {
-                    signal_turn_completed(
-                        &turn_waiters,
-                        id,
-                        TurnEndReason::Failed,
-                    );
+                    signal_turn_completed(&turn_waiters, id, TurnEndReason::Failed);
                     let _ = vault.append_event(
                         id,
                         &Event::new(EventKind::Error, json!({ "message": err.to_string() })),
@@ -1352,6 +1782,24 @@ impl TamtriCore {
         request_id: &str,
         option_id: &str,
     ) -> Result<()> {
+        if let Ok(mut pending) = self.pending_orchestration_consents.lock()
+            && let Some(tx) = pending.remove(request_id)
+        {
+            let allow = !matches!(option_id, "deny" | "reject" | "decline");
+            let _ = tx.send(allow);
+            self.observer.on_event(UiEvent {
+                conversation_id: conversation_id.to_string(),
+                kind: "permission_resolved".to_string(),
+                payload_json: json!({
+                    "type": "permission_resolved",
+                    "request_id": request_id,
+                    "option_id": option_id,
+                })
+                .to_string(),
+            });
+            return Ok(());
+        }
+
         let id = parse_id(conversation_id)?;
         let control = self
             .active_runs
@@ -1384,8 +1832,11 @@ impl TamtriCore {
             .get(&id)
             .cloned()
             .ok_or(CoreError::NotFound(id))?;
-        self.runtime
-            .block_on(run.gateway.respond_elicitation(request_id, action.clone(), data.clone()))?;
+        self.runtime.block_on(run.gateway.respond_elicitation(
+            request_id,
+            action.clone(),
+            data.clone(),
+        ))?;
         run.gateway_blocks
             .lock()
             .map_err(|_| CoreError::Protocol("gateway block lock poisoned".to_string()))?
@@ -1445,13 +1896,10 @@ impl TamtriCore {
             .get(&id)
             .map(|run| Arc::clone(&run.gateway))
             .ok_or(CoreError::NotFound(id))?;
-        match self.app_bridge.begin_request(
-            id,
-            server_id,
-            app_id,
-            template_ref,
-            &request,
-        )? {
+        match self
+            .app_bridge
+            .begin_request(id, server_id, app_id, template_ref, &request)?
+        {
             AppBridgeBeginResult::AlreadyGranted(pending) => {
                 let execution = self.runtime.block_on(execute_action(
                     gateway.as_ref(),
@@ -1518,9 +1966,7 @@ impl TamtriCore {
             .get(&id)
             .map(|run| Arc::clone(&run.gateway))
             .ok_or(CoreError::NotFound(id))?;
-        let resolution = self
-            .app_bridge
-            .resolve_consent(id, request_id, option_id)?;
+        let resolution = self.app_bridge.resolve_consent(id, request_id, option_id)?;
         let (response, audit) = match resolution {
             AppBridgeResolution::Denied { response, audit } => (response, audit),
             AppBridgeResolution::Approved { pending, audit } => {
@@ -1602,8 +2048,7 @@ impl TamtriCore {
             .get(&id)
             .cloned()
             .ok_or(CoreError::NotFound(id))?;
-        self.runtime
-            .block_on(run.gateway.cancel_task(task_id))
+        self.runtime.block_on(run.gateway.cancel_task(task_id))
     }
 
     pub fn list_gateway_servers_inner(&self) -> Result<Vec<GatewayServerDto>> {
@@ -1629,11 +2074,7 @@ impl TamtriCore {
 
     pub fn list_gateway_tools_inner(&self) -> Result<Vec<GatewayToolDto>> {
         let config = load_app_config(self.vault.root())?;
-        let gateway = McpGateway::new(
-            config.gateway.clone(),
-            self.credentials.clone(),
-            None,
-        )?;
+        let gateway = McpGateway::new(config.gateway.clone(), self.credentials.clone(), None)?;
         let tools = self
             .runtime
             .block_on(async { gateway.list_tools().await })?;
@@ -1654,10 +2095,7 @@ impl TamtriCore {
         })
     }
 
-    pub fn set_gateway_default_timeout_inner(
-        &self,
-        default_call_timeout_secs: u64,
-    ) -> Result<()> {
+    pub fn set_gateway_default_timeout_inner(&self, default_call_timeout_secs: u64) -> Result<()> {
         if default_call_timeout_secs == 0 {
             return Err(CoreError::Protocol(
                 "gateway default timeout must be greater than zero".to_string(),
@@ -1676,7 +2114,12 @@ impl TamtriCore {
             self.credentials.clone(),
             Some(gateway_event_tx),
         )?;
-        for server in config.gateway.servers.iter().filter(|server| server.enabled) {
+        for server in config
+            .gateway
+            .servers
+            .iter()
+            .filter(|server| server.enabled)
+        {
             let server_id = server.id.clone();
             let outcome = self
                 .runtime
@@ -1737,8 +2180,7 @@ impl TamtriCore {
         })?;
         let pkce = generate_pkce();
         let state = Uuid::now_v7().to_string();
-        let authorization_url =
-            build_authorization_url(oauth, redirect_uri, &pkce, &state)?;
+        let authorization_url = build_authorization_url(oauth, redirect_uri, &pkce, &state)?;
         self.pending_oauth
             .lock()
             .map_err(|_| CoreError::Protocol("oauth flow lock poisoned".to_string()))?
@@ -1766,10 +2208,7 @@ impl TamtriCore {
         })
     }
 
-    pub fn complete_oauth_callback_inner(
-        &self,
-        callback_url: &str,
-    ) -> Result<OAuthCompletionDto> {
+    pub fn complete_oauth_callback_inner(&self, callback_url: &str) -> Result<OAuthCompletionDto> {
         let state = Url::parse(callback_url)
             .map_err(|err| CoreError::Protocol(format!("invalid callback URL: {err}")))?
             .query_pairs()
@@ -1802,24 +2241,28 @@ impl TamtriCore {
             .redirect(reqwest::redirect::Policy::none())
             .build()
             .map_err(|err| CoreError::Protocol(format!("oauth http client failed: {err}")))?;
-        let tokens = std::thread::scope(|scope| -> Result<crate::mcp::oauth::TokenEndpointResponse> {
-            let handle = scope.spawn(|| {
-                let rt = tokio::runtime::Builder::new_current_thread()
-                    .enable_all()
-                    .build()
-                    .map_err(|err| CoreError::Protocol(format!("oauth runtime failed: {err}")))?;
-                rt.block_on(exchange_authorization_code(
-                    &client,
-                    oauth,
-                    &code,
-                    &pending.redirect_uri,
-                    &pending.pkce,
-                ))
-            });
-            handle
-                .join()
-                .map_err(|_| CoreError::Protocol("oauth exchange thread panicked".to_string()))?
-        })?;
+        let tokens = std::thread::scope(
+            |scope| -> Result<crate::mcp::oauth::TokenEndpointResponse> {
+                let handle = scope.spawn(|| {
+                    let rt = tokio::runtime::Builder::new_current_thread()
+                        .enable_all()
+                        .build()
+                        .map_err(|err| {
+                            CoreError::Protocol(format!("oauth runtime failed: {err}"))
+                        })?;
+                    rt.block_on(exchange_authorization_code(
+                        &client,
+                        oauth,
+                        &code,
+                        &pending.redirect_uri,
+                        &pending.pkce,
+                    ))
+                });
+                handle.join().map_err(|_| {
+                    CoreError::Protocol("oauth exchange thread panicked".to_string())
+                })?
+            },
+        )?;
         let bundle = stored_oauth_from_token_response(&tokens);
         let serialized = serialize_stored_oauth(&bundle)?;
         self.credentials
@@ -1847,7 +2290,11 @@ impl TamtriCore {
     pub fn list_roots_inner(&self, conversation_id: &str) -> Result<Vec<RootDto>> {
         let id = parse_id(conversation_id)?;
         let conversation = self.vault.load(id)?;
-        Ok(conversation.roots.iter().map(root_to_dto).collect())
+        Ok(self
+            .effective_roots_for_conversation(&conversation)?
+            .iter()
+            .map(root_to_dto)
+            .collect())
     }
 
     pub fn attach_root_inner(
@@ -1981,7 +2428,10 @@ impl TamtriCore {
         let path = resolve_workdir_relative_path(&workdir, relative_path)?;
         let bytes = fs::read(&path)?;
         let mime_type = detect_mime(&path, &bytes);
-        Ok(WorkdirFileContentDto { mime_type, data: bytes })
+        Ok(WorkdirFileContentDto {
+            mime_type,
+            data: bytes,
+        })
     }
 
     pub fn read_attachment_verified_inner(
@@ -2008,6 +2458,41 @@ impl TamtriCore {
         let conversation_dir = self.vault.conversation_folder(id)?;
         let attachment = verify_attachment(&conversation_dir, path, size, sha256)?;
         Ok(attachment.to_string_lossy().to_string())
+    }
+
+    pub fn resolve_artifact_path_inner(&self, conversation_id: &str, path: &str) -> Result<String> {
+        let id = parse_id(conversation_id)?;
+        let conversation = self.vault.load(id)?;
+        let mut size = None;
+        let mut sha256 = None;
+        for message in &conversation.messages {
+            for block in &message.content {
+                if let ContentBlock::Artifact {
+                    path: artifact_path,
+                    size: artifact_size,
+                    sha256: artifact_sha,
+                    ..
+                } = block
+                    && artifact_path == path
+                {
+                    size = Some(*artifact_size);
+                    sha256 = Some(artifact_sha.clone());
+                    break;
+                }
+            }
+            if size.is_some() {
+                break;
+            }
+        }
+        let (size, sha256) = match (size, sha256) {
+            (Some(size), Some(sha256)) => (size, sha256),
+            _ => {
+                return Err(CoreError::MalformedVault(format!(
+                    "artifact not found in transcript: {path}"
+                )));
+            }
+        };
+        self.verified_attachment_path_inner(conversation_id, path, size, &sha256)
     }
 
     pub fn import_bundle_or_folder_as_new_inner(
@@ -2045,40 +2530,170 @@ impl TamtriCore {
             .collect())
     }
 
-    fn registered_agent_launch_specs(&self) -> Result<Vec<AgentLaunchSpec>> {
-        let adapters = self
-            .adapters
-            .lock()
-            .map_err(|_| CoreError::Protocol("adapter registry lock poisoned".to_string()))?;
-        let mut specs = adapters
-            .values()
-            .filter_map(|adapter| adapter.agent_launch_spec())
-            .collect::<Vec<_>>();
-        specs.sort_by(|left, right| left.display_name.cmp(&right.display_name));
-        Ok(specs)
-    }
-
     pub fn list_harness_health_inner(&self) -> Result<Vec<HarnessHealthEntryDto>> {
-        Ok(health_entries_from_roster(&self.registered_agent_launch_specs()?)
-            .into_iter()
-            .map(|entry| HarnessHealthEntryDto {
-                id: entry.id,
-                display_name: entry.display_name,
-                command: entry.command,
-                status: match entry.status {
-                    HarnessHealthStatus::Missing => "missing".to_string(),
-                    HarnessHealthStatus::Ready => "ready".to_string(),
-                    HarnessHealthStatus::Unknown => "unknown".to_string(),
-                },
-                install_doc_url: entry.install_doc_url,
-            })
-            .collect())
+        Ok(
+            health_entries_from_roster(&self.roster_specs_from_config()?)
+                .into_iter()
+                .map(|entry| HarnessHealthEntryDto {
+                    id: entry.id,
+                    display_name: entry.display_name,
+                    command: entry.command,
+                    status: match entry.status {
+                        HarnessHealthStatus::Missing => "missing".to_string(),
+                        HarnessHealthStatus::Ready => "ready".to_string(),
+                        HarnessHealthStatus::Unknown => "unknown".to_string(),
+                    },
+                    install_doc_url: entry.install_doc_url,
+                })
+                .collect(),
+        )
     }
 
     pub fn harness_health_checklist_inner(&self) -> Result<String> {
         Ok(it_admin_checklist(&health_entries_from_roster(
-            &self.registered_agent_launch_specs()?,
+            &self.roster_specs_from_config()?,
         )))
+    }
+
+    fn roster_specs_from_config(&self) -> Result<Vec<AgentLaunchSpec>> {
+        let config = load_app_config(self.vault.root())?;
+        let mut specs = config.agent_roster;
+        specs.sort_by(|left, right| left.display_name.cmp(&right.display_name));
+        Ok(specs)
+    }
+
+    pub fn list_harness_providers_inner(&self) -> Result<Vec<HarnessProviderEntryDto>> {
+        let roster = self.roster_specs_from_config()?;
+        let adapters = self
+            .adapters
+            .lock()
+            .map_err(|_| CoreError::Protocol("adapter registry lock poisoned".to_string()))?;
+        Ok(roster
+            .iter()
+            .map(|spec| {
+                let diagnostic = adapters
+                    .get(&spec.id)
+                    .map(|adapter| adapter.readiness_diagnostic(spec.enabled))
+                    .unwrap_or_else(|| diagnose_agent(spec, spec.enabled));
+                // Never probe live models here: available_models() can spawn agents and
+                // block_on inside spawn_blocking deadlocks the daemon runtime.
+                let model_count = None;
+                let legacy_status = match diagnostic.state {
+                    ReadinessState::Missing => "missing",
+                    ReadinessState::Ready => "ready",
+                    ReadinessState::Disabled => "disabled",
+                    ReadinessState::SignInRequired => "sign_in_required",
+                    ReadinessState::Misconfigured => "misconfigured",
+                    ReadinessState::CheckFailed => "check_failed",
+                    ReadinessState::Installed => "installed",
+                };
+                HarnessProviderEntryDto {
+                    id: spec.id.clone(),
+                    display_name: spec.display_name.clone(),
+                    command: spec.command.clone(),
+                    status: legacy_status.to_string(),
+                    readiness_state: diagnostic.state.as_str().to_string(),
+                    recovery_action: diagnostic.recovery_action.clone(),
+                    readiness_message: diagnostic.message.clone(),
+                    install_doc_url: diagnostic.install_doc_url.clone(),
+                    adapter_type: adapter_type_label(&spec.adapter).to_string(),
+                    adapter_kind: adapter_kind_label(&spec.adapter).to_string(),
+                    enabled: spec.enabled,
+                    model_count,
+                }
+            })
+            .collect())
+    }
+
+    pub fn harness_readiness_recommend_inner(&self) -> Result<HarnessReadinessRecommendDto> {
+        let providers = self.list_harness_providers_inner()?;
+        let recommendable: Vec<RecommendableAgent<'_>> = providers
+            .iter()
+            .map(|entry| RecommendableAgent {
+                id: &entry.id,
+                display_name: &entry.display_name,
+                state: match entry.readiness_state.as_str() {
+                    "missing" => ReadinessState::Missing,
+                    "installed" => ReadinessState::Installed,
+                    "sign_in_required" => ReadinessState::SignInRequired,
+                    "ready" => ReadinessState::Ready,
+                    "disabled" => ReadinessState::Disabled,
+                    "misconfigured" => ReadinessState::Misconfigured,
+                    "check_failed" => ReadinessState::CheckFailed,
+                    _ => ReadinessState::CheckFailed,
+                },
+                recovery_action: entry.recovery_action.clone(),
+            })
+            .collect();
+        if let Some(picked) = recommend_agent(&recommendable) {
+            let provider = providers
+                .iter()
+                .find(|entry| entry.id == picked.id)
+                .expect("recommendation matches provider list");
+            return Ok(HarnessReadinessRecommendDto {
+                agent_id: Some(picked.id.to_string()),
+                display_name: picked.display_name.to_string(),
+                readiness_state: picked.state.as_str().to_string(),
+                recovery_action: picked.recovery_action.clone(),
+                message: provider.readiness_message.clone(),
+                install_doc_url: provider.install_doc_url.clone(),
+            });
+        }
+        Ok(HarnessReadinessRecommendDto {
+            agent_id: None,
+            display_name: "No agent app".into(),
+            readiness_state: ReadinessState::Missing.as_str().to_string(),
+            recovery_action: "ask_it".into(),
+            message: Some("Install at least one agent app to run your own files.".into()),
+            install_doc_url: String::new(),
+        })
+    }
+
+    pub fn harness_roster_set_enabled_inner(&self, agent_id: &str, enabled: bool) -> Result<()> {
+        set_agent_enabled(self.vault.root(), agent_id, enabled)?;
+        let config = load_app_config(self.vault.root())?;
+        if let Some(spec) = config
+            .agent_roster
+            .iter()
+            .find(|entry| entry.id == agent_id)
+        {
+            let mut adapters = self
+                .adapters
+                .lock()
+                .map_err(|_| CoreError::Protocol("adapter registry lock poisoned".to_string()))?;
+            adapters.insert(
+                spec.id.clone(),
+                crate::harness::registry::build_adapter(spec),
+            );
+        }
+        Ok(())
+    }
+
+    pub fn harness_roster_add_inner(&self, spec: AgentLaunchSpec) -> Result<()> {
+        add_agent_to_roster(self.vault.root(), spec.clone())?;
+        let mut adapters = self
+            .adapters
+            .lock()
+            .map_err(|_| CoreError::Protocol("adapter registry lock poisoned".to_string()))?;
+        adapters.insert(
+            spec.id.clone(),
+            crate::harness::registry::build_adapter(&spec),
+        );
+        Ok(())
+    }
+
+    pub fn list_harness_usage_inner(&self) -> Result<HarnessUsageListDto> {
+        let roster = self.roster_specs_from_config()?;
+        let ids = roster
+            .iter()
+            .map(|spec| spec.id.clone())
+            .collect::<Vec<_>>();
+        Ok(HarnessUsageListDto {
+            providers: list_harness_usage(&ids)
+                .into_iter()
+                .map(harness_usage_entry_to_dto)
+                .collect(),
+        })
     }
 
     pub fn list_recipes_inner(&self) -> Result<Vec<RecipeSummary>> {
@@ -2105,12 +2720,75 @@ impl TamtriCore {
             .unwrap_or_default();
         let run_id = Uuid::now_v7().to_string();
         let mut run = OrchestrationRunMeta::new(
-            run_id,
+            run_id.clone(),
             recipe_id.to_string(),
             source_conversation_id.to_string(),
         );
         orchestration::store::save_run(self.vault.root(), &run)?;
-        match orchestration::engine::execute(self, &recipe, &mut run, &inputs) {
+
+        let cancelled = Arc::new(AtomicBool::new(false));
+        if let Ok(mut active) = self.active_orchestration_runs.lock() {
+            active.insert(
+                run_id.clone(),
+                OrchestrationRunHandle {
+                    cancelled: Arc::clone(&cancelled),
+                },
+            );
+        }
+
+        self.emit_orchestration_ui(&run, "orchestration_started", orchestration_started(&run));
+        let initial_dto = run.to_dto();
+
+        let Some(core) = Self::shared() else {
+            return self.orchestration_run_sync_fallback(&recipe, &mut run, &inputs);
+        };
+
+        let vault_root = self.vault.root().to_path_buf();
+        let observer = Arc::clone(&self.observer);
+        let active_orchestration_runs = Arc::clone(&self.active_orchestration_runs);
+        self.runtime.spawn(async move {
+            let mut run = run;
+            let result =
+                orchestration::engine::execute_async(&core, &recipe, &mut run, &inputs, &cancelled)
+                    .await;
+            match result {
+                Ok(()) if cancelled.load(Ordering::SeqCst) => {
+                    run.status = OrchestrationRunStatus::Cancelled;
+                    run.error = Some("cancelled by user".to_string());
+                }
+                Ok(()) => run.status = OrchestrationRunStatus::Completed,
+                Err(_) if cancelled.load(Ordering::SeqCst) => {
+                    run.status = OrchestrationRunStatus::Cancelled;
+                    run.error = Some("cancelled by user".to_string());
+                }
+                Err(err) => {
+                    run.status = OrchestrationRunStatus::Failed;
+                    run.error = Some(err.to_string());
+                }
+            }
+            run.touch();
+            let _ = orchestration::store::save_run(&vault_root, &run);
+            let dto = run.to_dto();
+            observer.on_event(UiEvent {
+                conversation_id: run.source_conversation_id.clone(),
+                kind: "orchestration_finished".to_string(),
+                payload_json: orchestration_finished(&dto).to_string(),
+            });
+            if let Ok(mut active) = active_orchestration_runs.lock() {
+                active.remove(&run.id);
+            }
+        });
+
+        Ok(initial_dto)
+    }
+
+    fn orchestration_run_sync_fallback(
+        &self,
+        recipe: &orchestration::Recipe,
+        run: &mut OrchestrationRunMeta,
+        inputs: &HashMap<String, String>,
+    ) -> Result<OrchestrationRunDto> {
+        match orchestration::engine::execute(self, recipe, run, inputs) {
             Ok(()) => run.status = OrchestrationRunStatus::Completed,
             Err(err) => {
                 run.status = OrchestrationRunStatus::Failed;
@@ -2118,7 +2796,12 @@ impl TamtriCore {
             }
         }
         run.touch();
-        orchestration::store::save_run(self.vault.root(), &run)?;
+        orchestration::store::save_run(self.vault.root(), run)?;
+        self.emit_orchestration_ui(
+            run,
+            "orchestration_finished",
+            orchestration_finished(&run.to_dto()),
+        );
         Ok(run.to_dto())
     }
 
@@ -2131,12 +2814,43 @@ impl TamtriCore {
         if run.status != OrchestrationRunStatus::Running {
             return Ok(run.to_dto());
         }
+        if let Ok(active) = self.active_orchestration_runs.lock()
+            && let Some(handle) = active.get(run_id)
+        {
+            handle.cancelled.store(true, Ordering::SeqCst);
+        }
         let _ = self.cancel_run_inner(&run.latest_conversation_id);
         run.status = OrchestrationRunStatus::Cancelled;
         run.error = Some("cancelled by user".to_string());
         run.touch();
         orchestration::store::save_run(self.vault.root(), &run)?;
+        self.emit_orchestration_ui(
+            &run,
+            "orchestration_finished",
+            orchestration_finished(&run.to_dto()),
+        );
         Ok(run.to_dto())
+    }
+
+    pub fn install_shared(core: Arc<Self>) {
+        let _ = SHARED_CORE.set(core);
+    }
+
+    pub fn shared() -> Option<Arc<Self>> {
+        SHARED_CORE.get().cloned()
+    }
+
+    pub(crate) fn emit_orchestration_ui(
+        &self,
+        run: &OrchestrationRunMeta,
+        kind: &str,
+        payload: serde_json::Value,
+    ) {
+        self.observer.on_event(UiEvent {
+            conversation_id: run.source_conversation_id.clone(),
+            kind: kind.to_string(),
+            payload_json: payload.to_string(),
+        });
     }
 
     pub(crate) fn vault_root(&self) -> &Path {
@@ -2179,7 +2893,8 @@ impl TamtriCore {
                 "turn waiter dropped for {conversation_id}"
             ))),
             Err(_) => {
-                if let (Ok(id), Ok(mut waiters)) = (parse_id(conversation_id), self.turn_waiters.lock())
+                if let (Ok(id), Ok(mut waiters)) =
+                    (parse_id(conversation_id), self.turn_waiters.lock())
                 {
                     waiters.remove(&id);
                 }
@@ -2188,6 +2903,216 @@ impl TamtriCore {
                 })
             }
         }
+    }
+
+    pub(crate) async fn send_message_and_wait_async(
+        &self,
+        conversation_id: &str,
+        text: &str,
+        cancel: &Arc<AtomicBool>,
+    ) -> Result<TurnEndReason> {
+        let id = parse_id(conversation_id)?;
+        let (tx, rx) = oneshot::channel();
+        self.register_turn_waiter(id, tx);
+        if let Err(err) = self.send_message_inner(conversation_id, text) {
+            if let Ok(mut waiters) = self.turn_waiters.lock() {
+                waiters.remove(&id);
+            }
+            return Err(err);
+        }
+        self.wait_turn_receiver_async_inner(conversation_id, id, rx, cancel)
+            .await
+    }
+
+    pub(crate) async fn wait_turn_receiver_async(
+        &self,
+        conversation_id: &str,
+        rx: oneshot::Receiver<TurnEndReason>,
+        cancel: &Arc<AtomicBool>,
+    ) -> Result<TurnEndReason> {
+        let id = parse_id(conversation_id)?;
+        self.wait_turn_receiver_async_inner(conversation_id, id, rx, cancel)
+            .await
+    }
+
+    async fn wait_turn_receiver_async_inner(
+        &self,
+        conversation_id: &str,
+        id: Id,
+        mut rx: oneshot::Receiver<TurnEndReason>,
+        cancel: &Arc<AtomicBool>,
+    ) -> Result<TurnEndReason> {
+        loop {
+            if cancel.load(Ordering::SeqCst) {
+                if let Ok(mut waiters) = self.turn_waiters.lock() {
+                    waiters.remove(&id);
+                }
+                return Err(CoreError::Protocol("orchestration cancelled".to_string()));
+            }
+            match tokio::time::timeout(Duration::from_millis(250), &mut rx).await {
+                Ok(Ok(reason)) => return Ok(reason),
+                Ok(Err(_)) => {
+                    return Err(CoreError::Protocol(format!(
+                        "turn waiter dropped for {conversation_id}"
+                    )));
+                }
+                Err(_) => continue,
+            }
+        }
+    }
+
+    pub async fn handle_orchestration_tool(
+        self: &Arc<Self>,
+        conversation_id: &str,
+        exposed_name: &str,
+        arguments: serde_json::Value,
+        _meta: Option<serde_json::Value>,
+    ) -> Result<CallToolResult> {
+        let tool = native_original_name(exposed_name)
+            .ok_or_else(|| CoreError::Protocol(format!("unknown native tool: {exposed_name}")))?;
+        match tool {
+            TOOL_ORCHESTRATION_STATUS => {
+                let run_id = arguments
+                    .get("run_id")
+                    .and_then(serde_json::Value::as_str)
+                    .ok_or_else(|| CoreError::Protocol("run_id required".to_string()))?;
+                let dto = self.orchestration_status_inner(run_id)?;
+                Ok(tool_result_structured(json!({ "run": dto })))
+            }
+            TOOL_ORCHESTRATION_CANCEL => {
+                let run_id = arguments
+                    .get("run_id")
+                    .and_then(serde_json::Value::as_str)
+                    .ok_or_else(|| CoreError::Protocol("run_id required".to_string()))?;
+                if !self
+                    .await_orchestration_consent(
+                        conversation_id,
+                        &format!("Cancel orchestration run {run_id}"),
+                        &arguments,
+                    )
+                    .await?
+                {
+                    return Ok(tool_result_error("orchestration cancel declined"));
+                }
+                let dto = self.orchestration_cancel_inner(run_id)?;
+                Ok(tool_result_structured(json!({ "run": dto })))
+            }
+            TOOL_ORCHESTRATION_HANDOFF => {
+                let harness_id = arguments
+                    .get("harness_id")
+                    .and_then(serde_json::Value::as_str)
+                    .ok_or_else(|| CoreError::Protocol("harness_id required".to_string()))?;
+                let model_id = arguments
+                    .get("model_id")
+                    .and_then(serde_json::Value::as_str)
+                    .ok_or_else(|| CoreError::Protocol("model_id required".to_string()))?;
+                let message = arguments
+                    .get("message")
+                    .and_then(serde_json::Value::as_str)
+                    .ok_or_else(|| CoreError::Protocol("message required".to_string()))?;
+                let inputs_json = json!({
+                    "harness_id": harness_id,
+                    "model_id": model_id,
+                    "message": message,
+                })
+                .to_string();
+                if !self
+                    .await_orchestration_consent(
+                        conversation_id,
+                        "Hand off conversation to another harness",
+                        &json!({ "recipe_id": "handoff", "inputs_json": inputs_json }),
+                    )
+                    .await?
+                {
+                    return Ok(tool_result_error("orchestration handoff declined"));
+                }
+                let dto = self.orchestration_run_inner(
+                    "handoff",
+                    conversation_id,
+                    Some(inputs_json.as_str()),
+                )?;
+                Ok(tool_result_structured(json!({ "run": dto })))
+            }
+            TOOL_ORCHESTRATION_RUN => {
+                let recipe_id = arguments
+                    .get("recipe_id")
+                    .and_then(serde_json::Value::as_str)
+                    .ok_or_else(|| CoreError::Protocol("recipe_id required".to_string()))?;
+                let inputs_json = arguments.get("inputs_json").and_then(|value| {
+                    if value.is_string() {
+                        value.as_str().map(str::to_string)
+                    } else {
+                        Some(value.to_string())
+                    }
+                });
+                if !self
+                    .await_orchestration_consent(
+                        conversation_id,
+                        &format!("Run orchestration recipe: {recipe_id}"),
+                        &arguments,
+                    )
+                    .await?
+                {
+                    return Ok(tool_result_error("orchestration run declined"));
+                }
+                let dto = self.orchestration_run_inner(
+                    recipe_id,
+                    conversation_id,
+                    inputs_json.as_deref(),
+                )?;
+                Ok(tool_result_structured(json!({ "run": dto })))
+            }
+            _ => Err(CoreError::Protocol(format!(
+                "unsupported native tool: {tool}"
+            ))),
+        }
+    }
+
+    async fn await_orchestration_consent(
+        &self,
+        conversation_id: &str,
+        action: &str,
+        detail: &serde_json::Value,
+    ) -> Result<bool> {
+        let request_id = Uuid::now_v7().to_string();
+        let (tx, rx) = oneshot::channel();
+        if let Ok(mut pending) = self.pending_orchestration_consents.lock() {
+            pending.insert(request_id.clone(), tx);
+        }
+        self.observer.on_event(UiEvent {
+            conversation_id: conversation_id.to_string(),
+            kind: "permission_requested".to_string(),
+            payload_json: json!({
+                "type": "permission_requested",
+                "request_id": request_id,
+                "action": action,
+                "detail": { "type": "other", "value": detail },
+                "options": [
+                    { "id": "allow_once", "label": "Allow once" },
+                    { "id": "deny", "label": "Deny" },
+                ],
+            })
+            .to_string(),
+        });
+        let allowed =
+            match tokio::time::timeout(Duration::from_secs(ORCHESTRATION_CONSENT_TIMEOUT_SECS), rx)
+                .await
+            {
+                Ok(Ok(value)) => value,
+                Ok(Err(_)) => false,
+                Err(_) => false,
+            };
+        self.observer.on_event(UiEvent {
+            conversation_id: conversation_id.to_string(),
+            kind: "permission_resolved".to_string(),
+            payload_json: json!({
+                "type": "permission_resolved",
+                "request_id": request_id,
+                "option_id": if allowed { "allow_once" } else { "deny" },
+            })
+            .to_string(),
+        });
+        Ok(allowed)
     }
 
     pub fn vault_issues_inner(&self) -> Result<Vec<VaultIssueDto>> {
@@ -2240,7 +3165,10 @@ fn vault_issue_to_dto(issue: &VaultIssue) -> VaultIssueDto {
             path: None,
             reason: None,
             winner_path: Some(winner.display().to_string()),
-            loser_paths: losers.iter().map(|path| path.display().to_string()).collect(),
+            loser_paths: losers
+                .iter()
+                .map(|path| path.display().to_string())
+                .collect(),
             detail: format!(
                 "Duplicate conversation id {}. Active folder: {}. Duplicate folders: {}.",
                 id,
@@ -2271,7 +3199,11 @@ fn vault_issue_to_dto(issue: &VaultIssue) -> VaultIssueDto {
             reason: Some(reason.clone()),
             winner_path: None,
             loser_paths: Vec::new(),
-            detail: format!("Unreadable conversation folder {}: {}", path.display(), reason),
+            detail: format!(
+                "Unreadable conversation folder {}: {}",
+                path.display(),
+                reason
+            ),
         },
     }
 }
@@ -2314,8 +3246,8 @@ fn emit(
 ) {
     let payload_json = match event {
         HarnessEvent::PermissionRequested { .. } => {
-            let mut value =
-                serde_json::to_value(event).unwrap_or_else(|_| serde_json::Value::Object(Default::default()));
+            let mut value = serde_json::to_value(event)
+                .unwrap_or_else(|_| serde_json::Value::Object(Default::default()));
             if let Some(obj) = value.as_object_mut() {
                 obj.insert(
                     "harness_display_name".to_string(),
@@ -2765,37 +3697,34 @@ fn gateway_server_to_dto(
         .collect::<Vec<_>>();
     let missing_credential_refs = credential_refs
         .iter()
-        .filter_map(|credential_ref| match credentials.contains(credential_ref) {
-            Ok(true) => None,
-            Ok(false) | Err(_) => Some(credential_ref.clone()),
-        })
+        .filter_map(
+            |credential_ref| match credentials.contains(credential_ref) {
+                Ok(true) => None,
+                Ok(false) | Err(_) => Some(credential_ref.clone()),
+            },
+        )
         .collect::<Vec<_>>();
-    let (transport, stdio_command, stdio_args, stdio_env, http_endpoint) =
-        match &server.transport {
-            GatewayTransport::Stdio {
-                command,
-                args,
-                env,
-            } => (
-                "stdio".to_string(),
-                command.clone(),
-                args.clone(),
-                env.iter()
-                    .map(|(name, value)| GatewayEnvVarDto {
-                        name: name.clone(),
-                        value: value.clone(),
-                    })
-                    .collect(),
-                String::new(),
-            ),
-            GatewayTransport::StreamableHttp { endpoint, .. } => (
-                "streamable_http".to_string(),
-                String::new(),
-                Vec::new(),
-                Vec::new(),
-                endpoint.clone(),
-            ),
-        };
+    let (transport, stdio_command, stdio_args, stdio_env, http_endpoint) = match &server.transport {
+        GatewayTransport::Stdio { command, args, env } => (
+            "stdio".to_string(),
+            command.clone(),
+            args.clone(),
+            env.iter()
+                .map(|(name, value)| GatewayEnvVarDto {
+                    name: name.clone(),
+                    value: value.clone(),
+                })
+                .collect(),
+            String::new(),
+        ),
+        GatewayTransport::StreamableHttp { endpoint, .. } => (
+            "streamable_http".to_string(),
+            String::new(),
+            Vec::new(),
+            Vec::new(),
+            endpoint.clone(),
+        ),
+    };
     let oauth_status = server
         .oauth
         .as_ref()
@@ -2824,17 +3753,20 @@ fn gateway_server_to_dto(
             .to_string()
         })
         .unwrap_or_else(|| "not_configured".to_string());
-    let (oauth_token_ref, oauth_client_id, oauth_authorization_endpoint, oauth_token_endpoint, oauth_scopes) = server
+    let (
+        oauth_token_ref,
+        oauth_client_id,
+        oauth_authorization_endpoint,
+        oauth_token_endpoint,
+        oauth_scopes,
+    ) = server
         .oauth
         .as_ref()
         .map(|oauth| {
             (
                 oauth.token_ref.clone(),
                 oauth.client_id.clone(),
-                oauth
-                    .authorization_endpoint
-                    .clone()
-                    .unwrap_or_default(),
+                oauth.authorization_endpoint.clone().unwrap_or_default(),
                 oauth.token_endpoint.clone().unwrap_or_default(),
                 oauth.scopes.clone(),
             )
@@ -2934,7 +3866,10 @@ fn gateway_server_from_dto(
         && server.oauth_client_id.trim().is_empty()
         && server.oauth_authorization_endpoint.trim().is_empty()
         && server.oauth_token_endpoint.trim().is_empty()
-        && server.oauth_scopes.iter().all(|scope| scope.trim().is_empty());
+        && server
+            .oauth_scopes
+            .iter()
+            .all(|scope| scope.trim().is_empty());
 
     let oauth = if incoming_oauth_empty {
         existing.and_then(|existing| existing.oauth.clone())
@@ -2969,7 +3904,9 @@ fn gateway_server_from_dto(
         enabled: server.enabled,
         scope,
         transport,
-        timeout_secs: server.timeout_secs.or_else(|| existing.and_then(|existing| existing.timeout_secs)),
+        timeout_secs: server
+            .timeout_secs
+            .or_else(|| existing.and_then(|existing| existing.timeout_secs)),
         credentials: existing
             .map(|existing| existing.credentials.clone())
             .unwrap_or_default(),
@@ -3023,10 +3960,7 @@ fn gateway_stdio_helper_candidates(
         candidates.push(cwd.join("../target/debug").join(binary_name));
     }
     if let Some(home) = home {
-        candidates.push(
-            home.join("Desktop/tamtri/target/debug")
-                .join(binary_name),
-        );
+        candidates.push(home.join("Desktop/tamtri/target/debug").join(binary_name));
     }
     candidates
 }
@@ -3041,14 +3975,10 @@ fn gateway_stdio_helper_path() -> Option<String> {
     let exe_dir = exe.parent()?;
     let cwd = std::env::current_dir().ok();
     let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
-    gateway_stdio_helper_candidates(
-        exe_dir,
-        cwd.as_deref(),
-        home.as_deref(),
-    )
-    .into_iter()
-    .find(|path| path.is_file())
-    .map(|path| path.to_string_lossy().to_string())
+    gateway_stdio_helper_candidates(exe_dir, cwd.as_deref(), home.as_deref())
+        .into_iter()
+        .find(|path| path.is_file())
+        .map(|path| path.to_string_lossy().to_string())
 }
 
 fn collect_workdir_files(
@@ -3067,9 +3997,9 @@ fn collect_workdir_files(
         if path.is_dir() {
             collect_workdir_files(root, &path, files)?;
         } else if path.is_file() {
-            let relative = path
-                .strip_prefix(root)
-                .map_err(|err| CoreError::Protocol(format!("workdir listing escaped root: {err}")))?;
+            let relative = path.strip_prefix(root).map_err(|err| {
+                CoreError::Protocol(format!("workdir listing escaped root: {err}"))
+            })?;
             let metadata = entry.metadata()?;
             let size = metadata.len();
             let modified_at = metadata
@@ -3092,7 +4022,10 @@ fn collect_workdir_files(
     Ok(())
 }
 
-fn resolve_workdir_relative_path(workdir: &std::path::Path, relative_path: &str) -> Result<PathBuf> {
+fn resolve_workdir_relative_path(
+    workdir: &std::path::Path,
+    relative_path: &str,
+) -> Result<PathBuf> {
     let path = std::path::Path::new(relative_path);
     if path.is_absolute() {
         return Err(CoreError::MalformedVault(
@@ -3149,8 +4082,51 @@ fn summary_to_dto(summary: ConversationSummary) -> Result<ConversationSummaryDto
         id: summary.id.to_string(),
         title: summary.title,
         updated_at: summary.updated_at.to_rfc3339(),
+        project_id: Some(
+            summary
+                .project_id
+                .unwrap_or_else(unfiled_project_id)
+                .to_string(),
+        ),
         active_harness_id: summary.active_harness_id,
+        kind: match summary.kind {
+            crate::conversation::ConversationKind::User => "user".to_string(),
+            crate::conversation::ConversationKind::Example => "example".to_string(),
+        },
     })
+}
+
+fn harness_usage_entry_to_dto(entry: HarnessUsageEntry) -> HarnessUsageEntryDto {
+    HarnessUsageEntryDto {
+        provider_id: entry.provider_id,
+        display_name: entry.display_name,
+        status: entry.status,
+        plan_label: entry.plan_label,
+        windows: entry
+            .windows
+            .into_iter()
+            .map(|window| HarnessUsageWindowDto {
+                id: window.id,
+                label: window.label,
+                utilization_pct: window.utilization_pct,
+                resets_at: window.resets_at,
+                tone: window.tone,
+            })
+            .collect(),
+        balances: entry
+            .balances
+            .into_iter()
+            .map(|balance| HarnessUsageBalanceDto {
+                id: balance.id,
+                label: balance.label,
+                remaining: balance.remaining,
+                unit: balance.unit,
+                tone: balance.tone,
+            })
+            .collect(),
+        error: entry.error,
+        fetched_at: entry.fetched_at,
+    }
 }
 
 fn ffi_err(err: CoreError) -> TamtriError {
@@ -3164,9 +4140,19 @@ fn conversation_to_dto(conversation: &Conversation) -> Result<ConversationDto> {
     Ok(ConversationDto {
         id: conversation.id.to_string(),
         title: conversation.title.clone(),
+        project_id: Some(
+            conversation
+                .project_id
+                .unwrap_or_else(unfiled_project_id)
+                .to_string(),
+        ),
         active_harness_id: conversation.active_harness_id.clone(),
         model_id: conversation.model_id.clone(),
         forked_from: conversation.forked_from.map(|id| id.to_string()),
+        kind: match conversation.kind {
+            ConversationKind::User => "user".to_string(),
+            ConversationKind::Example => "example".to_string(),
+        },
         transcript_json,
     })
 }
@@ -3195,6 +4181,17 @@ fn root_to_dto(root: &Root) -> RootDto {
         uri: root.uri.clone(),
         kind: root_kind_label(&root.kind).to_string(),
         scope: root_scope_label(&root.scope).to_string(),
+        origin: Some(root_origin_label(&root.origin).to_string()),
+    }
+}
+
+fn project_to_dto(project: &Project) -> ProjectDto {
+    ProjectDto {
+        id: project.id.to_string(),
+        name: project.name.clone(),
+        created_at: project.created_at.to_rfc3339(),
+        updated_at: project.updated_at.to_rfc3339(),
+        roots: project.roots.iter().map(root_to_dto).collect(),
     }
 }
 
@@ -3205,6 +4202,12 @@ fn root_from_dto(dto: &RootDto) -> Result<Root> {
         uri: dto.uri.clone(),
         kind: parse_root_kind(&dto.kind)?,
         scope: parse_root_scope(&dto.scope)?,
+        origin: dto
+            .origin
+            .as_deref()
+            .map(parse_root_origin)
+            .transpose()?
+            .unwrap_or_default(),
     })
 }
 
@@ -3223,7 +4226,10 @@ fn roots_for_gateway(
 }
 
 fn merge_runtime_roots(stored: &[Root], resolved: &[Root]) -> Vec<Root> {
-    let resolved_by_id: HashMap<&str, &Root> = resolved.iter().map(|root| (root.id.as_str(), root)).collect();
+    let resolved_by_id: HashMap<&str, &Root> = resolved
+        .iter()
+        .map(|root| (root.id.as_str(), root))
+        .collect();
     stored
         .iter()
         .filter_map(|stored| {
@@ -3233,6 +4239,7 @@ fn merge_runtime_roots(stored: &[Root], resolved: &[Root]) -> Vec<Root> {
                 uri: resolved.uri.clone(),
                 kind: stored.kind.clone(),
                 scope: stored.scope.clone(),
+                origin: stored.origin.clone(),
             })
         })
         .collect()
@@ -3262,7 +4269,9 @@ fn parse_root_kind(kind: &str) -> Result<RootKind> {
         "filesystem" => Ok(RootKind::Filesystem),
         "knowledge_base" => Ok(RootKind::KnowledgeBase),
         "other" => Ok(RootKind::Other),
-        _ => Err(CoreError::MalformedVault(format!("unknown root kind: {kind}"))),
+        _ => Err(CoreError::MalformedVault(format!(
+            "unknown root kind: {kind}"
+        ))),
     }
 }
 
@@ -3270,7 +4279,20 @@ fn parse_root_scope(scope: &str) -> Result<RootScope> {
     match scope {
         "conversation" => Ok(RootScope::Conversation),
         "user" => Ok(RootScope::User),
-        _ => Err(CoreError::MalformedVault(format!("unknown root scope: {scope}"))),
+        _ => Err(CoreError::MalformedVault(format!(
+            "unknown root scope: {scope}"
+        ))),
+    }
+}
+
+fn parse_root_origin(origin: &str) -> Result<RootOrigin> {
+    match origin {
+        "conversation" => Ok(RootOrigin::Conversation),
+        "project" => Ok(RootOrigin::Project),
+        "project_snapshot" => Ok(RootOrigin::ProjectSnapshot),
+        _ => Err(CoreError::MalformedVault(format!(
+            "unknown root origin: {origin}"
+        ))),
     }
 }
 
@@ -3286,6 +4308,14 @@ fn root_scope_label(scope: &RootScope) -> &'static str {
     match scope {
         RootScope::Conversation => "conversation",
         RootScope::User => "user",
+    }
+}
+
+fn root_origin_label(origin: &RootOrigin) -> &'static str {
+    match origin {
+        RootOrigin::Conversation => "conversation",
+        RootOrigin::Project => "project",
+        RootOrigin::ProjectSnapshot => "project_snapshot",
     }
 }
 
@@ -3322,4 +4352,3 @@ mod gateway_stdio_helper_tests {
         );
     }
 }
-
