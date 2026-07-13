@@ -69,16 +69,18 @@ Surfaces are dumb: they render and emit intents. The daemon owns storage, gatewa
 ## Core abstractions
 
 ### Conversation (owned by client, portable)
-`Conversation { id, title, timestamps, messages[], active_harness_id, mcp_servers[], roots[] }`
+`Conversation { id, title, timestamps, project_id?, kind, messages[], active_harness_id, mcp_servers[], roots[] }`
 `Message { id, role, harness_id?, content: ContentBlock[], created_at }`
 `ContentBlock = Text | Thinking | ToolCall | ToolResult | AppResource | Artifact | ElicitationRequest | ElicitationResponse | TaskRef`
 
-Storage layout (the vault): one folder per conversation.
+Storage layout (the vault): legible project metadata plus one folder per conversation.
 ```
+<vault>/projects/<slug>--<project-id>/
+  meta.json        mutable, atomic: schema_version, id, name, timestamps, shared roots
 <vault>/conversations/<date>-<slug>--<id-suffix>/
-  meta.json        mutable, tiny: schema_version, id, title, timestamps, active_harness_id, model_id, working_dir, mcp_servers, roots, forked_from
+  meta.json        mutable, tiny: schema_version, id, title, timestamps, project_id, kind, active_harness_id, model_id, working_dir, mcp_servers, roots, forked_from
   messages.jsonl   append-only, exactly one Message object per line (the transcript)
-  events.jsonl     append-only local audit log (receipts); written from milestone 3
+  events.jsonl     append-only local audit log (receipts)
   attachments/      curated rendered artifacts (e.g. report.html), hashed, referenced by transcript Artifact blocks
   workdir/          harness working directory for VaultLocal (inputs + harness files); local, not in share bundle
 ```
@@ -99,6 +101,7 @@ Persistence tiers, all plain text, all user-owned:
 - Share/export = freeze the folder into a self-contained `.tamtri` bundle (zip of `meta.json` + `messages.jsonl` + `attachments/`). Snapshot artifact bytes at that moment and hash-verify at the bundle boundary. Legible and mutable while it is yours; immutable and integrity-checked the instant it leaves.
 - `schema_version` in `meta.json` governs the format so shared bundles stay loadable as the model evolves. Leave a documented migration seam.
 - Store `harness_id` on each assistant message so the transcript shows provenance.
+- A stable immutable Unfiled project owns the UI projection of legacy conversations with no stored `project_id`. Shared project roots join conversation roots at run time. Export clears the vault-local project reference and materializes inherited roots as portable `project_snapshot` roots.
 
 ### HarnessAdapter (swappable driver, = future plugin contract)
 ```
@@ -211,7 +214,7 @@ tamtri is an MCP gateway. It registers itself as the single MCP server the agent
 - Why: server-initiated primitives (elicitation, Apps) are unpredictable. Being in the path of every tool call is the only way to guarantee tamtri catches and renders them, independent of harness maturity.
 - Bonus: single consent/audit choke point; tamtri holds credentials and injects them downstream so the agent never sees raw secrets.
 - Costs: tamtri is on the hot path and implements three protocol surfaces (ACP client, MCP server to agent, MCP client to downstream). Some harnesses load their own MCP servers (e.g. Claude Code's project `.mcp.json`) that tamtri does not intercept; route the primitives tamtri must own through the gateway, let the agent keep its own coding-tool servers.
-- Concurrency: agents issue parallel tool calls, so the gateway fans out concurrently. The downstream MCP client's multiplexed dispatch loop (background reader + pending-request map + inbound-request channel) is therefore a **milestone 4** requirement, not something elicitation forces later. Milestone 2 ships sequential internals behind an `&self` surface so the swap is invisible to callers.
+- Concurrency: agents issue parallel tool calls, so the gateway fans out concurrently via a multiplexed dispatch loop (background reader + pending-request map + inbound-request channel).
 
 ## MCP feature requirements (V1)
 
@@ -229,13 +232,13 @@ Implement against MCP 2025-11-25, gating 2026-07-28 RC features (stateless core,
 
 ## UI spec (V1)
 
-Native Swift outer shell, macOS 14+. SwiftUI owns the app chrome and Mac integrations. React/TypeScript may render complex AI surfaces inside `WKWebView` islands when that is faster or higher quality than rebuilding the web UI ecosystem in SwiftUI. This section absorbs the retired product-spec; it is the shell's contract.
+Expo + React Native Web owns the shared UI. Electron hosts the exported web surface on desktop, spawns the daemon, and provides narrow OS bridges. The same renderer runs on web and mobile. This section is the shell's contract.
 
-**Primary window.** Left sidebar: conversation list (searchable), grouped by recent, new-conversation button. Main pane: the transcript, rendering content blocks in order (text, thinking collapsible, tool cards, artifact panels, App panels, elicitation prompts, task cards). The transcript may be a React renderer island hosted by Swift. Composer: multiline input, send, attach-root, and drag-and-drop file attachment (dropped files land in the conversation's `workdir/`; this is the first beat of the hero demo).
+**Primary window.** Left sidebar: project-only tree with nested conversation threads, search, project creation, and Settings. Main pane: a raised content card with a 46 px toolbar and a centered transcript/composer column. The transcript renders content blocks in order (text, thinking, tool cards, artifacts, Apps, elicitation, tasks). An optional right dock summarizes and previews artifacts, Apps, and tasks. Composer: multiline input, send, attach-root, and drag-and-drop file attachment (dropped files land in the conversation's `workdir/`; this is the first beat of the hero demo).
 
-**Renderer boundary.** Swift/core owns state, storage, permissions, credentials, and security decisions. The web renderer receives view models and emits intents. It cannot read the vault directly, connect to harnesses, call MCP servers, access keychain values, or bypass consent. Every UI-initiated action returns to Swift/core and uses the same consent/audit path as a direct tool call.
+**Renderer boundary.** The daemon/core owns storage, permissions, credentials, and security decisions. The renderer receives view models and emits intents through `@tamtri/client`. It cannot read the vault directly, connect to harnesses, call MCP servers, access keychain values, or bypass consent. Every UI-initiated action returns to core and uses the same consent/audit path as a direct tool call.
 
-**First-run: harness health screen.** The target user is not terminal-native, but V1 depends on installed ACP agents. On first launch (and from settings anytime): detected agents with install and auth status, install-doc links for missing ones, and a copyable IT/admin setup checklist. Detect and guide; never bundle or manage an agent install.
+**First-run: Agents & providers.** The target user is not terminal-native, but V1 depends on installed agent apps. On first launch (and from settings anytime): detected agents with install and auth status, install-doc links for missing ones, and a copyable IT/admin setup checklist. Detect and guide; never bundle or manage an agent install.
 
 **Consent card contract.** The permission card is the trust product, so its contents are spec, not style. Every card shows: **who is asking** (which harness, or which downstream server via the gateway, by name), **what exactly** (the full diff for file edits, the exact command string for executions, tool name plus a readable argument summary otherwise), and **scope choices**: allow once, allow for this conversation, or allow this action for this folder / this server. No global forever-allow in V1. Deny is always as prominent as allow. Every resolution persists: compact form in the transcript, full detail in `events.jsonl`.
 
@@ -245,27 +248,19 @@ Native Swift outer shell, macOS 14+. SwiftUI owns the app chrome and Mac integra
 
 **Search scope (V1).** Search covers conversation titles and transcript text (`Text` and `Thinking` blocks). It does not search tool outputs, attachment contents, or `workdir/`. Say so in the search empty state rather than letting users infer it from missing results.
 
-**Error states are designed, not raw.** Empty vault, malformed conversation, busy conversation (`ConversationBusy`), missing external-folder bookmark, unsupported schema version, and unavailable harness each get a calm state that names the problem and offers the one obvious recovery action (reveal in Finder, re-pick folder, update app, open harness health). Copy is written in milestone 8; the states are enumerated now so renderers plan for them.
+**Error states are designed, not raw.** Empty vault, malformed conversation, busy conversation (`ConversationBusy`), missing external-folder bookmark, unsupported schema version, and unavailable harness each get a calm state that names the problem and offers the one obvious recovery action (reveal in Finder, re-pick folder, update app, open Agents & providers). See `docs/product-gaps.md` for copy status.
 
 **Accessibility (V1 requirement, not polish).** Full keyboard navigation of the transcript: every content block is focusable and traversable, with keyboard paths to card actions (expand diff, respond to elicitation, approve/deny consent). VoiceOver labels and values on every card type (tool, artifact, App, elicitation, task, permission). Honor Reduce Motion. Contrast meets WCAG AA. Respect Dynamic Type. Any web-rendered transcript/card surface must expose equivalent accessibility semantics or have native fallback metadata/actions outside the web content. Sandboxed model-generated webview content gets an accessible fallback (artifact title, type, open-in-Finder) since model-generated HTML cannot be trusted to be accessible.
 
-**Native affordances.** Global launch hotkey (configurable), menu bar item, standard shortcuts (⌘N new conversation, ⌘K command palette, ⌘F search). Instant cold start. No Electron runtime in V1; WebKit is allowed as a contained renderer island.
+**Desktop affordances.** The Electron shell owns window chrome, daemon lifecycle, file pickers, Finder reveal, and standard shortcuts. The renderer stays portable and reaches those capabilities only through the narrow preload bridge.
 
 **Sharing / forking.** Export freezes the conversation into a `.tamtri` bundle (zip of `meta.json` + `messages.jsonl` + `attachments/`, hash-verified). Import a bundle or folder as a new conversation (new id, `forked_from` cleared). On import, verify every attachment hash: a mismatch imports the conversation but marks the affected `Artifact` blocks failed-integrity, names the files, and never renders their content (tampered HTML must not reach the webview). Fork keeps `forked_from` and continues with any harness.
 
-## Build order (milestones)
+## Build order (historical)
 
-Full outline with per-milestone scope in `/docs/milestone-3-9-outline.md`. Milestones 1–2 complete.
+Core gateway, harness adapters, artifact rendering, elicitation, Apps/Tasks/Roots, orchestration, and the Expo/Electron UI are implemented at varying levels of polish. Remaining product work: onboarding gate, packaged Mac release, relay remote access, accessibility pass, menu bar/command palette.
 
-1. Core skeleton: conversation model + `meta.json`/`messages.jsonl` vault + fork/import round-trip tests. No UI. **Done.**
-2. MCP baseline (downstream half of the gateway): connect to a local MCP server as an MCP client; tools end to end. **Done.**
-3. `AcpAdapter` + first app light: spawn an ACP agent, stream `session/update` to the UI, consent cards, `events.jsonl` starts. First core-meets-shell via UniFFI, with the transcript either native SwiftUI or an initial WebKit renderer island.
-4. Gateway + full MCP client: multiplexed dispatch loop, streamable HTTP transport beside stdio, MCP server surface to the agent, proxy tools/resources/prompts with progress/cancellation/logging passthrough, server registry + static credential injection from keychain, fork-into-harness.
-5. Rendering plane (the hero): sandboxed webview host (no network for artifacts; declared origins reserved for Apps), `FileChanged` → snapshot → inline `report.html` render.
-6. Elicitation + remote auth: intercept downstream elicitation (form + URL), OAuth 2.1 for remote servers via the same trusted-domain handoff, tokens in keychain.
-7. Apps + Tasks + Roots on existing infrastructure; gate 2026-07-28 RC behaviors behind capability checks. (Sampling stays deferred: declined cleanly at initialize.)
-8. Product completeness: harness health onboarding, search, share/fork UX with import integrity, error states, accessibility pass, `issues()` surfaced, diagnostics bundle, hotkeys, menu bar, cold-start perf.
-9. Ship: signing/notarization/updates, CI, CLA/CONTRIBUTING/CoC/labels, README + demo clip, v0.1.0.
+Historical build-session specs: [`docs/archive/milestones/`](docs/archive/milestones/). Current doc index: [`docs/README.md`](docs/README.md).
 
 ## Commands
 
@@ -279,14 +274,15 @@ cargo clippy --all-targets -- -D warnings
 cargo run -p tamtri-daemon
 
 # TypeScript surfaces
-npm install
-npm run protocol:generate
-npm run typecheck --workspaces --if-present
-npm run build --workspace @tamtri/desktop
-npm test --workspace @tamtri/client
+pnpm install
+pnpm run protocol:generate
+pnpm run typecheck
+pnpm run test
+pnpm --filter @tamtri/desktop run build
+pnpm --filter @tamtri/client run test
 ```
 
-Always run `cargo test`, `cargo clippy --all-targets -- -D warnings`, and `npm run typecheck --workspaces` before considering surface work done.
+Always run `cargo test`, `cargo clippy --all-targets -- -D warnings`, `pnpm run typecheck`, and `pnpm run test` before considering surface work done.
 
 ## Code style
 
