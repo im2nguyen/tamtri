@@ -33,7 +33,7 @@ export function SearchResultRow({ hit, selected, onPress }: SearchResultRowProps
         {hit.snippet}
       </Text>
       <View style={{ flexDirection: "row", gap: theme.spacing[2], marginTop: 2 }}>
-        <Text style={{ color: theme.colors.accentBright, fontSize: 10, fontWeight: "700", textTransform: "uppercase" }}>
+        <Text style={{ color: theme.colors.accentBright, fontSize: theme.fontSize.xs, fontWeight: "700", textTransform: "uppercase" }}>
           {hit.match_field}
         </Text>
       </View>

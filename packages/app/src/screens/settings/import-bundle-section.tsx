@@ -72,7 +72,7 @@ export function ImportBundleSection() {
               </Text>
               {result.warnings.length > 0 ? (
                 <View style={{ gap: theme.spacing[2] }}>
-                  {result.warnings.map((warning, index) => (
+                  {result.warnings.map((warning) => (
                     <Text
                       key={`${warning.kind}-${warning.detail}`}
                       style={{ color: theme.colors.destructive, fontSize: theme.fontSize.sm }}

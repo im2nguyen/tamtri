@@ -44,7 +44,7 @@ function CsvPreview({ text }: { text: string }) {
       <View style={{ gap: 2 }}>
         {rows.map((row) => (
           <Text
-            key={`${row.length}-${row}`}
+            key={row}
             style={{
               color: theme.colors.foreground,
               fontFamily: theme.fontFamily.mono,

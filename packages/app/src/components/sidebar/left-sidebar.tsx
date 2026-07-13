@@ -130,7 +130,7 @@ export function LeftSidebar({ onClose }: LeftSidebarProps) {
                 backgroundColor: theme.colors.destructive,
               }}
             >
-              <Text style={{ color: theme.colors.destructiveForeground, fontSize: 10, fontWeight: "700" }}>
+              <Text style={{ color: theme.colors.destructiveForeground, fontSize: theme.fontSize.xs, fontWeight: "700" }}>
                 {issues.length} vault issue{issues.length === 1 ? "" : "s"}
               </Text>
             </View>
@@ -325,7 +325,7 @@ export function LeftSidebar({ onClose }: LeftSidebarProps) {
                 paddingHorizontal: 6,
               }}
             >
-              <Text style={{ color: theme.colors.destructiveForeground, fontSize: 10, fontWeight: "700" }}>
+              <Text style={{ color: theme.colors.destructiveForeground, fontSize: theme.fontSize.xs, fontWeight: "700" }}>
                 {issues.length}
               </Text>
             </View>

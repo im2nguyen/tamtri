@@ -57,7 +57,7 @@ export function AdvancedSection() {
             </Text>
           ) : null}
         </SettingsRow>
-        {issues.map((issue, index) => (
+        {issues.map((issue) => (
           <SettingsListRow
             key={`${issue.kind}-${issue.detail}`}
             divided
