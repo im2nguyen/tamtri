@@ -1,7 +1,7 @@
 import { Pressable, Text, View } from "react-native";
 import type { ConversationSummaryDto } from "@tamtri/protocol";
 
-import { theme } from "@/styles/theme";
+import { useTheme } from "@/styles/use-theme";
 
 interface ConversationRowProps {
   conversation: ConversationSummaryDto;
@@ -18,6 +18,7 @@ function formatRelativeTime(epochSeconds: number): string {
 }
 
 export function ConversationRow({ conversation, selected, onPress }: ConversationRowProps) {
+  const theme = useTheme();
   return (
     <Pressable
       onPress={onPress}

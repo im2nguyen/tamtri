@@ -5,11 +5,12 @@ import { method, type ConversationDto } from "@tamtri/protocol";
 import { Button } from "@/components/ui/button";
 import { useAgents, type AgentRosterEntry, type ModelEntry } from "@/hooks/use-agents";
 import { useDaemon } from "@/runtime/daemon-provider";
-import { theme } from "@/styles/theme";
+import { useTheme } from "@/styles/use-theme";
 
 interface ForkConversationSheetProps {
   visible: boolean;
   conversationId: string;
+  sourceMessageId?: string;
   onClose: () => void;
   onForked: (conversation: ConversationDto) => void;
 }
@@ -23,6 +24,7 @@ function SelectRow({
   selected: boolean;
   onPress: () => void;
 }) {
+  const theme = useTheme();
   return (
     <Pressable
       onPress={onPress}
@@ -47,9 +49,11 @@ function SelectRow({
 export function ForkConversationSheet({
   visible,
   conversationId,
+  sourceMessageId,
   onClose,
   onForked,
 }: ForkConversationSheetProps) {
+  const theme = useTheme();
   const { agents, loading, loadModels } = useAgents();
   const { client } = useDaemon();
   const [selectedAgent, setSelectedAgent] = useState<AgentRosterEntry | null>(null);
@@ -125,7 +129,9 @@ export function ForkConversationSheet({
             Fork into…
           </Text>
           <Text style={{ color: theme.colors.foregroundMuted, fontSize: theme.fontSize.sm }}>
-            Copy this conversation&apos;s context into a new thread with a different harness or model.
+            {sourceMessageId
+              ? "Copy this conversation's full context into a new thread with a different harness or model. Message-boundary forks are not supported yet — the entire transcript is copied."
+              : "Copy this conversation's context into a new thread with a different harness or model."}
           </Text>
 
           <View style={{ gap: theme.spacing[2] }}>

@@ -1,7 +1,7 @@
 import { Pressable, Text, View } from "react-native";
 
 import type { SearchHit } from "@/lib/daemon-types";
-import { theme } from "@/styles/theme";
+import { useTheme } from "@/styles/use-theme";
 
 interface SearchResultRowProps {
   hit: SearchHit;
@@ -10,6 +10,7 @@ interface SearchResultRowProps {
 }
 
 export function SearchResultRow({ hit, selected, onPress }: SearchResultRowProps) {
+  const theme = useTheme();
   return (
     <Pressable
       onPress={onPress}

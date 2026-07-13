@@ -2,8 +2,8 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback } from "react";
 import { method, type ConversationDto, type ProjectDto, type RootDto } from "@tamtri/protocol";
 
-import { shellBridge } from "@/lib/shell";
 import { invalidateConversationList } from "@/hooks/conversation-list-invalidation";
+import { shellBridge } from "@/lib/shell";
 import { useDaemon } from "@/runtime/daemon-provider";
 
 export function useProjects() {
@@ -86,6 +86,30 @@ export function useProjects() {
     [client],
   );
 
+  const moveConversationToProject = useCallback(
+    async (conversationId: string, projectId: string) => {
+      const dto = await client.request<ConversationDto>(method.CONVERSATION_MOVE_PROJECT, {
+        conversation_id: conversationId,
+        project_id: projectId,
+      });
+      await refreshAll();
+      invalidateConversationList();
+      return dto;
+    },
+    [client, refreshAll],
+  );
+
+  const removeProjectRoot = useCallback(
+    async (projectId: string, rootId: string) => {
+      await client.request(method.PROJECT_ROOT_REMOVE, {
+        project_id: projectId,
+        root_id: rootId,
+      });
+      await refreshAll();
+    },
+    [client, refreshAll],
+  );
+
   return {
     projects: query.data ?? [],
     projectsSupported,
@@ -103,6 +127,8 @@ export function useProjects() {
     deleteProject,
     attachFilesystemRoot,
     createConversation,
+    moveConversationToProject,
+    removeProjectRoot,
     canAttachFilesystemRoot: Boolean(shellBridge()?.pickOpenFile),
   };
 }

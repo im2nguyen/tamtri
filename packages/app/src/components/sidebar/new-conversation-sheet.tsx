@@ -1,9 +1,10 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Modal, Pressable, ScrollView, Text, View } from "react-native";
 
 import { Button } from "@/components/ui/button";
+import { useReadiness } from "@/hooks/use-readiness";
 import { useAgents, type AgentRosterEntry, type ModelEntry } from "@/hooks/use-agents";
-import { theme } from "@/styles/theme";
+import { useTheme } from "@/styles/use-theme";
 
 interface NewConversationSheetProps {
   visible: boolean;
@@ -20,6 +21,7 @@ function SelectRow({
   selected: boolean;
   onPress: () => void;
 }) {
+  const theme = useTheme();
   return (
     <Pressable
       onPress={onPress}
@@ -42,7 +44,16 @@ function SelectRow({
 }
 
 export function NewConversationSheet({ visible, onClose, onCreate }: NewConversationSheetProps) {
+  const theme = useTheme();
   const { agents, loading, loadModels } = useAgents();
+  const { readyEntries, readyCount, loading: readinessLoading } = useReadiness();
+  const pickableAgents = useMemo(
+    () =>
+      readyCount > 0
+        ? agents.filter((agent) => readyEntries.some((entry) => entry.id === agent.id))
+        : agents,
+    [agents, readyCount, readyEntries],
+  );
   const [selectedAgent, setSelectedAgent] = useState<AgentRosterEntry | null>(null);
   const [models, setModels] = useState<ModelEntry[]>([]);
   const [selectedModel, setSelectedModel] = useState<ModelEntry | null>(null);
@@ -56,10 +67,10 @@ export function NewConversationSheet({ visible, onClose, onCreate }: NewConversa
       setSelectedModel(null);
       return;
     }
-    if (agents.length > 0 && !selectedAgent) {
-      setSelectedAgent(agents[0] ?? null);
+    if (pickableAgents.length > 0 && !selectedAgent) {
+      setSelectedAgent(pickableAgents[0] ?? null);
     }
-  }, [visible, agents, selectedAgent]);
+  }, [visible, pickableAgents, selectedAgent]);
 
   useEffect(() => {
     if (!selectedAgent) return;
@@ -111,18 +122,22 @@ export function NewConversationSheet({ visible, onClose, onCreate }: NewConversa
             New conversation
           </Text>
           <Text style={{ color: theme.colors.foregroundMuted, fontSize: theme.fontSize.sm }}>
-            Choose harness and model. To switch later, fork the conversation.
+            Choose an agent app and model. Switch agent apps by forking; some agents let you change model from the composer.
           </Text>
 
           <View style={{ gap: theme.spacing[2] }}>
             <Text style={{ color: theme.colors.foregroundMuted, fontSize: theme.fontSize.xs, fontWeight: "600" }}>
-              HARNESS
+              AGENT APP
             </Text>
-            {loading ? (
-              <Text style={{ color: theme.colors.foregroundMuted }}>Loading agents…</Text>
+            {loading || readinessLoading ? (
+              <Text style={{ color: theme.colors.foregroundMuted }}>Loading agent apps…</Text>
+            ) : pickableAgents.length === 0 ? (
+              <Text style={{ color: theme.colors.foregroundMuted }}>
+                No agent apps are ready. Open Agents & providers to install one.
+              </Text>
             ) : (
               <ScrollView style={{ maxHeight: 160 }} contentContainerStyle={{ gap: theme.spacing[2] }}>
-                {agents.map((agent) => (
+                {pickableAgents.map((agent) => (
                   <SelectRow
                     key={agent.id}
                     label={agent.display_name}
