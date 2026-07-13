@@ -1,4 +1,5 @@
 import { useRouter } from "expo-router";
+import { useMemo } from "react";
 import { Text, View, Pressable } from "react-native";
 
 import { ProjectRow } from "@/components/sidebar/project-row";
@@ -40,6 +41,10 @@ export function ProjectSidebar({
   const setSelectedProject = useUiStore((state) => state.setSelectedProject);
   const beginProjectDraft = useUiStore((state) => state.beginProjectDraft);
   const clearProjectDraft = useUiStore((state) => state.clearProjectDraft);
+  const expandedProjectIdSet = useMemo(
+    () => new Set(expandedProjectIds),
+    [expandedProjectIds],
+  );
 
   if (nodes.length === 0) {
     return (
@@ -59,7 +64,7 @@ export function ProjectSidebar({
   return (
     <View style={{ gap: theme.spacing[1] }}>
       {nodes.map((node) => {
-        const expanded = expandedProjectIds.includes(node.id);
+        const expanded = expandedProjectIdSet.has(node.id);
         const selected = selectedProjectId === node.id;
         return (
           <ProjectRow
@@ -109,7 +114,7 @@ export function ProjectSidebar({
                   style={{
                     flex: 1,
                     color: theme.colors.foregroundMuted,
-                    fontSize: 11,
+                    fontSize: theme.fontSize.xs,
                     fontFamily: theme.fontFamily.mono,
                   }}
                 >
@@ -121,7 +126,7 @@ export function ProjectSidebar({
                     accessibilityLabel={`Remove root ${root.name}`}
                     onPress={() => void onRemoveRoot(node.id, root.id)}
                   >
-                    <Text style={{ color: theme.colors.destructive, fontSize: 11 }}>Remove</Text>
+                    <Text style={{ color: theme.colors.destructive, fontSize: theme.fontSize.xs }}>Remove</Text>
                   </Pressable>
                 ) : null}
               </View>
@@ -144,7 +149,7 @@ export function ProjectSidebar({
               <Text
                 style={{
                   color: theme.colors.foregroundMuted,
-                  fontSize: 11,
+                  fontSize: theme.fontSize.xs,
                   paddingLeft: theme.spacing[8],
                   paddingVertical: theme.spacing[1],
                 }}

@@ -44,6 +44,10 @@ interface ComposerProps {
   layout?: "docked" | "inline";
 }
 
+function isNewlineKeyIntent(shiftKey: boolean, altKey: boolean) {
+  return shiftKey || altKey;
+}
+
 export function Composer({
   onSend,
   onStop,
@@ -113,8 +117,6 @@ export function Composer({
   );
 
   const canSend = Boolean(text.trim()) && !disabled && !sending;
-
-  const isNewlineKeyIntent = (shiftKey: boolean, altKey: boolean) => shiftKey || altKey;
 
   const trySubmitFromKeyboard = () => {
     const value = text.trim();

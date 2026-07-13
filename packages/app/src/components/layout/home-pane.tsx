@@ -183,28 +183,32 @@ export function HomePane() {
       if (files.length === 0 && paths.length === 0) return;
       setAttaching(true);
       try {
-        for (const sourcePath of paths) {
-          await client.request(method.WORKDIR_COPY_FILE, {
-            conversation_id: conversationId,
-            source_path: sourcePath,
-          });
-        }
-        for (const file of files) {
-          const electronPath = electronFilePath(file);
-          if (electronPath) {
-            await client.request(method.WORKDIR_COPY_FILE, {
+        await Promise.all(
+          paths.map((sourcePath) =>
+            client.request(method.WORKDIR_COPY_FILE, {
               conversation_id: conversationId,
-              source_path: electronPath,
+              source_path: sourcePath,
+            }),
+          ),
+        );
+        await Promise.all(
+          files.map(async (file) => {
+            const electronPath = electronFilePath(file);
+            if (electronPath) {
+              await client.request(method.WORKDIR_COPY_FILE, {
+                conversation_id: conversationId,
+                source_path: electronPath,
+              });
+              return;
+            }
+            const buffer = new Uint8Array(await file.arrayBuffer());
+            await client.request(method.WORKDIR_WRITE_FILE, {
+              conversation_id: conversationId,
+              filename: file.name,
+              data_base64: encodeBase64(buffer),
             });
-            continue;
-          }
-          const buffer = new Uint8Array(await file.arrayBuffer());
-          await client.request(method.WORKDIR_WRITE_FILE, {
-            conversation_id: conversationId,
-            filename: file.name,
-            data_base64: encodeBase64(buffer),
-          });
-        }
+          }),
+        );
       } finally {
         setAttaching(false);
       }

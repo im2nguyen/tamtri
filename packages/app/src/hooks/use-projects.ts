@@ -23,7 +23,7 @@ export function useProjects() {
 
   const refreshAll = useCallback(async () => {
     await queryClient.invalidateQueries({ queryKey });
-  }, [queryClient, serverInfo.server_id]);
+  }, [queryClient, queryKey]);
 
   const createProject = useCallback(
     async (name: string) => {

@@ -38,14 +38,14 @@ export function useWorkdir(conversationId: string | undefined) {
   const attachPaths = useCallback(
     async (paths: string[]) => {
       if (!conversationId || paths.length === 0) return [];
-      const attached: string[] = [];
-      for (const sourcePath of paths) {
-        const name = await client.request<string>(method.WORKDIR_COPY_FILE, {
-          conversation_id: conversationId,
-          source_path: sourcePath,
-        });
-        attached.push(name);
-      }
+      const attached = await Promise.all(
+        paths.map((sourcePath) =>
+          client.request<string>(method.WORKDIR_COPY_FILE, {
+            conversation_id: conversationId,
+            source_path: sourcePath,
+          }),
+        ),
+      );
       await refresh();
       return attached;
     },
@@ -55,25 +55,23 @@ export function useWorkdir(conversationId: string | undefined) {
   const attachBrowserFiles = useCallback(
     async (browserFiles: File[]) => {
       if (!conversationId || browserFiles.length === 0) return [];
-      const attached: string[] = [];
-      for (const file of browserFiles) {
-        const electronPath = electronFilePath(file);
-        if (electronPath) {
-          const name = await client.request<string>(method.WORKDIR_COPY_FILE, {
+      const attached = await Promise.all(
+        browserFiles.map(async (file) => {
+          const electronPath = electronFilePath(file);
+          if (electronPath) {
+            return client.request<string>(method.WORKDIR_COPY_FILE, {
+              conversation_id: conversationId,
+              source_path: electronPath,
+            });
+          }
+          const buffer = new Uint8Array(await file.arrayBuffer());
+          return client.request<string>(method.WORKDIR_WRITE_FILE, {
             conversation_id: conversationId,
-            source_path: electronPath,
+            filename: file.name,
+            data_base64: encodeBase64(buffer),
           });
-          attached.push(name);
-          continue;
-        }
-        const buffer = new Uint8Array(await file.arrayBuffer());
-        const name = await client.request<string>(method.WORKDIR_WRITE_FILE, {
-          conversation_id: conversationId,
-          filename: file.name,
-          data_base64: encodeBase64(buffer),
-        });
-        attached.push(name);
-      }
+        }),
+      );
       await refresh();
       return attached;
     },
