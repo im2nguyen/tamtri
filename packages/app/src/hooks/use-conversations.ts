@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { method, type ConversationSummaryDto } from "@tamtri/protocol";
 
+import { subscribeConversationListInvalidation } from "@/hooks/conversation-list-invalidation";
 import { useDaemon } from "@/runtime/daemon-provider";
 
 export function useConversationList() {
@@ -23,6 +24,12 @@ export function useConversationList() {
 
   useEffect(() => {
     void refresh();
+  }, [refresh]);
+
+  useEffect(() => {
+    return subscribeConversationListInvalidation(() => {
+      void refresh();
+    });
   }, [refresh]);
 
   useEffect(() => {

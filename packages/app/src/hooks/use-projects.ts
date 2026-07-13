@@ -3,6 +3,7 @@ import { useCallback } from "react";
 import { method, type ConversationDto, type ProjectDto, type RootDto } from "@tamtri/protocol";
 
 import { shellBridge } from "@/lib/shell";
+import { invalidateConversationList } from "@/hooks/conversation-list-invalidation";
 import { useDaemon } from "@/runtime/daemon-provider";
 
 export function useProjects() {
@@ -28,6 +29,7 @@ export function useProjects() {
     async (name: string) => {
       const project = await client.request<ProjectDto>(method.PROJECT_CREATE, { name });
       await refreshAll();
+      invalidateConversationList();
       return project;
     },
     [client, refreshAll],
@@ -37,6 +39,7 @@ export function useProjects() {
     async (id: string, name: string) => {
       const project = await client.request<ProjectDto>(method.PROJECT_UPDATE, { id, name });
       await refreshAll();
+      invalidateConversationList();
       return project;
     },
     [client, refreshAll],
@@ -46,6 +49,7 @@ export function useProjects() {
     async (id: string) => {
       await client.request(method.PROJECT_DELETE, { id });
       await refreshAll();
+      invalidateConversationList();
     },
     [client, refreshAll],
   );
@@ -65,6 +69,7 @@ export function useProjects() {
         scope: "conversation",
       });
       await refreshAll();
+      invalidateConversationList();
       return root;
     },
     [client, refreshAll],
