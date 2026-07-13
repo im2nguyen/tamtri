@@ -4,26 +4,31 @@
   "private": true,
   "description": "Model-agnostic agent UI shell. Rust daemon + shared TypeScript surfaces (Electron desktop, web, Expo mobile).",
   "license": "AGPL-3.0-or-later",
-  "workspaces": [
-    "packages/protocol",
-    "packages/client",
-    "packages/relay",
-    "packages/app",
-    "packages/desktop"
-  ],
+  "packageManager": "pnpm@9.12.3",
   "scripts": {
-    "typecheck": "npm run typecheck --workspaces --if-present",
-    "build": "npm run build --workspaces --if-present",
-    "protocol:generate": "npm run generate --workspace @tamtri/protocol",
+    "typecheck": "pnpm -r --if-present run typecheck",
+    "build": "pnpm -r --if-present run build",
+    "protocol:generate": "pnpm --filter @tamtri/protocol run generate",
     "daemon:build": "cargo build -p tamtri-daemon",
     "daemon:run": "cargo run -p tamtri-daemon",
-    "app:web": "npm run web --workspace @tamtri/app",
+    "app:web": "pnpm --filter @tamtri/app run web",
+    "dev": "node scripts/dev.mjs",
     "dev:web": "node scripts/dev-web.mjs",
     "dev:desktop": "node scripts/dev-desktop.mjs",
-    "desktop:dev": "TAMTRI_USE_DEV_SERVER=1 npm run start --workspace @tamtri/desktop",
-    "desktop:build": "npm run build --workspace @tamtri/desktop"
+    "dev:ios": "node scripts/dev-ios.mjs",
+    "smoke:connection": "node scripts/connection-smoke.mjs",
+    "desktop:dev": "TAMTRI_USE_DEV_SERVER=1 pnpm --filter @tamtri/desktop run start",
+    "desktop:build": "pnpm --filter @tamtri/desktop run build"
   },
   "devDependencies": {
-    "typescript": "^5.8.3"
+    "typescript": "5.9.3"
+  },
+  "pnpm": {
+    "overrides": {
+      "react": "19.1.0",
+      "react-dom": "19.1.0",
+      "react-native": "0.81.5",
+      "typescript": "5.9.3"
+    }
   }
 }
