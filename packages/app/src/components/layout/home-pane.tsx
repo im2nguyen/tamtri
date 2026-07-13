@@ -5,8 +5,6 @@ import { ActivityIndicator, Pressable, Text, useWindowDimensions, View } from "r
 import { method } from "@tamtri/protocol";
 
 import { Composer } from "@/components/composer/composer";
-import { HarnessPickerSheet } from "@/components/composer/harness-picker-sheet";
-import { ModelPickerSheet } from "@/components/composer/model-picker-sheet";
 import { shortModelLabel } from "@/components/composer/composer-chip";
 import { TitlebarDragRegion } from "@/components/desktop/titlebar-drag-region";
 import { Button } from "@/components/ui/button";
@@ -54,8 +52,6 @@ export function HomePane() {
   const [pendingFiles, setPendingFiles] = useState<File[]>([]);
   const [pendingPaths, setPendingPaths] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
-  const [harnessPickerOpen, setHarnessPickerOpen] = useState(false);
-  const [modelPickerOpen, setModelPickerOpen] = useState(false);
   const [selectedHarnessId, setSelectedHarnessId] = useState<string | undefined>();
   const [selectedModelId, setSelectedModelId] = useState<string | undefined>();
   const [modelDisplayName, setModelDisplayName] = useState<string | undefined>();
@@ -387,8 +383,9 @@ export function HomePane() {
             harnessDisplayName={harnessDisplayName}
             modelId={selectedModelId}
             modelDisplayName={modelDisplayName}
-            onOpenHarnessPicker={() => setHarnessPickerOpen(true)}
-            onOpenModelPicker={() => setModelPickerOpen(true)}
+            runtimeModelSwitch
+            onHarnessSelect={handleHarnessSelect}
+            onModelSelect={handleModelSelect}
           />
         )}
 
@@ -398,19 +395,6 @@ export function HomePane() {
 
       </View>
 
-      <HarnessPickerSheet
-        visible={harnessPickerOpen}
-        currentHarnessId={selectedHarnessId}
-        onClose={() => setHarnessPickerOpen(false)}
-        onSelect={handleHarnessSelect}
-      />
-      <ModelPickerSheet
-        visible={modelPickerOpen}
-        harnessId={selectedHarnessId}
-        currentModelId={selectedModelId}
-        onClose={() => setModelPickerOpen(false)}
-        onSelect={handleModelSelect}
-      />
     </View>
   );
 }

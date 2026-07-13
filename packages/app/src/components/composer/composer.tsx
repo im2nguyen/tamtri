@@ -15,7 +15,7 @@ import {
   buildDefaultAttachmentItems,
   ComposerAttachmentMenu,
 } from "@/components/composer/composer-attachment-menu";
-import { ComposerControls } from "@/components/composer/composer-controls";
+import { ComposerConfigMenu, ComposerPermissionChip } from "@/components/composer/composer-config-menu";
 import { MAX_CONTENT_WIDTH } from "@/constants/layout";
 import { useTheme } from "@/styles/use-theme";
 
@@ -39,8 +39,8 @@ interface ComposerProps {
   runtimeModelSwitch?: boolean;
   controlsDisabled?: boolean;
   onForkRequest?: () => void;
-  onOpenHarnessPicker?: () => void;
-  onOpenModelPicker?: () => void;
+  onHarnessSelect?: (harnessId: string) => void;
+  onModelSelect?: (modelId: string) => Promise<void>;
   layout?: "docked" | "inline";
 }
 
@@ -68,8 +68,8 @@ export function Composer({
   runtimeModelSwitch,
   controlsDisabled,
   onForkRequest,
-  onOpenHarnessPicker,
-  onOpenModelPicker,
+  onHarnessSelect,
+  onModelSelect,
   layout = "docked",
 }: ComposerProps) {
   const theme = useTheme();
@@ -233,7 +233,11 @@ export function Composer({
             }}
           >
             <ComposerAttachmentMenu disabled={disabled} attaching={attaching} items={attachmentMenuItems} />
-            <ComposerControls
+            <ComposerPermissionChip />
+          </View>
+
+          <View style={{ flexDirection: "row", alignItems: "center", gap: theme.spacing[1] }}>
+            <ComposerConfigMenu
               harnessId={harnessId}
               harnessDisplayName={harnessDisplayName}
               modelId={modelId}
@@ -241,13 +245,10 @@ export function Composer({
               activeMode={activeMode}
               runtimeModelSwitch={runtimeModelSwitch}
               controlsDisabled={controlsDisabled}
+              onHarnessSelect={onHarnessSelect}
+              onModelSelect={onModelSelect}
               onForkRequest={onForkRequest}
-              onOpenHarnessPicker={onOpenHarnessPicker}
-              onOpenModelPicker={onOpenModelPicker}
             />
-          </View>
-
-          <View style={{ flexDirection: "row", alignItems: "center", gap: theme.spacing[1] }}>
             <Pressable
               disabled
               accessibilityLabel="Voice input coming soon"
