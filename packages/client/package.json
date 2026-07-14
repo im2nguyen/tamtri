@@ -14,8 +14,9 @@
     "test": "node --import tsx --test test/*.test.ts"
   },
   "dependencies": {
-    "@tamtri/protocol": "*",
-    "@tamtri/relay": "*"
+    "@tamtri/protocol": "workspace:*",
+    "@tamtri/relay": "workspace:*",
+    "base64-js": "^1.5.1"
   },
   "devDependencies": {
     "@types/node": "^26.1.1",

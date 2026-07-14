@@ -1,5 +1,7 @@
 use std::path::Path;
 
+use crate::CoreError;
+use crate::Result;
 use crate::harness::acp::{AdapterKind, AgentLaunchSpec};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -19,21 +21,30 @@ pub struct HarnessHealthEntry {
 }
 
 pub fn probe_agent_launch_spec(spec: &AgentLaunchSpec) -> HarnessHealthStatus {
+    probe_agent_launch_spec_result(spec).unwrap_or(HarnessHealthStatus::Unknown)
+}
+
+pub fn probe_agent_launch_spec_result(spec: &AgentLaunchSpec) -> Result<HarnessHealthStatus> {
     let command = Path::new(&spec.command);
     if command.is_absolute() {
-        if command.is_file() {
-            return if is_executable(command) {
-                HarnessHealthStatus::Ready
-            } else {
-                HarnessHealthStatus::Unknown
-            };
+        match command.metadata() {
+            Ok(meta) if meta.is_file() => {
+                if is_executable(command) {
+                    Ok(HarnessHealthStatus::Ready)
+                } else {
+                    Ok(HarnessHealthStatus::Unknown)
+                }
+            }
+            Ok(_) => Ok(HarnessHealthStatus::Missing),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                Ok(HarnessHealthStatus::Missing)
+            }
+            Err(err) => Err(CoreError::Io(err)),
         }
-        return HarnessHealthStatus::Missing;
-    }
-    if which_command(&spec.command).is_some() {
-        HarnessHealthStatus::Ready
+    } else if which_command(&spec.command).is_some() {
+        Ok(HarnessHealthStatus::Ready)
     } else {
-        HarnessHealthStatus::Missing
+        Ok(HarnessHealthStatus::Missing)
     }
 }
 
@@ -44,6 +55,8 @@ pub fn install_doc_url(agent_id: &str) -> &'static str {
         "codex-native" => "https://developers.openai.com/codex",
         "goose" | "goose-acp" => "https://block.github.io/goose/docs/getting-started/installation/",
         "hermes" | "hermes-acp" => "https://github.com/NousResearch/hermes-agent",
+        "opencode" | "opencode-acp" | "opencode-native" => "https://opencode.ai/docs",
+        "pi" | "pi-acp" | "pi-native" => "https://github.com/badlogic/pi-mono",
         "mock-acp" => "https://github.com/tamtri/tamtri/tree/main/fixtures/mock-acp-agent",
         _ => "https://agentclientprotocol.com",
     }
@@ -53,8 +66,10 @@ pub fn it_admin_checklist(entries: &[HarnessHealthEntry]) -> String {
     let mut lines = vec![
         "tamtri harness setup checklist".to_string(),
         String::new(),
-        "Install at least one ACP-capable agent and confirm tamtri can find its binary.".to_string(),
-        "Gateway MCP servers live in <vault>/config.json; credentials stay in the daemon store.".to_string(),
+        "Install at least one ACP-capable agent and confirm tamtri can find its binary."
+            .to_string(),
+        "Gateway MCP servers live in <vault>/config.json; credentials stay in the daemon store."
+            .to_string(),
         String::new(),
         "Configured agents:".to_string(),
     ];
@@ -80,6 +95,7 @@ pub fn discover_known_agents() -> Vec<AgentLaunchSpec> {
             args: vec!["acp".into()],
             env: Vec::new(),
             adapter: AdapterKind::default(),
+            enabled: true,
         });
     }
     if let Some(command) = which_command("claude") {
@@ -90,6 +106,7 @@ pub fn discover_known_agents() -> Vec<AgentLaunchSpec> {
             args: Vec::new(),
             env: Vec::new(),
             adapter: AdapterKind::ClaudeNative,
+            enabled: true,
         });
         found.push(AgentLaunchSpec {
             id: "claude-code-acp".into(),
@@ -98,6 +115,7 @@ pub fn discover_known_agents() -> Vec<AgentLaunchSpec> {
             args: vec!["acp".into()],
             env: Vec::new(),
             adapter: AdapterKind::default(),
+            enabled: true,
         });
     }
     if let Some(command) = which_command("codex") {
@@ -108,6 +126,7 @@ pub fn discover_known_agents() -> Vec<AgentLaunchSpec> {
             args: vec!["app-server".into()],
             env: Vec::new(),
             adapter: AdapterKind::CodexNative,
+            enabled: true,
         });
     }
     if which_command("goose").is_some() {
@@ -118,6 +137,49 @@ pub fn discover_known_agents() -> Vec<AgentLaunchSpec> {
             args: Vec::new(),
             env: Vec::new(),
             adapter: AdapterKind::default(),
+            enabled: true,
+        });
+    }
+    if which_command("opencode").is_some() {
+        found.push(AgentLaunchSpec {
+            id: "opencode-native".into(),
+            display_name: "OpenCode".into(),
+            command: "opencode".into(),
+            args: vec!["serve".into()],
+            env: Vec::new(),
+            adapter: AdapterKind::OpenCodeNative,
+            enabled: true,
+        });
+        found.push(AgentLaunchSpec {
+            id: "opencode-acp".into(),
+            display_name: "OpenCode (ACP)".into(),
+            command: "opencode".into(),
+            args: vec!["acp".into()],
+            env: Vec::new(),
+            adapter: AdapterKind::default(),
+            enabled: true,
+        });
+    }
+    if which_command("pi").is_some() {
+        found.push(AgentLaunchSpec {
+            id: "pi-native".into(),
+            display_name: "Pi".into(),
+            command: "pi".into(),
+            args: Vec::new(),
+            env: Vec::new(),
+            adapter: AdapterKind::PiNative,
+            enabled: true,
+        });
+    }
+    if which_command("pi-acp").is_some() {
+        found.push(AgentLaunchSpec {
+            id: "pi-acp".into(),
+            display_name: "Pi (ACP)".into(),
+            command: "pi-acp".into(),
+            args: Vec::new(),
+            env: Vec::new(),
+            adapter: AdapterKind::default(),
+            enabled: true,
         });
     }
     found
@@ -136,6 +198,26 @@ fn resolve_hermes_command() -> Option<String> {
         }
     }
     which_command("hermes").map(|path| path.to_string_lossy().into_owned())
+}
+
+pub fn adapter_type_label(kind: &AdapterKind) -> &'static str {
+    match kind {
+        AdapterKind::Acp => "acp",
+        AdapterKind::ClaudeNative
+        | AdapterKind::CodexNative
+        | AdapterKind::OpenCodeNative
+        | AdapterKind::PiNative => "native",
+    }
+}
+
+pub fn adapter_kind_label(kind: &AdapterKind) -> &'static str {
+    match kind {
+        AdapterKind::Acp => "acp",
+        AdapterKind::ClaudeNative => "claude_native",
+        AdapterKind::CodexNative => "codex_native",
+        AdapterKind::OpenCodeNative => "opencode_native",
+        AdapterKind::PiNative => "pi_native",
+    }
 }
 
 pub fn health_entries_from_roster(roster: &[AgentLaunchSpec]) -> Vec<HarnessHealthEntry> {
@@ -178,6 +260,9 @@ fn is_executable(path: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    static ENV_TEST_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn harness_health_detects_missing_ready_and_unknown() {
@@ -187,7 +272,8 @@ mod tests {
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&ready_path, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+            std::fs::set_permissions(&ready_path, std::fs::Permissions::from_mode(0o755))
+                .expect("chmod");
         }
 
         assert_eq!(
@@ -198,6 +284,7 @@ mod tests {
                 args: Vec::new(),
                 env: Vec::new(),
                 adapter: AdapterKind::default(),
+                enabled: true,
             }),
             HarnessHealthStatus::Ready
         );
@@ -209,6 +296,7 @@ mod tests {
                 args: Vec::new(),
                 env: Vec::new(),
                 adapter: AdapterKind::default(),
+                enabled: true,
             }),
             HarnessHealthStatus::Missing
         );
@@ -231,13 +319,15 @@ mod tests {
 
     #[test]
     fn discover_known_agents_finds_hermes_at_known_path() {
+        let _guard = ENV_TEST_LOCK.lock().expect("env lock");
         let temp = tempfile::tempdir().expect("tempdir");
         let hermes_path = temp.path().join("hermes");
         std::fs::write(&hermes_path, b"#!/bin/sh\n").expect("write");
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&hermes_path, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+            std::fs::set_permissions(&hermes_path, std::fs::Permissions::from_mode(0o755))
+                .expect("chmod");
         }
         let home = temp.path().join("home");
         std::fs::create_dir_all(home.join(".local/bin")).expect("mkdir");
@@ -261,5 +351,110 @@ mod tests {
                 .iter()
                 .any(|spec| spec.id == "hermes-acp" && spec.args == vec!["acp".to_string()])
         );
+    }
+
+    #[test]
+    fn install_doc_url_known_agents() {
+        assert!(install_doc_url("opencode-native").contains("opencode.ai"));
+        assert!(install_doc_url("pi-native").contains("pi-mono"));
+    }
+
+    #[test]
+    fn discover_known_agents_finds_opencode_on_path() {
+        let _guard = ENV_TEST_LOCK.lock().expect("env lock");
+        let temp = tempfile::tempdir().expect("tempdir");
+        let opencode_path = temp.path().join("opencode");
+        std::fs::write(&opencode_path, b"#!/bin/sh\n").expect("write");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&opencode_path, std::fs::Permissions::from_mode(0o755))
+                .expect("chmod");
+        }
+        let previous_path = std::env::var_os("PATH");
+        unsafe {
+            std::env::set_var("PATH", temp.path());
+        }
+        let discovered = discover_known_agents();
+        if let Some(value) = previous_path {
+            unsafe {
+                std::env::set_var("PATH", value);
+            }
+        } else {
+            unsafe {
+                std::env::remove_var("PATH");
+            }
+        }
+        assert!(discovered.iter().any(|spec| {
+            spec.id == "opencode-native"
+                && spec.command == "opencode"
+                && spec.adapter == AdapterKind::OpenCodeNative
+        }));
+        assert!(discovered.iter().any(|spec| {
+            spec.id == "opencode-acp"
+                && spec.command == "opencode"
+                && spec.args == vec!["acp".to_string()]
+        }));
+    }
+
+    #[test]
+    fn discover_known_agents_finds_pi_native_on_path() {
+        let _guard = ENV_TEST_LOCK.lock().expect("env lock");
+        let temp = tempfile::tempdir().expect("tempdir");
+        let pi_path = temp.path().join("pi");
+        std::fs::write(&pi_path, b"#!/bin/sh\n").expect("write");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&pi_path, std::fs::Permissions::from_mode(0o755))
+                .expect("chmod");
+        }
+        let previous_path = std::env::var_os("PATH");
+        unsafe {
+            std::env::set_var("PATH", temp.path());
+        }
+        let discovered = discover_known_agents();
+        if let Some(value) = previous_path {
+            unsafe {
+                std::env::set_var("PATH", value);
+            }
+        } else {
+            unsafe {
+                std::env::remove_var("PATH");
+            }
+        }
+        assert!(discovered.iter().any(|spec| {
+            spec.id == "pi-native" && spec.command == "pi" && spec.adapter == AdapterKind::PiNative
+        }));
+    }
+
+    #[test]
+    fn discover_known_agents_skips_pi_acp_without_bridge() {
+        let _guard = ENV_TEST_LOCK.lock().expect("env lock");
+        let temp = tempfile::tempdir().expect("tempdir");
+        let pi_path = temp.path().join("pi");
+        std::fs::write(&pi_path, b"#!/bin/sh\n").expect("write");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&pi_path, std::fs::Permissions::from_mode(0o755))
+                .expect("chmod");
+        }
+        let previous_path = std::env::var_os("PATH");
+        unsafe {
+            std::env::set_var("PATH", temp.path());
+        }
+        let discovered = discover_known_agents();
+        if let Some(value) = previous_path {
+            unsafe {
+                std::env::set_var("PATH", value);
+            }
+        } else {
+            unsafe {
+                std::env::remove_var("PATH");
+            }
+        }
+        assert!(discovered.iter().any(|spec| spec.id == "pi-native"));
+        assert!(!discovered.iter().any(|spec| spec.id == "pi-acp"));
     }
 }

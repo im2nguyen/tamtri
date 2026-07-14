@@ -40,10 +40,38 @@ Notable groups:
 
 | Domain | Examples |
 |--------|----------|
-| Conversations | `conversation.create`, `conversation.load`, `conversation.send_message` |
-| Gateway | `gateway.set_credential`, `gateway.start_oauth`, `gateway.complete_oauth` |
-| Relay | `relay.pairing_offer` |
+| Conversations | `conversation.create`, `conversation.load`, `conversation.send_message`, `conversation.fork`, `conversation.export_bundle`, `conversation.import` |
+| Projects | `project.list`, `project.create`, `project.update`, `project.delete`, `project.root_attach`, `project.root_remove`, `project.conversation_create`, `conversation.move_project` |
+| Run control | `run.cancel`, `permission.respond`, `elicitation.respond`, `task.cancel` |
+| Harness roster | `agents.list`, `agents.models`, `harness.providers_list`, `harness.roster_set_enabled`, `harness.roster_add`, `harness.health_list`, `harness.health_checklist`, `harness.usage_list` |
+| Workdir & artifacts | `workdir.write_file`, `workdir.copy_file`, `attachment.read_verified`, `artifact.verify_inline` |
+| Gateway | `gateway.list_servers`, `gateway.set_credential`, `gateway.start_oauth`, `gateway.complete_oauth` |
+| MCP Apps | `app.resolve_template`, `app.submit_bridge_request`, `app.respond_bridge_consent` |
+| Roots | `roots.attach`, `roots.list`, `roots.sync_runtime` |
+| Search | `search.conversations`, `search.scope_message` |
+| Orchestration | `recipes.list`, `orchestration.run`, `orchestration.status`, `orchestration.cancel` |
 | Sessions | `sessions.list_native`, `sessions.import` |
+| Vault & diagnostics | `vault.issues`, `vault.path`, `diagnostics.write_bundle` |
+| Relay | `relay.pairing_offer` |
+
+## Projects
+
+Project support is advertised by `ServerInfo.features.projects`. Project methods return `ProjectDto` records with `id`, `name`, timestamps, and shared `RootDto` values.
+
+| Method | Params | Result and behavior |
+|--------|--------|---------------------|
+| `project.list` | none | `ProjectDto[]`, including the stable Unfiled record |
+| `project.create` | `{ name }` | Creates and returns a `ProjectDto`; names are trimmed and cannot be empty |
+| `project.update` | `{ id, name }` | Renames and returns the project; Unfiled is immutable |
+| `project.delete` | `{ id }` | Returns `null`; clears member conversations to Unfiled before deleting the project |
+| `project.root_attach` | `{ project_id, name, uri, kind, scope }` | Returns a `RootDto` with `origin: "project"` |
+| `project.root_remove` | `{ project_id, root_id }` | Returns `null` after removing the shared root |
+| `project.conversation_create` | `{ project_id, title, harness_id, model_id }` | Creates and returns a `ConversationDto` in that project |
+| `conversation.move_project` | `{ conversation_id, project_id }` | Returns the updated `ConversationDto`; transcript and files are unchanged |
+
+`ConversationDto` and `ConversationSummaryDto` expose optional `project_id` plus `kind`. The daemon projects missing stored membership to the stable Unfiled id in DTOs without rewriting metadata. Passing that id to create/move stores no `project_id`, preserving the legible legacy representation. Unknown project or conversation ids return typed JSON-RPC errors.
+
+Shared roots are resolved at run time as project roots followed by conversation roots, deduplicated by kind and URI. Export removes `project_id` and snapshots effective roots; inherited roots use `origin: "project_snapshot"` so bundles never reference a source-vault project.
 
 ## Credentials
 
@@ -64,5 +92,5 @@ OAuth callback completion runs in the daemon via `gateway.complete_oauth`.
 Regenerate TS types after Rust protocol changes:
 
 ```bash
-npm run protocol:generate
+pnpm run protocol:generate
 ```

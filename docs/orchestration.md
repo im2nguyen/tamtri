@@ -68,9 +68,25 @@ Gated by `ServerInfo.features.orchestration`.
 |--------|---------|
 | `recipes.list` | List recipe summaries |
 | `recipes.load` | Load full recipe JSON (`recipe_json`) |
-| `orchestration.run` | Execute a recipe synchronously; returns run DTO |
+| `orchestration.run` | Start a recipe in the background; returns run DTO with `status: "running"` |
 | `orchestration.status` | Load run `meta.json` |
 | `orchestration.cancel` | Cancel the active harness run and mark run cancelled |
+
+### Async execution
+
+When the daemon has installed a shared `TamtriCore` (`TamtriCore::install_shared`), `orchestration.run` returns immediately with `status: "running"`. The engine executes the recipe on a background task. Progress is pushed on the source conversation's UiEvent stream:
+
+| UiEvent kind | Payload |
+|--------------|---------|
+| `orchestration_started` | `run_id`, `recipe_id`, `source_conversation_id` |
+| `orchestration_step_started` | `run_id`, `step_index`, `step_type` |
+| `orchestration_forked` | `run_id`, `conversation_id`, `harness_id`, `model_id` |
+| `orchestration_branch_completed` | `run_id`, `conversation_id`, `reason` |
+| `orchestration_finished` | full run DTO under `run` |
+
+Poll `orchestration.status` for the latest snapshot. Cancel via `orchestration.cancel` (sets an atomic on the run handle and cancels the active harness turn).
+
+Without a shared core (unit tests without the daemon), `orchestration.run` falls back to synchronous execution.
 
 ### Example: handoff
 
@@ -92,6 +108,21 @@ Gated by `ServerInfo.features.orchestration`.
 }
 ```
 
+## Agent MCP tools (gateway)
+
+During an active harness run, the gateway sets `agent_context` on the conversation. When orchestration is enabled for that context, tamtri prepends native tools on `tools/list`:
+
+| Exposed name | Purpose | Consent |
+|--------------|---------|---------|
+| `tamtri__orchestration_run` | Start a background recipe from the current conversation | Yes |
+| `tamtri__orchestration_status` | Read run status by `run_id` | No |
+| `tamtri__orchestration_cancel` | Cancel a running orchestration | Yes |
+| `tamtri__orchestration_handoff` | Shortcut for the handoff recipe (`harness_id`, `model_id`, `message`) | Yes |
+
+Calls route through the gateway like any downstream tool. Consent-gated tools emit a `permission_requested` UiEvent (same shape as harness permissions). The user responds via `permission.respond`; orchestration consents are resolved before harness permission handlers run. Each routed call emits a `ToolRouted` audit event before execution.
+
+Native tools only appear when `agent_context.orchestration_enabled` is true (set when a harness run starts on a host with orchestration feature enabled).
+
 ## Primitives
 
 Orchestration composes existing conversation primitives:
@@ -102,15 +133,13 @@ Orchestration composes existing conversation primitives:
 
 Parallel steps register waiters for all forks, send all messages, then wait for all completions. Harness runs execute concurrently.
 
-## Exposure (current)
+## Exposure
 
-- **User-initiated:** wire methods above; shell UI ("run recipe") deferred to remaining UI workstream
-- **Agent-initiated:** MCP tools on the gateway surface deferred; all orchestration calls will use the same consent/audit path when added
+- **User-initiated:** wire methods above; shell run-recipe UI subscribes to orchestration UiEvents and polls status
+- **Agent-initiated:** gateway MCP tools above, consent/audit gated
 
 ## Deferred
 
-- Async `orchestration.run` (background job + event stream)
 - Condition edges beyond `TurnEndReason` (verifier schema output)
 - Schedule / cron triggers
-- Agent-facing MCP tools (`spawn_run`, `wait`, `handoff`)
 - Run-graph visualization in the shell

@@ -115,9 +115,7 @@ pub fn server_advertises_apps(capabilities: &ServerCapabilities) -> bool {
 }
 
 pub fn server_advertises_tasks(capabilities: &ServerCapabilities) -> bool {
-    capabilities
-        .tasks
-        .is_some()
+    capabilities.tasks.is_some()
         || capabilities
             .extensions
             .as_ref()
@@ -125,9 +123,7 @@ pub fn server_advertises_tasks(capabilities: &ServerCapabilities) -> bool {
 }
 
 pub fn server_advertises_roots(capabilities: &ServerCapabilities) -> bool {
-    capabilities
-        .roots
-        .is_some()
+    capabilities.roots.is_some()
         || capabilities
             .extensions
             .as_ref()
@@ -224,9 +220,7 @@ pub fn upstream_gateway_capabilities() -> ServerCapabilities {
     upstream_gateway_capabilities_for(TamtriFeatureSupport::current())
 }
 
-pub fn upstream_gateway_capabilities_for(
-    support: TamtriFeatureSupport,
-) -> ServerCapabilities {
+pub fn upstream_gateway_capabilities_for(support: TamtriFeatureSupport) -> ServerCapabilities {
     use super::protocol::{
         LoggingCapability, PromptsCapability, ResourcesCapability, RootsCapability, ToolsCapability,
     };
@@ -261,7 +255,7 @@ pub fn upstream_gateway_capabilities_for(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::mcp::protocol::{ToolsCapability};
+    use crate::mcp::protocol::ToolsCapability;
 
     #[test]
     fn rc_extension_capability_gate_marks_server_only() {

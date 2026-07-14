@@ -4,7 +4,7 @@
  * TypeScript DaemonClient over a live WebSocket, and drive the hello handshake
  * plus a conversation round-trip through the wire protocol.
  *
- * Run with: npm test --workspace @tamtri/client
+ * Run with: pnpm test --filter @tamtri/client
  */
 
 import assert from "node:assert/strict";

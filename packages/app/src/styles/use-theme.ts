@@ -1,7 +1,1 @@
-import { theme, type AppTheme } from "./theme";
-
-export function useTheme(): AppTheme {
-  return theme;
-}
-
-export { theme };
+export { useTheme, useResolvedColorScheme, ThemeProvider } from "./theme-context";

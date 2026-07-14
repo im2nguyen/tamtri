@@ -21,6 +21,7 @@ fn adapter_from_env() -> Option<ClaudeNativeAdapter> {
         args,
         env: Vec::new(),
         adapter: AdapterKind::ClaudeNative,
+        enabled: true,
     }))
 }
 

@@ -10,6 +10,16 @@ pub enum CoreError {
     Io(#[from] std::io::Error),
     #[error("conversation not found: {0}")]
     NotFound(Id),
+    #[error("project not found: {0}")]
+    ProjectNotFound(Id),
+    #[error("project already exists: {0}")]
+    ProjectAlreadyExists(Id),
+    #[error("project root not found: {0}")]
+    ProjectRootNotFound(String),
+    #[error("the Unfiled project cannot be changed or deleted")]
+    UnfiledProjectImmutable,
+    #[error("unsupported project schema version: {0}")]
+    UnsupportedProjectSchemaVersion(u32),
     #[error("malformed vault: {0}")]
     MalformedVault(String),
     #[error("conversation is being written by another process: {0}")]
@@ -18,6 +28,8 @@ pub enum CoreError {
     Protocol(String),
     #[error("json-rpc error {code}: {message}")]
     JsonRpc { code: i64, message: String },
+    #[error("example conversations are read-only: {0}")]
+    ExampleImmutable(Id),
     #[error("transport closed")]
     TransportClosed,
     #[error("request timed out: {method}")]

@@ -1,6 +1,7 @@
+import { useMemo } from "react";
 import { Pressable, Text, type PressableProps, type TextStyle, type ViewStyle } from "react-native";
 
-import { theme } from "@/styles/theme";
+import { useTheme } from "@/styles/use-theme";
 
 type ButtonVariant = "default" | "secondary" | "ghost" | "destructive";
 
@@ -10,26 +11,33 @@ interface ButtonProps extends PressableProps {
   compact?: boolean;
 }
 
-const variantStyles: Record<ButtonVariant, { container: ViewStyle; text: TextStyle }> = {
-  default: {
-    container: { backgroundColor: theme.colors.accent },
-    text: { color: theme.colors.accentForeground },
-  },
-  secondary: {
-    container: { backgroundColor: theme.colors.surface2, borderWidth: 1, borderColor: theme.colors.border },
-    text: { color: theme.colors.foreground },
-  },
-  ghost: {
-    container: { backgroundColor: "transparent" },
-    text: { color: theme.colors.foregroundMuted },
-  },
-  destructive: {
-    container: { backgroundColor: theme.colors.destructive },
-    text: { color: theme.colors.destructiveForeground },
-  },
-};
-
 export function Button({ label, variant = "default", compact, style, ...props }: ButtonProps) {
+  const theme = useTheme();
+  const variantStyles = useMemo(
+    (): Record<ButtonVariant, { container: ViewStyle; text: TextStyle }> => ({
+      default: {
+        container: { backgroundColor: theme.colors.accent },
+        text: { color: theme.colors.accentForeground },
+      },
+      secondary: {
+        container: {
+          backgroundColor: theme.colors.surface2,
+          borderWidth: 1,
+          borderColor: theme.colors.border,
+        },
+        text: { color: theme.colors.foreground },
+      },
+      ghost: {
+        container: { backgroundColor: "transparent" },
+        text: { color: theme.colors.foregroundMuted },
+      },
+      destructive: {
+        container: { backgroundColor: theme.colors.destructive },
+        text: { color: theme.colors.destructiveForeground },
+      },
+    }),
+    [theme],
+  );
   const styles = variantStyles[variant];
   return (
     <Pressable

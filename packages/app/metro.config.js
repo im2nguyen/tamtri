@@ -22,6 +22,19 @@ config.resolver.nodeModulesPaths = [
 config.resolver.disableHierarchicalLookup = true;
 
 config.resolver.resolveRequest = (context, moduleName, platform) => {
+  // Expo web resolves zustand's ESM entry (import.meta.env in middleware.mjs), which
+  // throws "Cannot use 'import.meta' outside a module" in the browser bundle.
+  if (moduleName === "zustand" || moduleName.startsWith("zustand/")) {
+    const subpath =
+      moduleName === "zustand"
+        ? "index.js"
+        : `${moduleName.slice("zustand/".length)}.js`;
+    const zustandPath = path.resolve(workspaceRoot, "node_modules/zustand", subpath);
+    if (fs.existsSync(zustandPath)) {
+      return { type: "sourceFile", filePath: zustandPath };
+    }
+  }
+
   const origin = context.originModulePath;
   if (
     origin &&

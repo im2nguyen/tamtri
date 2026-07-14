@@ -42,6 +42,71 @@ pub struct ConversationFork {
 
 #[typeshare]
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConversationMoveProject {
+    pub conversation_id: String,
+    pub project_id: String,
+}
+
+#[typeshare]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProjectCreate {
+    pub name: String,
+}
+
+#[typeshare]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProjectUpdate {
+    pub id: String,
+    pub name: String,
+}
+
+#[typeshare]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProjectDelete {
+    pub id: String,
+}
+
+#[typeshare]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProjectRootAttach {
+    pub project_id: String,
+    pub name: String,
+    pub uri: String,
+    pub kind: String,
+    pub scope: String,
+}
+
+#[typeshare]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProjectRootRemove {
+    pub project_id: String,
+    pub root_id: String,
+}
+
+#[typeshare]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProjectConversationCreate {
+    pub project_id: String,
+    pub title: String,
+    pub harness_id: String,
+    pub model_id: String,
+}
+
+#[typeshare]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConversationSetModel {
+    pub id: String,
+    pub model_id: String,
+}
+
+#[typeshare]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConversationCopyExample {
+    pub id: String,
+}
+
+#[typeshare]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConversationDelete {
     pub id: String,
 }
@@ -187,6 +252,13 @@ pub struct AttachmentVerifiedPath {
 
 #[typeshare]
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ArtifactResolvePath {
+    pub conversation_id: String,
+    pub path: String,
+}
+
+#[typeshare]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ArtifactVerifyInline {
     pub size: WireU64,
     pub sha256: String,
@@ -271,6 +343,43 @@ pub struct GatewayStartOauth {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GatewayCompleteOauth {
     pub callback_url: String,
+}
+
+#[typeshare]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HarnessRosterSetEnabled {
+    pub agent_id: String,
+    pub enabled: bool,
+}
+
+#[typeshare]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HarnessRosterEnvVar {
+    pub name: String,
+    pub value: String,
+}
+
+#[typeshare]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HarnessRosterAdd {
+    pub id: String,
+    pub display_name: String,
+    pub command: String,
+    #[serde(default)]
+    pub args: Vec<String>,
+    #[serde(default)]
+    pub env: Vec<HarnessRosterEnvVar>,
+    /// Adapter kind: `acp` (default), `claude_native`, `codex_native`, `opencode_native`, `pi_native`.
+    #[serde(default)]
+    pub adapter: String,
+}
+
+#[typeshare]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HarnessPickerSettingsSet {
+    pub harness_order: Vec<String>,
+    pub hidden_harness_ids: Vec<String>,
+    pub enable_cli_update_checks: bool,
 }
 
 #[typeshare]

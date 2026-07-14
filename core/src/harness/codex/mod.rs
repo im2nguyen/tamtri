@@ -53,6 +53,7 @@ impl HarnessAdapter for CodexNativeAdapter {
             permissions: true,
             thinking: true,
             native_tools: true,
+            runtime_model_switch: true,
         }
     }
 
@@ -72,13 +73,7 @@ impl HarnessAdapter for CodexNativeAdapter {
         let (command_tx, command_rx) = tokio::sync::mpsc::channel(32);
         let harness_id = self.launch.id.clone();
         tokio::spawn(run_codex_session(
-            rpc,
-            inbound,
-            command_rx,
-            event_tx,
-            ctx,
-            turn,
-            harness_id,
+            rpc, inbound, command_rx, event_tx, ctx, turn, harness_id,
         ));
 
         Ok(HarnessRun {

@@ -30,7 +30,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .ok()
         .and_then(|value| value.parse().ok())
         .unwrap_or(DEFAULT_PORT);
-    let addr = SocketAddr::from(([127, 0, 0, 1], port));
+    let bind_host = std::env::var("TAMTRI_BIND").unwrap_or_else(|_| "127.0.0.1".to_string());
+    let ip: std::net::IpAddr = bind_host
+        .parse()
+        .unwrap_or(std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST));
+    let addr = SocketAddr::from((ip, port));
 
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -41,7 +45,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let listener = server::bind(addr).await?;
         let local = listener.local_addr()?;
         runtime_dir::write_endpoint_files(&paths, local.port())?;
-        tracing::info!(port = local.port(), "tamtri-daemon listening on 127.0.0.1");
+        tracing::info!(bind = %ip, port = local.port(), "tamtri-daemon listening");
         server::serve(listener, Arc::clone(&daemon), token).await
     });
 

@@ -21,6 +21,7 @@ fn adapter_from_env() -> Option<CodexNativeAdapter> {
         args,
         env: Vec::new(),
         adapter: AdapterKind::CodexNative,
+        enabled: true,
     }))
 }
 

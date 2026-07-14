@@ -1,12 +1,13 @@
 import { useRouter } from "expo-router";
 import { useEffect, useState } from "react";
-import { Modal, Pressable, ScrollView, Text, TextInput, View } from "react-native";
+import { ActivityIndicator, Modal, Pressable, ScrollView, Text, TextInput, View } from "react-native";
 import { method, type OrchestrationRunDto } from "@tamtri/protocol";
 
 import { Button } from "@/components/ui/button";
+import { useOrchestrationRun } from "@/hooks/use-orchestration-run";
 import { useRecipes } from "@/hooks/use-recipes";
 import { useDaemon } from "@/runtime/daemon-provider";
-import { theme } from "@/styles/theme";
+import { useTheme } from "@/styles/use-theme";
 
 const INPUT_TEMPLATES: Record<string, string> = {
   handoff: JSON.stringify(
@@ -47,6 +48,7 @@ function SelectRow({
   selected: boolean;
   onPress: () => void;
 }) {
+  const theme = useTheme();
   return (
     <Pressable
       onPress={onPress}
@@ -69,21 +71,23 @@ function SelectRow({
 }
 
 export function RunRecipeSheet({ visible, conversationId, onClose, onComplete }: RunRecipeSheetProps) {
+  const theme = useTheme();
   const router = useRouter();
   const { client } = useDaemon();
   const { recipes, loading, enabled } = useRecipes();
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [inputsJson, setInputsJson] = useState("{}");
-  const [running, setRunning] = useState(false);
-  const [result, setResult] = useState<OrchestrationRunDto | null>(null);
+  const [starting, setStarting] = useState(false);
+  const [activeRunId, setActiveRunId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const { run, isRunning, cancel, refresh, branchConversationIds } = useOrchestrationRun(conversationId, activeRunId);
 
   useEffect(() => {
     if (!visible) {
       setSelectedId(null);
       setInputsJson("{}");
-      setRunning(false);
-      setResult(null);
+      setStarting(false);
+      setActiveRunId(null);
       setError(null);
       return;
     }
@@ -94,16 +98,22 @@ export function RunRecipeSheet({ visible, conversationId, onClose, onComplete }:
     }
   }, [visible, recipes, selectedId]);
 
+  useEffect(() => {
+    if (run && !isRunning) {
+      onComplete?.(run);
+    }
+  }, [isRunning, onComplete, run]);
+
   const selectRecipe = (id: string) => {
     setSelectedId(id);
     setInputsJson(INPUT_TEMPLATES[id] ?? "{}");
-    setResult(null);
+    setActiveRunId(null);
     setError(null);
   };
 
-  const run = async () => {
+  const startRun = async () => {
     if (!selectedId) return;
-    setRunning(true);
+    setStarting(true);
     setError(null);
     try {
       JSON.parse(inputsJson);
@@ -112,12 +122,14 @@ export function RunRecipeSheet({ visible, conversationId, onClose, onComplete }:
         source_conversation_id: conversationId,
         inputs_json: inputsJson,
       });
-      setResult(dto);
-      onComplete?.(dto);
+      setActiveRunId(dto.id);
+      if (dto.status !== "running") {
+        onComplete?.(dto);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
-      setRunning(false);
+      setStarting(false);
     }
   };
 
@@ -171,7 +183,8 @@ export function RunRecipeSheet({ visible, conversationId, onClose, onComplete }:
             Run recipe
           </Text>
           <Text style={{ color: theme.colors.foregroundMuted, fontSize: theme.fontSize.sm }}>
-            Executes synchronously on the daemon. Forked conversations appear when each step completes.
+            Runs in the background on the daemon. Subscribe to live step events and open forked conversations as they
+            appear.
           </Text>
 
           {loading ? (
@@ -196,6 +209,7 @@ export function RunRecipeSheet({ visible, conversationId, onClose, onComplete }:
             value={inputsJson}
             onChangeText={setInputsJson}
             multiline
+            editable={!isRunning}
             style={{
               minHeight: 140,
               borderWidth: 1,
@@ -203,7 +217,7 @@ export function RunRecipeSheet({ visible, conversationId, onClose, onComplete }:
               borderRadius: theme.radius.md,
               padding: theme.spacing[3],
               color: theme.colors.foreground,
-              fontFamily: "monospace",
+              fontFamily: theme.fontFamily.mono,
               fontSize: theme.fontSize.xs,
               backgroundColor: theme.colors.surface0,
             }}
@@ -211,7 +225,7 @@ export function RunRecipeSheet({ visible, conversationId, onClose, onComplete }:
 
           {error ? <Text style={{ color: theme.colors.destructive }}>{error}</Text> : null}
 
-          {result ? (
+          {run ? (
             <View
               style={{
                 gap: theme.spacing[2],
@@ -220,15 +234,18 @@ export function RunRecipeSheet({ visible, conversationId, onClose, onComplete }:
                 borderRadius: theme.radius.lg,
               }}
             >
-              <Text style={{ color: theme.colors.foreground, fontWeight: "600" }}>Run {result.status}</Text>
-              <Text style={{ color: theme.colors.foregroundMuted, fontSize: theme.fontSize.xs }}>
-                Latest conversation: {result.latest_conversation_id}
-              </Text>
-              {result.branch_conversation_ids?.length ? (
-                <Text style={{ color: theme.colors.foregroundMuted, fontSize: theme.fontSize.xs }}>
-                  Branches: {result.branch_conversation_ids.join(", ")}
+              <View style={{ flexDirection: "row", alignItems: "center", gap: theme.spacing[2] }}>
+                {isRunning ? <ActivityIndicator color={theme.colors.accentBright} size="small" /> : null}
+                <Text style={{ color: theme.colors.foreground, fontWeight: "600" }}>
+                  Run {run.status} · step {run.current_step + 1}
                 </Text>
+              </View>
+              {run.error ? (
+                <Text style={{ color: theme.colors.destructive, fontSize: theme.fontSize.xs }}>{run.error}</Text>
               ) : null}
+              <Text style={{ color: theme.colors.foregroundMuted, fontSize: theme.fontSize.xs }}>
+                Latest conversation: {run.latest_conversation_id}
+              </Text>
               <View style={{ flexDirection: "row", flexWrap: "wrap", gap: theme.spacing[2], marginTop: theme.spacing[2] }}>
                 <Button
                   label="Open latest"
@@ -236,10 +253,10 @@ export function RunRecipeSheet({ visible, conversationId, onClose, onComplete }:
                   compact
                   onPress={() => {
                     onClose();
-                    router.push(`/conversation/${result.latest_conversation_id}`);
+                    router.push(`/conversation/${run.latest_conversation_id}`);
                   }}
                 />
-                {result.branch_conversation_ids?.map((id) => (
+                {branchConversationIds.map((id) => (
                   <Button
                     key={id}
                     label={`Branch ${id.slice(0, 8)}…`}
@@ -251,13 +268,22 @@ export function RunRecipeSheet({ visible, conversationId, onClose, onComplete }:
                     }}
                   />
                 ))}
+                {isRunning ? (
+                  <Button label="Cancel run" variant="destructive" compact onPress={() => void cancel()} />
+                ) : (
+                  <Button label="Refresh" variant="ghost" compact onPress={() => void refresh()} />
+                )}
               </View>
             </View>
           ) : null}
 
           <View style={{ flexDirection: "row", justifyContent: "flex-end", gap: theme.spacing[3] }}>
             <Button label="Close" variant="ghost" onPress={onClose} />
-            <Button label={running ? "Running…" : "Run"} disabled={!selectedId || running} onPress={() => void run()} />
+            <Button
+              label={starting ? "Starting…" : isRunning ? "Running…" : "Run"}
+              disabled={!selectedId || starting || isRunning}
+              onPress={() => void startRun()}
+            />
           </View>
         </Pressable>
       </Pressable>

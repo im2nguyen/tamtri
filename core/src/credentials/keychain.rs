@@ -21,9 +21,8 @@ pub fn load_master_key() -> Result<Option<[u8; 32]>> {
 }
 
 pub fn store_master_key(key: &[u8; 32]) -> Result<()> {
-    security_framework::passwords::set_generic_password(SERVICE, ACCOUNT, key).map_err(|err| {
-        CoreError::Protocol(format!("keychain write failed: {err}"))
-    })
+    security_framework::passwords::set_generic_password(SERVICE, ACCOUNT, key)
+        .map_err(|err| CoreError::Protocol(format!("keychain write failed: {err}")))
 }
 
 pub fn delete_master_key_file_fallback(path: &std::path::Path) -> Result<()> {

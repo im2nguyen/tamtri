@@ -109,8 +109,8 @@ mod tests {
     use chrono::Utc;
 
     use crate::conversation::{ContentBlock, Conversation, Message, Role};
-    use crate::vault::fs::FilesystemVault;
     use crate::vault::ConversationVault;
+    use crate::vault::fs::FilesystemVault;
 
     use super::*;
 
@@ -152,12 +152,18 @@ mod tests {
         assert_eq!(title_hits[0].match_field, SearchMatchField::Title);
 
         let text_hits = search_conversations(&vault, "Revenue").expect("search");
-        assert!(text_hits.iter().any(|hit| hit.match_field == SearchMatchField::Text));
+        assert!(
+            text_hits
+                .iter()
+                .any(|hit| hit.match_field == SearchMatchField::Text)
+        );
 
         let thinking_hits = search_conversations(&vault, "CSV source").expect("search");
-        assert!(thinking_hits
-            .iter()
-            .any(|hit| hit.match_field == SearchMatchField::Thinking));
+        assert!(
+            thinking_hits
+                .iter()
+                .any(|hit| hit.match_field == SearchMatchField::Thinking)
+        );
 
         let tool_hits = search_conversations(&vault, "hidden keyword").expect("search");
         assert!(tool_hits.is_empty());

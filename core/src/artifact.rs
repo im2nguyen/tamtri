@@ -110,8 +110,9 @@ impl ArtifactSnapshotter {
 
     fn snapshot_relative_path(&self, path: &Path) -> Result<Option<ArtifactSnapshot>> {
         if !is_deliverable_snapshot_path(
-            path.to_str()
-                .ok_or_else(|| CoreError::MalformedVault("artifact path is not UTF-8".to_string()))?,
+            path.to_str().ok_or_else(|| {
+                CoreError::MalformedVault("artifact path is not UTF-8".to_string())
+            })?,
         ) {
             return Ok(None);
         }
@@ -395,12 +396,18 @@ mod tests {
         snapshots.sort_by(|a, b| a.mime_type.cmp(&b.mime_type));
 
         assert_eq!(snapshots.len(), 2);
-        let mime_types: Vec<_> = snapshots.iter().map(|snapshot| snapshot.mime_type.as_str()).collect();
+        let mime_types: Vec<_> = snapshots
+            .iter()
+            .map(|snapshot| snapshot.mime_type.as_str())
+            .collect();
         assert_eq!(mime_types, vec!["text/html", "text/markdown"]);
         for snapshot in &snapshots {
             assert!(snapshot.attachment_path.starts_with("attachments/"));
             assert!(snapshot.attachment_path.contains('-'));
-            assert_eq!(snapshot.size, fs::metadata(&snapshot.original_path).unwrap().len());
+            assert_eq!(
+                snapshot.size,
+                fs::metadata(&snapshot.original_path).unwrap().len()
+            );
             assert_eq!(
                 snapshot.sha256,
                 hex_sha256(&fs::read(&snapshot.original_path).unwrap())
@@ -543,7 +550,11 @@ mod tests {
     fn detect_mime_by_extension_and_sniffing() {
         let png_header = b"\x89PNG\r\n\x1a\n";
         let cases = [
-            ("report.html", b"<html><body>x</body></html>" as &[u8], "text/html"),
+            (
+                "report.html",
+                b"<html><body>x</body></html>" as &[u8],
+                "text/html",
+            ),
             ("notes.md", b"# Title", "text/markdown"),
             ("sales.csv", b"a,b\n1,2", "text/csv"),
             ("data.tsv", b"a\tb", "text/tab-separated-values"),
@@ -684,8 +695,8 @@ mod tests {
         let bytes = b"hello";
         fs::write(convo.join("attachments/a.txt"), bytes).unwrap();
         let sha256 = hex_sha256(bytes);
-        let path = verify_attachment(&convo, "attachments/a.txt", bytes.len() as u64, &sha256)
-            .unwrap();
+        let path =
+            verify_attachment(&convo, "attachments/a.txt", bytes.len() as u64, &sha256).unwrap();
         assert_eq!(path, convo.join("attachments/a.txt"));
     }
 

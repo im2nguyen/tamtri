@@ -180,7 +180,7 @@ fn meta_is_versioned() {
         &fs::read_to_string(conversation_dir(dir.path(), c.id).join("meta.json")).unwrap(),
     )
     .unwrap();
-    assert_eq!(meta["schema_version"], json!(2));
+    assert_eq!(meta["schema_version"], json!(4));
 }
 
 #[test]
@@ -325,11 +325,7 @@ fn import_folder_as_new_copies_attachments() {
     let c = Conversation::new("Import attachments");
     source.create(&c).unwrap();
     let src = conversation_dir(dir.path(), c.id);
-    fs::write(
-        src.join("attachments/report.html"),
-        b"<h1>report</h1>",
-    )
-    .unwrap();
+    fs::write(src.join("attachments/report.html"), b"<h1>report</h1>").unwrap();
 
     let (target_dir, target) = vault();
     let imported = target.import_folder_as_new(&src).unwrap();
@@ -381,9 +377,13 @@ fn issues_reports_torn_tail() {
     let mut file = OpenOptions::new().append(true).open(&path).unwrap();
     write!(file, "{{\"id\":\"not done\"").unwrap();
 
-    assert!(vault.issues().unwrap().iter().any(|issue| {
-        matches!(issue, VaultIssue::TornTailDetected { id } if *id == c.id)
-    }));
+    assert!(
+        vault
+            .issues()
+            .unwrap()
+            .iter()
+            .any(|issue| { matches!(issue, VaultIssue::TornTailDetected { id } if *id == c.id) })
+    );
 }
 
 #[test]

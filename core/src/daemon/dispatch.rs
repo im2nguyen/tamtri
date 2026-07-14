@@ -11,8 +11,8 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 
-use crate::app::{TamtriCore, TamtriError};
 use crate::CoreError;
+use crate::app::{TamtriCore, TamtriError};
 use crate::protocol::{method, params};
 use crate::rpc::jsonrpc::{JsonRpcError, METHOD_NOT_FOUND};
 
@@ -30,11 +30,13 @@ fn rpc_err(code: i64, message: impl Into<String>) -> JsonRpcError {
 
 fn parse<T: DeserializeOwned>(params: Option<Value>) -> Result<T, JsonRpcError> {
     let value = params.unwrap_or(Value::Null);
-    serde_json::from_value(value).map_err(|err| rpc_err(INVALID_PARAMS, format!("invalid params: {err}")))
+    serde_json::from_value(value)
+        .map_err(|err| rpc_err(INVALID_PARAMS, format!("invalid params: {err}")))
 }
 
 fn to_value<T: Serialize>(value: T) -> Result<Value, JsonRpcError> {
-    serde_json::to_value(value).map_err(|err| rpc_err(INTERNAL_ERROR, format!("serialize result: {err}")))
+    serde_json::to_value(value)
+        .map_err(|err| rpc_err(INTERNAL_ERROR, format!("serialize result: {err}")))
 }
 
 /// Run a fallible facade call on a blocking thread and serialize its result.
@@ -64,6 +66,10 @@ where
 
 fn base64_encode(bytes: &[u8]) -> String {
     base64::engine::general_purpose::STANDARD.encode(bytes)
+}
+
+fn parse_roster_adapter(id: &str, raw: &str) -> crate::harness::acp::AdapterKind {
+    crate::harness::roster::infer_adapter_kind(id, raw)
 }
 
 /// Dispatch a single request. `HELLO` is handled by the connection layer, not
@@ -105,6 +111,21 @@ pub async fn dispatch(
             let c = Arc::clone(&core);
             run(move || c.fork_conversation(p.id, p.harness_id, p.model_id)).await
         }
+        method::CONVERSATION_MOVE_PROJECT => {
+            let p: params::ConversationMoveProject = parse(params)?;
+            let c = Arc::clone(&core);
+            run(move || c.move_conversation_to_project(p.conversation_id, p.project_id)).await
+        }
+        method::CONVERSATION_SET_MODEL => {
+            let p: params::ConversationSetModel = parse(params)?;
+            let c = Arc::clone(&core);
+            run(move || c.set_conversation_model(p.id, p.model_id)).await
+        }
+        method::CONVERSATION_COPY_EXAMPLE => {
+            let p: params::ConversationCopyExample = parse(params)?;
+            let c = Arc::clone(&core);
+            run(move || c.copy_example_conversation(p.id)).await
+        }
         method::CONVERSATION_DELETE => {
             let p: params::ConversationDelete = parse(params)?;
             let c = Arc::clone(&core);
@@ -131,6 +152,45 @@ pub async fn dispatch(
             run(move || c.import_bundle_or_folder_as_new(p.source_path)).await
         }
 
+        // --- Projects ---
+        method::PROJECT_LIST => {
+            let c = Arc::clone(&core);
+            run(move || c.list_projects()).await
+        }
+        method::PROJECT_CREATE => {
+            let p: params::ProjectCreate = parse(params)?;
+            let c = Arc::clone(&core);
+            run(move || c.create_project(p.name)).await
+        }
+        method::PROJECT_UPDATE => {
+            let p: params::ProjectUpdate = parse(params)?;
+            let c = Arc::clone(&core);
+            run(move || c.update_project(p.id, p.name)).await
+        }
+        method::PROJECT_DELETE => {
+            let p: params::ProjectDelete = parse(params)?;
+            let c = Arc::clone(&core);
+            run(move || c.delete_project(p.id)).await
+        }
+        method::PROJECT_ROOT_ATTACH => {
+            let p: params::ProjectRootAttach = parse(params)?;
+            let c = Arc::clone(&core);
+            run(move || c.attach_project_root(p.project_id, p.name, p.uri, p.kind, p.scope)).await
+        }
+        method::PROJECT_ROOT_REMOVE => {
+            let p: params::ProjectRootRemove = parse(params)?;
+            let c = Arc::clone(&core);
+            run(move || c.remove_project_root(p.project_id, p.root_id)).await
+        }
+        method::PROJECT_CONVERSATION_CREATE => {
+            let p: params::ProjectConversationCreate = parse(params)?;
+            let c = Arc::clone(&core);
+            run(move || {
+                c.create_conversation_in_project(p.project_id, p.title, p.harness_id, p.model_id)
+            })
+            .await
+        }
+
         // --- Run control ---
         method::RUN_CANCEL => {
             let p: params::RunCancel = parse(params)?;
@@ -145,8 +205,10 @@ pub async fn dispatch(
         method::ELICITATION_RESPOND => {
             let p: params::ElicitationRespond = parse(params)?;
             let c = Arc::clone(&core);
-            run(move || c.respond_elicitation(p.conversation_id, p.request_id, p.action, p.data_json))
-                .await
+            run(move || {
+                c.respond_elicitation(p.conversation_id, p.request_id, p.action, p.data_json)
+            })
+            .await
         }
         method::TASK_CANCEL => {
             let p: params::TaskCancel = parse(params)?;
@@ -243,7 +305,13 @@ pub async fn dispatch(
         method::ATTACHMENT_VERIFIED_PATH => {
             let p: params::AttachmentVerifiedPath = parse(params)?;
             let c = Arc::clone(&core);
-            run(move || c.verified_attachment_path(p.conversation_id, p.path, p.size, p.sha256)).await
+            run(move || c.verified_attachment_path(p.conversation_id, p.path, p.size, p.sha256))
+                .await
+        }
+        method::ARTIFACT_RESOLVE_PATH => {
+            let p: params::ArtifactResolvePath = parse(params)?;
+            let c = Arc::clone(&core);
+            run(move || c.resolve_artifact_path(p.conversation_id, p.path)).await
         }
         method::ARTIFACT_VERIFY_INLINE => {
             let p: params::ArtifactVerifyInline = parse(params)?;
@@ -260,7 +328,8 @@ pub async fn dispatch(
         method::APP_RESOLVE_TEMPLATE => {
             let p: params::AppResolveTemplate = parse(params)?;
             let c = Arc::clone(&core);
-            run(move || c.resolve_app_template(p.conversation_id, p.server_id, p.template_ref)).await
+            run(move || c.resolve_app_template(p.conversation_id, p.server_id, p.template_ref))
+                .await
         }
         method::APP_SUBMIT_BRIDGE_REQUEST => {
             let p: params::AppSubmitBridgeRequest = parse(params)?;
@@ -365,6 +434,67 @@ pub async fn dispatch(
             let c = Arc::clone(&core);
             run(move || c.harness_health_checklist()).await
         }
+        method::HARNESS_PROVIDERS_LIST => {
+            let c = Arc::clone(&core);
+            run(move || c.list_harness_providers()).await
+        }
+        method::HARNESS_READINESS_RECOMMEND => {
+            let c = Arc::clone(&core);
+            run(move || c.harness_readiness_recommend()).await
+        }
+        method::HARNESS_ROSTER_SET_ENABLED => {
+            let p: params::HarnessRosterSetEnabled = parse(params)?;
+            let c = Arc::clone(&core);
+            run(move || c.harness_roster_set_enabled(p.agent_id, p.enabled)).await
+        }
+        method::HARNESS_ROSTER_ADD => {
+            let p: params::HarnessRosterAdd = parse(params)?;
+            let c = Arc::clone(&core);
+            run(move || {
+                c.harness_roster_add(crate::harness::acp::AgentLaunchSpec {
+                    id: p.id.clone(),
+                    display_name: p.display_name,
+                    command: p.command,
+                    args: p.args,
+                    env: p
+                        .env
+                        .into_iter()
+                        .map(|pair| (pair.name, pair.value))
+                        .collect(),
+                    adapter: parse_roster_adapter(&p.id, &p.adapter),
+                    enabled: true,
+                })
+            })
+            .await
+        }
+        method::HARNESS_USAGE_LIST => {
+            let c = Arc::clone(&core);
+            run(move || c.list_harness_usage()).await
+        }
+        method::HARNESS_INSTALLED_CLIS_LIST => {
+            let c = Arc::clone(&core);
+            run(move || c.list_harness_installed_clis()).await
+        }
+        method::HARNESS_PICKER_SETTINGS_GET => {
+            let c = Arc::clone(&core);
+            run(move || c.harness_picker_settings_get()).await
+        }
+        method::HARNESS_PICKER_SETTINGS_SET => {
+            let p: params::HarnessPickerSettingsSet = parse(params)?;
+            let c = Arc::clone(&core);
+            run(move || {
+                c.harness_picker_settings_set(
+                    p.harness_order,
+                    p.hidden_harness_ids,
+                    p.enable_cli_update_checks,
+                )
+            })
+            .await
+        }
+        method::HARNESS_DISCOVERY_SYNC => {
+            let c = Arc::clone(&core);
+            run(move || c.harness_discovery_sync()).await
+        }
         method::VAULT_ISSUES => {
             let c = Arc::clone(&core);
             run(move || c.vault_issues()).await
@@ -389,10 +519,7 @@ pub async fn dispatch(
         method::SESSIONS_IMPORT => {
             let p: params::SessionsImport = parse(params)?;
             let c = Arc::clone(&core);
-            run(move || {
-                c.import_native_session(p.provider, p.path, p.harness_id, p.model_id)
-            })
-            .await
+            run(move || c.import_native_session(p.provider, p.path, p.harness_id, p.model_id)).await
         }
 
         method::RECIPES_LIST => {
@@ -407,14 +534,8 @@ pub async fn dispatch(
         method::ORCHESTRATION_RUN => {
             let p: params::OrchestrationRun = parse(params)?;
             let c = Arc::clone(&core);
-            run(move || {
-                c.orchestration_run(
-                    p.recipe_id,
-                    p.source_conversation_id,
-                    p.inputs_json,
-                )
-            })
-            .await
+            run(move || c.orchestration_run(p.recipe_id, p.source_conversation_id, p.inputs_json))
+                .await
         }
         method::ORCHESTRATION_STATUS => {
             let p: params::OrchestrationStatus = parse(params)?;
@@ -427,6 +548,9 @@ pub async fn dispatch(
             run(move || c.orchestration_cancel(p.run_id)).await
         }
 
-        other => Err(rpc_err(METHOD_NOT_FOUND, format!("method not found: {other}"))),
+        other => Err(rpc_err(
+            METHOD_NOT_FOUND,
+            format!("method not found: {other}"),
+        )),
     }
 }

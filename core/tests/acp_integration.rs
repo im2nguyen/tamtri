@@ -21,6 +21,7 @@ fn adapter() -> AcpAdapter {
         args: Vec::new(),
         env: Vec::new(),
         adapter: Default::default(),
+        enabled: true,
     })
 }
 
@@ -37,6 +38,7 @@ fn real_adapter_from_env() -> Option<AcpAdapter> {
         args,
         env: Vec::new(),
         adapter: Default::default(),
+        enabled: true,
     }))
 }
 

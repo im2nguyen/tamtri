@@ -17,9 +17,8 @@ pub struct ParsedClaudeSession {
 }
 
 pub fn parse_claude_session_file(path: &Path) -> Result<ParsedClaudeSession> {
-    let content = fs::read_to_string(path).map_err(|err| {
-        CoreError::Protocol(format!("failed to read Claude session file: {err}"))
-    })?;
+    let content = fs::read_to_string(path)
+        .map_err(|err| CoreError::Protocol(format!("failed to read Claude session file: {err}")))?;
     parse_claude_session_jsonl(&content)
 }
 
@@ -58,10 +57,10 @@ pub fn parse_claude_session_jsonl(content: &str) -> Result<ParsedClaudeSession> 
         }
     }
 
-    let session_id = session_id.ok_or_else(|| {
-        CoreError::Protocol("Claude session file missing sessionId".to_string())
-    })?;
-    let cwd = cwd.ok_or_else(|| CoreError::Protocol("Claude session file missing cwd".to_string()))?;
+    let session_id = session_id
+        .ok_or_else(|| CoreError::Protocol("Claude session file missing sessionId".to_string()))?;
+    let cwd =
+        cwd.ok_or_else(|| CoreError::Protocol("Claude session file missing cwd".to_string()))?;
 
     Ok(ParsedClaudeSession {
         session_id,
@@ -103,9 +102,7 @@ fn message_content_blocks(content: &Value, assistant: bool) -> Vec<ContentBlock>
             if text.trim().is_empty() {
                 Vec::new()
             } else {
-                vec![ContentBlock::Text {
-                    text: text.clone(),
-                }]
+                vec![ContentBlock::Text { text: text.clone() }]
             }
         }
         Value::Array(items) => items
@@ -119,11 +116,13 @@ fn message_content_blocks(content: &Value, assistant: bool) -> Vec<ContentBlock>
 fn content_block_from_json(item: &Value, assistant: bool) -> Option<ContentBlock> {
     let kind = item.get("type").and_then(Value::as_str)?;
     match kind {
-        "text" if assistant => item.get("text").and_then(Value::as_str).map(|text| {
-            ContentBlock::Text {
-                text: text.to_string(),
-            }
-        }),
+        "text" if assistant => {
+            item.get("text")
+                .and_then(Value::as_str)
+                .map(|text| ContentBlock::Text {
+                    text: text.to_string(),
+                })
+        }
         "text" => item.get("text").and_then(Value::as_str).and_then(|text| {
             if text.trim().is_empty() {
                 None

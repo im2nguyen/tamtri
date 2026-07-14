@@ -7,9 +7,9 @@ use zip::write::SimpleFileOptions;
 use zip::{CompressionMethod, ZipWriter};
 
 use crate::artifact::{verify_attachment, verify_inline_artifact};
-use crate::conversation::{ContentBlock, Conversation, Id};
-use crate::vault::fs::{copy_attachments_dir, FilesystemVault};
+use crate::conversation::{ContentBlock, Conversation, ConversationMeta, Id, Root, RootOrigin};
 use crate::vault::ConversationVault;
+use crate::vault::fs::{FilesystemVault, copy_attachments_dir};
 use crate::{CoreError, Result};
 
 const BUNDLE_META: &str = "meta.json";
@@ -29,9 +29,29 @@ pub struct ImportResult {
 }
 
 pub fn export_conversation_bundle(vault: &FilesystemVault, id: Id, dest: &Path) -> Result<()> {
-    let dir = vault.conversation_folder(id)?;
     let conversation = vault.load(id)?;
-    verify_conversation_attachments(&dir, &conversation)?;
+    export_conversation_bundle_with_roots(vault, &conversation, conversation.roots.clone(), dest)
+}
+
+pub fn export_conversation_bundle_with_roots(
+    vault: &FilesystemVault,
+    conversation: &Conversation,
+    effective_roots: Vec<Root>,
+    dest: &Path,
+) -> Result<()> {
+    let dir = vault.conversation_folder(conversation.id)?;
+    verify_conversation_attachments(&dir, conversation)?;
+    let mut portable = conversation.clone();
+    portable.project_id = None;
+    portable.roots = effective_roots
+        .into_iter()
+        .map(|mut root| {
+            if matches!(root.origin, RootOrigin::Project) {
+                root.origin = RootOrigin::ProjectSnapshot;
+            }
+            root
+        })
+        .collect();
 
     let file = File::create(dest)?;
     let mut zip = ZipWriter::new(file);
@@ -39,8 +59,14 @@ pub fn export_conversation_bundle(vault: &FilesystemVault, id: Id, dest: &Path) 
         .compression_method(CompressionMethod::Deflated)
         .unix_permissions(0o644);
 
-    add_file_to_zip(&mut zip, &dir.join(BUNDLE_META), BUNDLE_META, options)?;
-    add_file_to_zip(&mut zip, &dir.join(BUNDLE_MESSAGES), BUNDLE_MESSAGES, options)?;
+    let meta = ConversationMeta::from_conversation(&portable).to_json_pretty()?;
+    add_bytes_to_zip(&mut zip, meta.as_bytes(), BUNDLE_META, options)?;
+    add_file_to_zip(
+        &mut zip,
+        &dir.join(BUNDLE_MESSAGES),
+        BUNDLE_MESSAGES,
+        options,
+    )?;
 
     let attachments_dir = dir.join("attachments");
     if attachments_dir.is_dir() {
@@ -59,10 +85,7 @@ pub fn export_conversation_bundle(vault: &FilesystemVault, id: Id, dest: &Path) 
     Ok(())
 }
 
-pub fn import_bundle_or_folder_as_new(
-    vault: &FilesystemVault,
-    src: &Path,
-) -> Result<ImportResult> {
+pub fn import_bundle_or_folder_as_new(vault: &FilesystemVault, src: &Path) -> Result<ImportResult> {
     if src.is_file() {
         import_from_zip(vault, src)
     } else if src.is_dir() {
@@ -102,6 +125,7 @@ fn finalize_import(
     conversation.created_at = Utc::now();
     conversation.updated_at = conversation.created_at;
     conversation.forked_from = None;
+    conversation.project_id = None;
     vault.create(&conversation)?;
     let dir = vault.conversation_folder(conversation.id)?;
     copy_attachments_dir(&src.join("attachments"), &dir.join("attachments"))?;
@@ -222,6 +246,19 @@ fn add_file_to_zip(
     Ok(())
 }
 
+fn add_bytes_to_zip(
+    zip: &mut ZipWriter<File>,
+    bytes: &[u8],
+    zip_path: &str,
+    options: SimpleFileOptions,
+) -> Result<()> {
+    use std::io::Write;
+
+    zip.start_file(zip_path, options).map_err(zip_error)?;
+    zip.write_all(bytes)?;
+    Ok(())
+}
+
 fn zip_error(err: zip::result::ZipError) -> CoreError {
     CoreError::MalformedVault(format!("bundle zip error: {err}"))
 }
@@ -233,8 +270,8 @@ mod tests {
     use sha2::{Digest, Sha256};
 
     use crate::conversation::{ContentBlock, Conversation, Message, Role};
-    use crate::vault::fs::FilesystemVault;
     use crate::vault::ConversationVault;
+    use crate::vault::fs::FilesystemVault;
 
     use super::*;
 
@@ -259,26 +296,26 @@ mod tests {
         fs::create_dir_all(dir.join("attachments")).expect("attachments");
         let html = "<h1>report</h1>";
         let sha256 = hex_sha256(html.as_bytes());
-        fs::write(
-            dir.join(format!("attachments/{sha256}-report.html")),
-            html,
-        )
-        .expect("attachment");
+        fs::write(dir.join(format!("attachments/{sha256}-report.html")), html).expect("attachment");
         let message = Message {
             id: uuid::Uuid::now_v7(),
             role: Role::Assistant,
             harness_id: Some("mock-acp".to_string()),
-            content: vec![ContentBlock::artifact(
-                format!("attachments/{sha256}-report.html"),
-                "text/html",
-                html.len() as u64,
-                sha256.clone(),
-                None,
-            )
-            .expect("artifact")],
+            content: vec![
+                ContentBlock::artifact(
+                    format!("attachments/{sha256}-report.html"),
+                    "text/html",
+                    html.len() as u64,
+                    sha256.clone(),
+                    None,
+                )
+                .expect("artifact"),
+            ],
             created_at: Utc::now(),
         };
-        vault.append_message(conversation.id, &message).expect("append");
+        vault
+            .append_message(conversation.id, &message)
+            .expect("append");
     }
 
     #[test]

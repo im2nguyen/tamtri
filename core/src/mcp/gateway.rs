@@ -22,19 +22,17 @@ use crate::mcp::capabilities::{
     tasks_available,
 };
 use crate::mcp::client::{ElicitationHandler, McpClient, McpClientConfig, McpClientEvent};
-use crate::mcp::gateway_tasks::{GatewayTaskTracker, parse_task_from_tool_response};
 use crate::mcp::elicitation::{
     elicitation_mode, elicitation_request_id, origin_tool_call_id_from_meta, parse_create_params,
     result_for_action, schema_looks_secret, validate_elicitation_url,
 };
+use crate::mcp::gateway_tasks::{GatewayTaskTracker, parse_task_from_tool_response};
+use crate::mcp::oauth::{OAuthResolveOutcome, resolve_oauth_access_token, serialize_stored_oauth};
 use crate::mcp::protocol::{
-    CallToolResult, GetPromptResult, Prompt, ReadResourceResult, Resource, Tool,
-    MCP_PROTOCOL_VERSION,
+    CallToolResult, GetPromptResult, MCP_PROTOCOL_VERSION, Prompt, ReadResourceResult, Resource,
+    Tool,
 };
 use crate::mcp::roots::{RootsHandler, roots_list_result};
-use crate::mcp::oauth::{
-    OAuthResolveOutcome, resolve_oauth_access_token, serialize_stored_oauth,
-};
 use crate::rpc::jsonrpc::JsonRpcError;
 use crate::{CoreError, Result};
 
@@ -221,6 +219,13 @@ pub struct McpGateway {
     prompt_routes: Mutex<HashMap<String, PromptRoute>>,
     server_capability_reports: Mutex<HashMap<String, ServerCapabilityReport>>,
     roots: Arc<tokio::sync::RwLock<Vec<Root>>>,
+    agent_context: Mutex<Option<AgentGatewayContext>>,
+}
+
+#[derive(Debug, Clone)]
+struct AgentGatewayContext {
+    conversation_id: String,
+    orchestration_enabled: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -309,7 +314,31 @@ impl McpGateway {
             prompt_routes: Mutex::new(HashMap::new()),
             server_capability_reports: Mutex::new(HashMap::new()),
             roots: Arc::new(tokio::sync::RwLock::new(Vec::new())),
+            agent_context: Mutex::new(None),
         })
+    }
+
+    pub async fn set_agent_context(&self, conversation_id: String, orchestration_enabled: bool) {
+        *self.agent_context.lock().await = Some(AgentGatewayContext {
+            conversation_id,
+            orchestration_enabled,
+        });
+    }
+
+    async fn agent_conversation_id(&self) -> Option<String> {
+        self.agent_context
+            .lock()
+            .await
+            .as_ref()
+            .map(|ctx| ctx.conversation_id.clone())
+    }
+
+    async fn orchestration_tools_enabled(&self) -> bool {
+        self.agent_context
+            .lock()
+            .await
+            .as_ref()
+            .is_some_and(|ctx| ctx.orchestration_enabled)
     }
 
     pub async fn set_roots(&self, roots: Vec<Root>) {
@@ -381,12 +410,8 @@ impl McpGateway {
         let Some(caps) = client.server_capabilities() else {
             return;
         };
-        let report = report_from_initialize(
-            server_id,
-            MCP_PROTOCOL_VERSION,
-            caps,
-            self.feature_support,
-        );
+        let report =
+            report_from_initialize(server_id, MCP_PROTOCOL_VERSION, caps, self.feature_support);
         self.store_capability_report(report).await;
     }
 
@@ -396,9 +421,7 @@ impl McpGateway {
         action: ElicitationAction,
         data: Option<Value>,
     ) -> Result<()> {
-        self.elicitation
-            .respond(request_id, action, data)
-            .await
+        self.elicitation.respond(request_id, action, data).await
     }
 
     pub async fn cancel_pending_elicitations(&self) {
@@ -425,6 +448,25 @@ impl McpGateway {
 
     pub async fn list_tools(&self) -> Result<Vec<GatewayTool>> {
         let mut tools = Vec::new();
+        if self.orchestration_tools_enabled().await {
+            for (exposed_name, tool) in
+                crate::orchestration::mcp_tools::exposed_orchestration_tools()
+            {
+                self.routes.lock().await.insert(
+                    exposed_name.clone(),
+                    ToolRoute {
+                        server_id: crate::orchestration::mcp_tools::TAMTRI_SERVER_ID.to_string(),
+                        original_name: tool.name.clone(),
+                    },
+                );
+                tools.push(GatewayTool {
+                    exposed_name,
+                    server_id: crate::orchestration::mcp_tools::TAMTRI_SERVER_ID.to_string(),
+                    original_name: tool.name.clone(),
+                    tool,
+                });
+            }
+        }
         for server in self.config.enabled_servers() {
             let client = match self.client_for(server).await {
                 Ok(client) => client,
@@ -438,13 +480,9 @@ impl McpGateway {
             };
             match client.list_tools().await {
                 Ok(server_tools) => {
-                    GatewayAppState::with_registry(
-                        &self.app_state,
-                        &server.id,
-                        |registry| {
-                            GatewayAppState::index_tools(&server.id, &server_tools, registry);
-                        },
-                    )
+                    GatewayAppState::with_registry(&self.app_state, &server.id, |registry| {
+                        GatewayAppState::index_tools(&server.id, &server_tools, registry);
+                    })
                     .await;
                     for tool in server_tools {
                         let exposed_name = exposed_tool_name(&server.id, &tool.name);
@@ -488,6 +526,25 @@ impl McpGateway {
         arguments: Value,
         meta: Option<Value>,
     ) -> Result<CallToolResult> {
+        if crate::orchestration::mcp_tools::is_native_tool(exposed_name) {
+            let conversation_id = self.agent_conversation_id().await.ok_or_else(|| {
+                CoreError::Protocol("native tools require an active agent conversation".to_string())
+            })?;
+            let core = crate::app::TamtriCore::shared().ok_or_else(|| {
+                CoreError::Protocol("daemon core unavailable for native tools".to_string())
+            })?;
+            self.emit(GatewayEvent::ToolRouted {
+                server_id: crate::orchestration::mcp_tools::TAMTRI_SERVER_ID.to_string(),
+                exposed_name: exposed_name.to_string(),
+                original_name: crate::orchestration::mcp_tools::native_original_name(exposed_name)
+                    .unwrap_or(exposed_name)
+                    .to_string(),
+            });
+            return core
+                .handle_orchestration_tool(&conversation_id, exposed_name, arguments, meta)
+                .await;
+        }
+
         let route = {
             let routes = self.routes.lock().await;
             routes.get(exposed_name).cloned()
@@ -529,12 +586,7 @@ impl McpGateway {
             None
         };
         let raw_result = client
-            .call_tool_raw(
-                &route.original_name,
-                arguments,
-                task_param,
-                meta.clone(),
-            )
+            .call_tool_raw(&route.original_name, arguments, task_param, meta.clone())
             .await;
         if let Err(err) = &raw_result {
             if matches!(err, CoreError::Timeout { .. } | CoreError::TransportClosed) {
@@ -550,9 +602,7 @@ impl McpGateway {
             .await;
         let result = match raw_result {
             Ok(raw) => {
-                if tasks_enabled
-                    && let Some(mcp_task) = parse_task_from_tool_response(&raw)
-                {
+                if tasks_enabled && let Some(mcp_task) = parse_task_from_tool_response(&raw) {
                     let subscribe_capable =
                         server_supports_task_subscribe(client.server_capabilities());
                     self.task_tracker
@@ -583,20 +633,14 @@ impl McpGateway {
             Err(err) => Err(err),
         };
         if let Ok(ref tool_result) = result
-            && apps_enabled_for_server(
-                client.server_capabilities(),
-                self.feature_support,
-            )
-            && let Some(template_ref) = GatewayAppState::with_registry(
-                &self.app_state,
-                &route.server_id,
-                |registry| {
+            && apps_enabled_for_server(client.server_capabilities(), self.feature_support)
+            && let Some(template_ref) =
+                GatewayAppState::with_registry(&self.app_state, &route.server_id, |registry| {
                     registry
                         .tool_resource_uri(&route.original_name)
                         .map(str::to_string)
-                },
-            )
-            .await
+                })
+                .await
         {
             if let Err(err) = self
                 .ensure_app_template(&route.server_id, &template_ref, client.as_ref())
@@ -631,14 +675,16 @@ impl McpGateway {
         template_ref: &str,
         client: &McpClient,
     ) -> Result<()> {
-        if self.cached_app_template(server_id, template_ref).await.is_some() {
+        if self
+            .cached_app_template(server_id, template_ref)
+            .await
+            .is_some()
+        {
             return Ok(());
         }
-        let declared = GatewayAppState::with_registry(
-            &self.app_state,
-            server_id,
-            |registry| registry.is_declared(template_ref),
-        )
+        let declared = GatewayAppState::with_registry(&self.app_state, server_id, |registry| {
+            registry.is_declared(template_ref)
+        })
         .await;
         if !declared {
             return Err(CoreError::Protocol(format!(
@@ -646,8 +692,7 @@ impl McpGateway {
             )));
         }
         let read = client.read_resource(template_ref).await?;
-        let template =
-            template_from_resource_contents(server_id, template_ref, &read.contents)?;
+        let template = template_from_resource_contents(server_id, template_ref, &read.contents)?;
         GatewayAppState::with_registry(&self.app_state, server_id, |registry| {
             registry.insert_template(template);
         })
@@ -681,11 +726,9 @@ impl McpGateway {
         for server in self.config.enabled_servers() {
             let client = self.client_for(server).await?;
             let server_resources = client.list_resources().await?;
-            GatewayAppState::with_registry(
-                &self.app_state,
-                &server.id,
-                |registry| GatewayAppState::index_resources(&server_resources, registry),
-            )
+            GatewayAppState::with_registry(&self.app_state, &server.id, |registry| {
+                GatewayAppState::index_resources(&server_resources, registry)
+            })
             .await;
             for resource in server_resources {
                 let exposed_uri = exposed_resource_uri(&server.id, &resource.uri);
@@ -730,21 +773,16 @@ impl McpGateway {
         let client = self.client_for(server).await?;
         let read = client.read_resource(&route.original_uri).await?;
         if is_ui_resource_uri(&route.original_uri)
-            && apps_enabled_for_server(
-                client.server_capabilities(),
-                self.feature_support,
-            )
+            && apps_enabled_for_server(client.server_capabilities(), self.feature_support)
         {
             let template = template_from_resource_contents(
                 &route.server_id,
                 &route.original_uri,
                 &read.contents,
             )?;
-            GatewayAppState::with_registry(
-                &self.app_state,
-                &route.server_id,
-                |registry| registry.insert_template(template),
-            )
+            GatewayAppState::with_registry(&self.app_state, &route.server_id, |registry| {
+                registry.insert_template(template)
+            })
             .await;
             self.emit(GatewayEvent::AppReturned {
                 origin_tool_call_id: None,
@@ -943,9 +981,7 @@ impl McpGateway {
     }
 
     pub async fn cancel_task(&self, task_id: &str) -> Result<()> {
-        self.task_tracker
-            .cancel_task(task_id, self.emit_fn())
-            .await
+        self.task_tracker.cancel_task(task_id, self.emit_fn()).await
     }
 
     pub async fn suspend_task_polling(&self, task_id: &str) {
@@ -1033,9 +1069,7 @@ impl McpGateway {
         let Some(stored_raw) = self.credentials.resolve(&oauth.token_ref).await? else {
             self.emit(GatewayEvent::DownstreamError {
                 server_id: server_id.to_string(),
-                message: format!(
-                    "oauth token missing for {server_id}; connect in settings"
-                ),
+                message: format!("oauth token missing for {server_id}; connect in settings"),
             });
             return Ok(());
         };
@@ -1046,12 +1080,8 @@ impl McpGateway {
         let credentials = Arc::clone(&self.credentials);
         let token_ref = oauth.token_ref.clone();
         let oauth_config = oauth.clone();
-        let (outcome, updated_bundle) = resolve_oauth_access_token(
-            &client,
-            &oauth_config,
-            &stored_raw,
-        )
-        .await?;
+        let (outcome, updated_bundle) =
+            resolve_oauth_access_token(&client, &oauth_config, &stored_raw).await?;
         if let Some(bundle) = updated_bundle {
             credentials
                 .store(&token_ref, &serialize_stored_oauth(&bundle)?)
@@ -1084,9 +1114,7 @@ impl McpGateway {
             OAuthResolveOutcome::Missing => {
                 self.emit(GatewayEvent::DownstreamError {
                     server_id: server_id.to_string(),
-                    message: format!(
-                        "oauth token missing for {server_id}; connect in settings"
-                    ),
+                    message: format!("oauth token missing for {server_id}; connect in settings"),
                 });
             }
         }
@@ -1094,7 +1122,9 @@ impl McpGateway {
     }
 }
 
-fn server_supports_task_subscribe(capabilities: Option<&crate::mcp::protocol::ServerCapabilities>) -> bool {
+fn server_supports_task_subscribe(
+    capabilities: Option<&crate::mcp::protocol::ServerCapabilities>,
+) -> bool {
     let Some(caps) = capabilities else {
         return false;
     };
@@ -1170,9 +1200,7 @@ impl RootsHandler for GatewayRootsHandler {
 #[async_trait]
 impl ElicitationHandler for GatewayElicitationHandler {
     async fn handle_create(&self, params: Value) -> std::result::Result<Value, JsonRpcError> {
-        self.service
-            .handle_create(&self.server_id, params)
-            .await
+        self.service.handle_create(&self.server_id, params).await
     }
 }
 
@@ -1310,9 +1338,7 @@ impl GatewayElicitationService {
             schema: parsed.requested_schema.clone(),
             url: parsed.url.clone(),
         });
-        let action = response_rx
-            .await
-            .unwrap_or(ElicitationAction::Cancel);
+        let action = response_rx.await.unwrap_or(ElicitationAction::Cancel);
         let content = if matches!(action, ElicitationAction::Accept) {
             content_rx.await.ok().flatten()
         } else {
@@ -1363,7 +1389,10 @@ mod tests {
             McpGateway::new(
                 GatewayConfig {
                     default_call_timeout_secs: 300,
-                    servers: vec![stdio_server("alpha", command), stdio_server("beta", command)],
+                    servers: vec![
+                        stdio_server("alpha", command),
+                        stdio_server("beta", command),
+                    ],
                 },
                 Arc::new(NoCredentials),
                 Some(tx),

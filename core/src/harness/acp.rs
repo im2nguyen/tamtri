@@ -27,6 +27,12 @@ pub enum AdapterKind {
     Acp,
     ClaudeNative,
     CodexNative,
+    OpenCodeNative,
+    PiNative,
+}
+
+fn default_enabled() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -40,6 +46,8 @@ pub struct AgentLaunchSpec {
     pub env: Vec<(String, String)>,
     #[serde(default)]
     pub adapter: AdapterKind,
+    #[serde(default = "default_enabled")]
+    pub enabled: bool,
 }
 
 pub struct AcpAdapter {
@@ -78,12 +86,17 @@ impl HarnessAdapter for AcpAdapter {
     }
 
     fn capabilities(&self) -> HarnessCapabilities {
+        let has_models = self
+            .agent_capabilities()
+            .map(|caps| !models_from_agent_capabilities(&caps).is_empty())
+            .unwrap_or(false);
         HarnessCapabilities {
             streaming: true,
             tools: true,
             permissions: true,
             thinking: true,
             native_tools: false,
+            runtime_model_switch: has_models,
         }
     }
 
@@ -113,15 +126,18 @@ impl HarnessAdapter for AcpAdapter {
         }
 
         let cwd = absolute_cwd(&ctx.working_dir_path)?;
+        let mut session_params = json!({
+            "cwd": cwd,
+            "mcpServers": acp_mcp_servers(&ctx.mcp_servers)
+        });
+        if let Some(model) = non_empty_model_id(&ctx.model_id) {
+            session_params
+                .as_object_mut()
+                .expect("session params object")
+                .insert("model".to_string(), json!(model));
+        }
         let session = rpc
-            .request(
-                "session/new",
-                Some(json!({
-                    "cwd": cwd,
-                    "mcpServers": acp_mcp_servers(&ctx.mcp_servers)
-                })),
-                ACP_REQUEST_TIMEOUT,
-            )
+            .request("session/new", Some(session_params), ACP_REQUEST_TIMEOUT)
             .await?;
         let session_id = session_id_from(&session)?;
 
@@ -148,12 +164,9 @@ impl HarnessAdapter for AcpAdapter {
             }
         }
 
-        let transport = StdioTransport::spawn(
-            &self.launch.command,
-            &self.launch.args,
-            &self.launch.env,
-        )
-        .await?;
+        let transport =
+            StdioTransport::spawn(&self.launch.command, &self.launch.args, &self.launch.env)
+                .await?;
         let (rpc, _inbound) = RpcConnection::start(Box::new(transport));
         let initialize = rpc
             .request(
@@ -203,6 +216,15 @@ fn models_from_agent_capabilities(caps: &Value) -> Vec<ModelInfo> {
                 .collect()
         })
         .unwrap_or_default()
+}
+
+fn non_empty_model_id(model_id: &str) -> Option<String> {
+    let trimmed = model_id.trim();
+    if trimmed.is_empty() || trimmed == "default" {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
 }
 
 async fn run_prompt_loop(
@@ -895,7 +917,11 @@ mod tests {
             item,
             ToolContent::Diff { diff } if diff.path == "report.html"
         )));
-        assert!(!content.iter().any(|item| matches!(item, ToolContent::Json { .. })));
+        assert!(
+            !content
+                .iter()
+                .any(|item| matches!(item, ToolContent::Json { .. }))
+        );
     }
 
     #[test]
@@ -926,6 +952,10 @@ mod tests {
                     .to_string()
             }]
         );
-        assert!(!content.iter().any(|item| matches!(item, ToolContent::Json { .. })));
+        assert!(
+            !content
+                .iter()
+                .any(|item| matches!(item, ToolContent::Json { .. }))
+        );
     }
 }

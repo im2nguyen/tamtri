@@ -165,7 +165,9 @@ fn load_sealed(home: &Path) -> Result<HashMap<String, String>> {
             .decrypt(nonce, ciphertext)
             .map_err(|_| CoreError::Protocol(format!("decrypt failed for {credential_ref}")))?;
         let value = String::from_utf8(plaintext).map_err(|_| {
-            CoreError::Protocol(format!("invalid utf-8 in sealed entry for {credential_ref}"))
+            CoreError::Protocol(format!(
+                "invalid utf-8 in sealed entry for {credential_ref}"
+            ))
         })?;
         out.insert(credential_ref, value);
     }

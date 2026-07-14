@@ -39,6 +39,61 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function isProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function probeDaemon(port: number, token: string, timeoutMs = 4_000): Promise<boolean> {
+  const wsUrl = `ws://127.0.0.1:${port}/ws?token=${encodeURIComponent(token)}`;
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (ok: boolean) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      try {
+        socket.close();
+      } catch {
+        /* ignore */
+      }
+      resolve(ok);
+    };
+
+    const socket = new WebSocket(wsUrl);
+    const timer = setTimeout(() => finish(false), timeoutMs);
+    socket.addEventListener("open", () => finish(true));
+    socket.addEventListener("error", () => finish(false));
+  });
+}
+
+async function readReachableEndpoint(home: string): Promise<DaemonEndpoint | undefined> {
+  const portFile = join(home, "daemon.port");
+  const tokenFile = join(home, "daemon.token");
+  const pidFile = join(home, "daemon.pid");
+  if (!existsSync(portFile) || !existsSync(tokenFile) || !existsSync(pidFile)) {
+    return undefined;
+  }
+
+  const port = Number.parseInt(readFileSync(portFile, "utf8").trim(), 10);
+  const token = readFileSync(tokenFile, "utf8").trim();
+  const pid = Number.parseInt(readFileSync(pidFile, "utf8").trim(), 10);
+  if (!Number.isFinite(port) || port <= 0 || token.length === 0 || !Number.isFinite(pid)) {
+    return undefined;
+  }
+  if (!isProcessAlive(pid)) {
+    return undefined;
+  }
+  if (!(await probeDaemon(port, token))) {
+    return undefined;
+  }
+  return { port, token };
+}
+
 /**
  * Spawns and supervises a tamtri-daemon child process. Emits `exit` when the
  * daemon dies so the shell can surface a "host stopped" state and offer restart.
@@ -63,6 +118,18 @@ export class DaemonManager extends EventEmitter<DaemonEvents> {
    * endpoint. Idempotent: a second call returns the existing endpoint. */
   async start(): Promise<DaemonEndpoint> {
     if (this.child && this.endpoint) return this.endpoint;
+    if (this.endpoint && !this.child) return this.endpoint;
+
+    const reuseExisting =
+      process.env.TAMTRI_REUSE_DAEMON === "1" || process.env.TAMTRI_REUSE_DAEMON === "true";
+    if (reuseExisting) {
+      const attached = await readReachableEndpoint(this.home);
+      if (attached) {
+        this.endpoint = attached;
+        return attached;
+      }
+    }
+
     if (!existsSync(this.options.binaryPath)) {
       throw new Error(`tamtri-daemon binary not found at ${this.options.binaryPath}`);
     }
@@ -112,14 +179,25 @@ export class DaemonManager extends EventEmitter<DaemonEvents> {
   private async waitForEndpoint(): Promise<DaemonEndpoint> {
     const portFile = join(this.home, "daemon.port");
     const tokenFile = join(this.home, "daemon.token");
+    const pidFile = join(this.home, "daemon.pid");
+    const expectedPid = this.child?.pid;
+    if (expectedPid == null) {
+      throw new Error("daemon child has no pid");
+    }
     const deadline = Date.now() + this.startTimeoutMs;
 
     while (Date.now() < deadline) {
       if (!this.child) throw new Error("daemon exited before publishing its endpoint");
-      if (existsSync(portFile) && existsSync(tokenFile)) {
+      if (existsSync(portFile) && existsSync(tokenFile) && existsSync(pidFile)) {
         const port = Number.parseInt(readFileSync(portFile, "utf8").trim(), 10);
         const token = readFileSync(tokenFile, "utf8").trim();
-        if (Number.isFinite(port) && port > 0 && token.length > 0) {
+        const publishedPid = Number.parseInt(readFileSync(pidFile, "utf8").trim(), 10);
+        if (
+          publishedPid === expectedPid &&
+          Number.isFinite(port) &&
+          port > 0 &&
+          token.length > 0
+        ) {
           return { port, token };
         }
       }

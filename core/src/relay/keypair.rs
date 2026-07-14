@@ -27,7 +27,9 @@ pub fn load_or_create_keypair(home: &Path) -> Result<KeyPair> {
         let public = decode_base64(&file.public_key_b64)?;
         let secret = decode_base64(&file.secret_key_b64)?;
         if public.len() != 32 || secret.len() != 32 {
-            return Err(CoreError::Protocol("invalid daemon keypair file".to_string()));
+            return Err(CoreError::Protocol(
+                "invalid daemon keypair file".to_string(),
+            ));
         }
         let mut pk = [0u8; 32];
         let mut sk = [0u8; 32];

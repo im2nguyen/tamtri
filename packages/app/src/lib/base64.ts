@@ -21,6 +21,17 @@ export function encodeBase64(bytes: Uint8Array): string {
   throw new Error("Base64 encode is unavailable in this environment.");
 }
 
+export function utf8Bytes(text: string): Uint8Array {
+  if (typeof TextEncoder !== "undefined") {
+    return new TextEncoder().encode(text);
+  }
+  const bytes: number[] = [];
+  for (let i = 0; i < text.length; i += 1) {
+    bytes.push(text.charCodeAt(i));
+  }
+  return new Uint8Array(bytes);
+}
+
 export function bytesToText(bytes: Uint8Array): string {
   return new TextDecoder("utf-8", { fatal: false }).decode(bytes);
 }

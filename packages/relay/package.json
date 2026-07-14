@@ -8,7 +8,8 @@
   "types": "./src/index.ts",
   "exports": {
     ".": "./src/index.ts",
-    "./e2ee": "./src/e2ee.ts"
+    "./e2ee": "./src/e2ee.ts",
+    "./offer": "./src/offer.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit"
@@ -18,6 +19,7 @@
     "typescript": "^5.8.3"
   },
   "dependencies": {
+    "@tamtri/protocol": "workspace:*",
     "base64-js": "^1.5.1",
     "tweetnacl": "^1.0.3"
   }

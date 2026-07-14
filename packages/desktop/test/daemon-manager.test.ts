@@ -3,7 +3,7 @@
  * against an isolated TAMTRI_HOME, discovers the published endpoint, reports
  * running status, and shuts the process down. No Electron needed.
  *
- * Run with: npm test --workspace @tamtri/desktop
+ * Run with: pnpm test --filter @tamtri/desktop
  */
 
 import assert from "node:assert/strict";

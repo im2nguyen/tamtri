@@ -38,6 +38,11 @@ export interface ArtifactLogNavigationBlocked {
 	url: string;
 }
 
+export interface ArtifactResolvePath {
+	conversation_id: string;
+	path: string;
+}
+
 export interface ArtifactVerifyInline {
 	size: number;
 	sha256: string;
@@ -74,6 +79,10 @@ export interface ConnectionOffer {
 	relay: RelayEndpoint;
 }
 
+export interface ConversationCopyExample {
+	id: string;
+}
+
 export interface ConversationCreate {
 	title: string;
 	harness_id: string;
@@ -87,9 +96,11 @@ export interface ConversationDelete {
 export interface ConversationDto {
 	id: string;
 	title: string;
+	project_id?: string;
 	active_harness_id?: string;
 	model_id?: string;
 	forked_from?: string;
+	kind: string;
 	transcript_json: string;
 }
 
@@ -116,16 +127,28 @@ export interface ConversationLoad {
 	id: string;
 }
 
+export interface ConversationMoveProject {
+	conversation_id: string;
+	project_id: string;
+}
+
 export interface ConversationSendMessage {
 	conversation_id: string;
 	text: string;
+}
+
+export interface ConversationSetModel {
+	id: string;
+	model_id: string;
 }
 
 export interface ConversationSummaryDto {
 	id: string;
 	title: string;
 	updated_at: string;
+	project_id?: string;
 	active_harness_id?: string;
+	kind: string;
 }
 
 export interface DiagnosticsWriteBundle {
@@ -175,6 +198,12 @@ export interface Features {
 	session_import?: boolean;
 	/** Daemon can bridge remote clients through the E2E relay (Workstream A). */
 	relay?: boolean;
+	/** Daemon can list and mutate the harness agent roster from settings. */
+	harness_roster?: boolean;
+	/** Daemon can probe provider usage quotas (Codex, Claude). */
+	provider_usage?: boolean;
+	/** Daemon persists projects and exposes shared project roots. */
+	projects?: boolean;
 }
 
 export interface GatewayCompleteOauth {
@@ -237,6 +266,105 @@ export interface GatewaySetDefaultTimeout {
 export interface GatewayStartOauth {
 	server_id: string;
 	redirect_uri: string;
+}
+
+export interface HarnessInstalledCliDto {
+	id: string;
+	display_name: string;
+	command: string;
+	version?: string;
+	install_doc_url: string;
+	in_roster: boolean;
+	auth_ready: boolean;
+}
+
+export interface HarnessPickerSettingsDto {
+	harness_order: string[];
+	hidden_harness_ids: string[];
+	enable_cli_update_checks: boolean;
+}
+
+export interface HarnessPickerSettingsSet {
+	harness_order: string[];
+	hidden_harness_ids: string[];
+	enable_cli_update_checks: boolean;
+}
+
+export interface HarnessProviderEntryDto {
+	id: string;
+	display_name: string;
+	command: string;
+	status: string;
+	readiness_state: string;
+	recovery_action: string;
+	readiness_message?: string;
+	install_doc_url: string;
+	adapter_type: string;
+	adapter_kind: string;
+	enabled: boolean;
+	model_count?: number;
+	hidden?: boolean;
+	picker_order?: number;
+}
+
+export interface HarnessReadinessRecommendDto {
+	agent_id?: string;
+	display_name: string;
+	readiness_state: string;
+	recovery_action: string;
+	message?: string;
+	install_doc_url: string;
+}
+
+export interface HarnessRosterEnvVar {
+	name: string;
+	value: string;
+}
+
+export interface HarnessRosterAdd {
+	id: string;
+	display_name: string;
+	command: string;
+	args?: string[];
+	env?: HarnessRosterEnvVar[];
+	/** Adapter kind: `acp` (default), `claude_native`, `codex_native`, `opencode_native`, `pi_native`. */
+	adapter?: string;
+}
+
+export interface HarnessRosterSetEnabled {
+	agent_id: string;
+	enabled: boolean;
+}
+
+export interface HarnessUsageBalanceDto {
+	id: string;
+	label: string;
+	remaining: number;
+	unit: string;
+	tone: string;
+}
+
+export interface HarnessUsageWindowDto {
+	id: string;
+	label: string;
+	utilization_pct: number;
+	resets_at?: string;
+	tone: string;
+}
+
+export interface HarnessUsageEntryDto {
+	provider_id: string;
+	display_name: string;
+	status: string;
+	plan_label?: string;
+	windows?: HarnessUsageWindowDto[];
+	balances?: HarnessUsageBalanceDto[];
+	error?: string;
+	fetched_at: string;
+}
+
+export interface HarnessUsageListDto {
+	providers: HarnessUsageEntryDto[];
 }
 
 /**
@@ -307,6 +435,56 @@ export interface PermissionRespond {
 	option_id: string;
 }
 
+export interface ProjectConversationCreate {
+	project_id: string;
+	title: string;
+	harness_id: string;
+	model_id: string;
+}
+
+export interface ProjectCreate {
+	name: string;
+}
+
+export interface ProjectDelete {
+	id: string;
+}
+
+export interface RootDto {
+	id: string;
+	name: string;
+	uri: string;
+	kind: string;
+	scope: string;
+	origin?: string;
+}
+
+export interface ProjectDto {
+	id: string;
+	name: string;
+	created_at: string;
+	updated_at: string;
+	roots: RootDto[];
+}
+
+export interface ProjectRootAttach {
+	project_id: string;
+	name: string;
+	uri: string;
+	kind: string;
+	scope: string;
+}
+
+export interface ProjectRootRemove {
+	project_id: string;
+	root_id: string;
+}
+
+export interface ProjectUpdate {
+	id: string;
+	name: string;
+}
+
 export interface RecipeLoadDto {
 	recipe_json: string;
 }
@@ -319,14 +497,6 @@ export interface RecipeSummary {
 
 export interface RecipesLoad {
 	recipe_id: string;
-}
-
-export interface RootDto {
-	id: string;
-	name: string;
-	uri: string;
-	kind: string;
-	scope: string;
 }
 
 export interface RootsAttach {
@@ -390,12 +560,6 @@ export interface WorkdirCopyFile {
 	source_path: string;
 }
 
-export interface WorkdirWriteFile {
-	conversation_id: string;
-	filename: string;
-	data_base64: string;
-}
-
 export interface WorkdirFileContent {
 	mime_type?: string;
 	data_base64: string;
@@ -412,5 +576,11 @@ export interface WorkdirPath {
 export interface WorkdirReadFile {
 	conversation_id: string;
 	relative_path: string;
+}
+
+export interface WorkdirWriteFile {
+	conversation_id: string;
+	filename: string;
+	data_base64: string;
 }
 

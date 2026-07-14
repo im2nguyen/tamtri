@@ -1,8 +1,8 @@
 // Build Electron main/preload and bundle the Expo web export for production.
 //
 // Dev loop (hot reload):
-//   Terminal 1: npm run web --workspace @tamtri/app
-//   Terminal 2: TAMTRI_USE_DEV_SERVER=1 npm run start --workspace @tamtri/desktop
+//   Terminal 1: pnpm --filter @tamtri/app run web
+//   Terminal 2: TAMTRI_USE_DEV_SERVER=1 pnpm --filter @tamtri/desktop run start
 //
 // Production bundle copies packages/app/dist → dist/renderer/app.
 
@@ -50,7 +50,7 @@ await build({
 });
 
 console.log("exporting @tamtri/app for web…");
-execSync("npm run export:web --workspace @tamtri/app", {
+execSync("pnpm --filter @tamtri/app run export:web", {
   cwd: repoRoot,
   stdio: "inherit",
 });

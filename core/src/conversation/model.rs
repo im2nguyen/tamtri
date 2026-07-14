@@ -7,6 +7,14 @@ pub type Id = uuid::Uuid;
 
 pub const ARTIFACT_INLINE_MAX_BYTES: usize = 32 * 1024;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ConversationKind {
+    #[default]
+    User,
+    Example,
+}
+
 /// Link to a provider-native session file (Claude jsonl, Codex thread, …).
 /// Stored in `meta.json` so native adapters can `--resume` on the next run.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -24,6 +32,8 @@ pub struct Conversation {
     pub title: String,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_id: Option<Id>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub active_harness_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -35,6 +45,8 @@ pub struct Conversation {
     pub forked_from: Option<Id>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub native_session: Option<NativeSessionLink>,
+    #[serde(default)]
+    pub kind: ConversationKind,
     pub messages: Vec<Message>,
 }
 
@@ -342,6 +354,8 @@ pub struct Root {
     pub kind: RootKind,
     #[serde(default)]
     pub scope: RootScope,
+    #[serde(default, skip_serializing_if = "RootOrigin::is_conversation")]
+    pub origin: RootOrigin,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
@@ -359,6 +373,21 @@ pub enum RootScope {
     #[default]
     Conversation,
     User,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum RootOrigin {
+    #[default]
+    Conversation,
+    Project,
+    ProjectSnapshot,
+}
+
+impl RootOrigin {
+    fn is_conversation(&self) -> bool {
+        matches!(self, Self::Conversation)
+    }
 }
 
 impl Root {

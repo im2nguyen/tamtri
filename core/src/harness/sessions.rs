@@ -62,10 +62,12 @@ pub fn import_native_session(
 
 fn import_claude_session(path: &Path, harness_id: &str, model_id: &str) -> Result<Conversation> {
     let parsed = parse_claude_session_file(path)?;
-    let title = parsed
-        .title
-        .clone()
-        .unwrap_or_else(|| format!("Claude session {}", &parsed.session_id[..8.min(parsed.session_id.len())]));
+    let title = parsed.title.clone().unwrap_or_else(|| {
+        format!(
+            "Claude session {}",
+            &parsed.session_id[..8.min(parsed.session_id.len())]
+        )
+    });
     let mut conversation = Conversation::new(title);
     conversation.active_harness_id = Some(harness_id.to_string());
     conversation.model_id = Some(model_id.to_string());
@@ -258,7 +260,10 @@ mod tests {
                 .unwrap();
         assert_eq!(conversation.messages.len(), 2);
         assert_eq!(
-            conversation.native_session.as_ref().map(|link| link.session_id.as_str()),
+            conversation
+                .native_session
+                .as_ref()
+                .map(|link| link.session_id.as_str()),
             Some("abc-123")
         );
     }

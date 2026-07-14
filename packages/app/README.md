@@ -1,46 +1,61 @@
 # @tamtri/app
 
-The single tamtri UI — Expo + React Native Web, Paseo-inspired dark theme with green accent.
+The single tamtri UI — Expo + React Native Web (SDK 54), dark theme with green accent.
 
-One codebase renders on **desktop** (Electron renderer), **web**, and **mobile** (later).
+One codebase renders on **desktop** (Electron renderer), **web**, and **mobile** (iOS/Android via Expo Go).
 
-**Dev commands and the full monorepo command reference:** see the [root README](../../README.md).
+**User guide:** [docs/getting-started.md](../../docs/getting-started.md)
+**Dev commands:** [root README](../../README.md)
 
 ## Design
 
-Borrowed from [Paseo](https://github.com/nousresearch/paseo):
-
-- Layered surfaces (`surfaceSidebar` #141716, `surface0` #181B1A, green accent #20744A)
-- Left sidebar + centered transcript (max 820px) + bottom composer
-- Status dots on conversation rows, tool/thinking cards in the transcript
+- Layered surfaces (sidebar, transcript, composer, artifact sidebar)
+- Resizable left and right sidebars (desktop)
+- Paseo-inspired layout patterns; tamtri-owned theme tokens (`styles/themes/`)
 
 ## Dev
 
-Use the root scripts (from the repo root):
-
 ```bash
-npm run dev:web       # browser: daemon + Metro + auth
-npm run dev:desktop     # Electron: Metro + shell (daemon spawned by Electron)
+pnpm run dev:web       # browser: daemon + Metro + auth
+pnpm run dev:desktop   # Electron: Metro + shell (daemon spawned by Electron)
+pnpm run dev:ios       # physical iPhone: daemon on LAN + Expo Go (same Wi-Fi)
 ```
 
-See [README.md](../../README.md) for manual split workflows, build commands, and environment variables.
+See [README.md](../../README.md) for manual workflows and environment variables.
+
+### Physical iPhone (LAN dev)
+
+1. `pnpm run daemon:build`
+2. Same Wi-Fi as Mac
+3. `pnpm run dev:ios` → scan QR in Expo Go (SDK 54)
+4. Fallback: sidebar → **Connect host**
+
+Relay remote access is not production-ready yet.
 
 ## Structure
 
 ```
 src/
-  app/              Expo Router routes
-  components/       sidebar, transcript, composer, ui
-  runtime/          DaemonClient provider
+  app/              Expo Router routes (conversations, health, settings, onboarding)
+  components/
+    sidebar/        conversation list, new/fork sheets
+    transcript/     message list, tool/artifact cards, message actions
+    composer/       prompt input, harness/model chips, attachments
+    artifact/       right-sidebar preview panel
+    health/         agents & providers, usage, catalog
+    layout/         app shell, conversation pane
+  hooks/            daemon data (conversations, agents, providers, appearance)
+  lib/              transcript, ai-sdk-bridge, ui-message streaming
+  runtime/          DaemonClient provider, mobile connection config
   desktop/          Electron IPC transport
-  styles/           Paseo-inspired tokens
-  hooks/            conversation list/detail
+  styles/           theme tokens, light/dark, appearance store
+  content/          user-facing copy (onboarding, when added)
 ```
 
 ## Connectivity
 
-The UI constructs a `DaemonClient` from `@tamtri/client`:
+- **Desktop:** `window.tamtri.transport` (Electron IPC → daemon)
+- **Web:** WebSocket + bearer token (`dev:web` injects env)
+- **Mobile:** LAN WebSocket or Connect host screen
 
-- **Desktop:** `window.tamtri.transport` (Electron IPC → main process → daemon)
-- **Web:** direct localhost WebSocket (when configured)
-- **Mobile (later):** relay E2EE channel after pairing
+The UI never reads the vault filesystem directly; all state comes from the daemon wire protocol.

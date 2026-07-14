@@ -1,5 +1,7 @@
 //! Shared credential probes for native harness adapters (readiness + usage).
 
+use crate::harness::spawn_env::preserve_spawn_env;
+
 use std::io::Read;
 use std::path::PathBuf;
 use std::process::Command;
@@ -198,11 +200,14 @@ pub fn codex_credentials_present() -> bool {
 }
 
 fn claude_auth_status_logged_in(command: &str) -> bool {
-    let mut child = match Command::new(command)
-        .args(["auth", "status"])
+    let mut cmd = Command::new(command);
+    cmd.args(["auth", "status"])
+        .env_clear()
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null())
-        .spawn()
+        .stdin(std::process::Stdio::null());
+    preserve_spawn_env(&mut cmd);
+    let mut child = match cmd.spawn()
     {
         Ok(child) => child,
         Err(_) => return false,

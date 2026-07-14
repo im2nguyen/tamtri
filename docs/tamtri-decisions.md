@@ -1,8 +1,8 @@
 # tamtri: Architecture Decisions and Rationale
 
-A reference for what tamtri is, what we decided, and why. Read this to get back up to speed in a new conversation. Companion to CLAUDE.md (which is the operational spec for building) and the milestone docs (which are the build plans). This doc is the "why."
+A reference for what tamtri is, what we decided, and why. Read this to get back up to speed in a new conversation. Companion to [CLAUDE.md](../CLAUDE.md) (operational spec for building) and [docs/README.md](README.md) (current product and architecture). This doc is the "why."
 
-Last updated: July 2026. (The original product-spec.md is retired: CLAUDE.md is the operational spec, this doc is the why, the milestone docs are the build plans. The spec's surviving UI content moved into CLAUDE.md's "UI spec (V1)" section.)
+Last updated: July 2026. (The original product-spec.md is retired: CLAUDE.md is the operational spec, this doc is the why, live docs are in docs/README.md. The spec's surviving UI content moved into CLAUDE.md's "UI spec (V1)" section.)
 
 ---
 
@@ -189,9 +189,9 @@ Edge cases, decided (specified in milestone 1): folder names are cosmetic and th
 
 ---
 
-## 11. Build order (milestones)
+## 11. Build history
 
-Re-sequenced twice: first for the ACP + gateway model (sections 14–15), then to pull artifact rendering ahead of elicitation. The hero demo needs the sandboxed webview and nothing from elicitation, artifacts ride ACP `FileChanged` rather than the gateway, and the webview infrastructure lands once for Apps to reuse. Hero demo two milestones sooner. OAuth for remote servers pairs with URL elicitation (shared trusted-domain handoff machinery). Full outline in `/docs/milestone-3-9-outline.md`.
+Re-sequenced twice during early development: first for the ACP + gateway model (sections 14–15), then to pull artifact rendering ahead of elicitation. Historical build-session specs: [archive/milestones/](archive/milestones/). **Current status:** [README.md](README.md).
 
 1. Core skeleton: conversation model + vault + fork/import round-trip tests. No UI. **Done.**
 2. MCP baseline (downstream half of the gateway): tamtri connects to a local MCP server as an MCP client; tools end to end. **Done.**
@@ -213,9 +213,9 @@ Re-sequenced twice: first for the ACP + gateway model (sections 14–15), then t
 - **New-file create payload (quick check):** confirm a brand-new file (e.g. `report.html`, not an edit) arrives as a Write tool call carrying full content, since the spike leaned on edit hunks. This is the exact path the hero demo walks.
 - **Pure-gateway vs hybrid:** default policy for agent-native MCP servers (e.g. Claude Code's project `.mcp.json`) that tamtri does not intercept. Lean: gateway owns the rich primitives; let the agent keep its own coding-tool servers.
 - **License: AGPL now (decided).** Start AGPL, keep the option to relax to MIT later. Rationale: you can always relicense your own code more permissively, but you cannot claw back MIT grants, so AGPL-then-maybe-MIT is the reversible direction and MIT-then-AGPL is not. AGPL also deters proprietary forks of the surface while the project is young. **Consequence to honor:** to preserve the future MIT option, every external contribution needs a CLA or copyright assignment; otherwise contributors' AGPL code cannot be relicensed. Set up a CLA/DCO before accepting outside PRs. Note AGPL may complicate some corporate adoption and the future enterprise/self-host story, which is acceptable now given the protect-first intent.
-- **Onboarding for technical-adjacent users (decided):** a first-run **harness health screen**. tamtri detects installed ACP agents (well-known binaries and config paths), shows per-agent install and auth status, links each agent's install docs, and offers a copyable IT/admin setup checklist for the common case where a company provisions the tools. tamtri detects and guides; it never bundles, installs, or manages an agent, which keeps it out of the inference-vendor lane. Spec'd in CLAUDE.md's UI spec; prototyped alongside milestone 3, polished in milestone 8.
+- **Onboarding for technical-adjacent users (decided):** an **Agents & providers** screen (`/health`) detects installed agents, shows install status, links vendor docs, and offers a copyable IT/admin checklist. tamtri detects and guides; it never bundles or installs agents. First-run onboarding gate and plain-language flow are still in progress — see [getting-started.md](getting-started.md) and [product-gaps.md](product-gaps.md).
 - **Learning without telemetry (decided):** no passive metrics, ever, in V1. The project learns through an opt-in diagnostics bundle: a "Report an issue" action assembles app version, macOS version, harness roster and versions, and recent non-sensitive log excerpts into a local file the user reviews before attaching to a GitHub issue. Nothing leaves the machine on its own.
-- **Contribution mechanics before launch (decided):** the CLA (required to preserve the MIT option) plus DCO, a CONTRIBUTING.md, a code of conduct, and labeled issues (good-first-issue per milestone) all exist before outside PRs are invited. The brief's "read your way to a first PR" promise depends on this.
+- **Contribution mechanics before launch (decided):** the CLA (required to preserve the MIT option) plus DCO, a CONTRIBUTING.md, a code of conduct, and labeled issues (good-first-issue tags) all exist before outside PRs are invited.
 - **Launch hero flow:** the single "wow" demo to build toward. Leading candidate is the report.html render.
 
 ---

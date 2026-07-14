@@ -210,6 +210,31 @@ pub struct HarnessProviderEntryDto {
     pub enabled: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_count: Option<u32>,
+    #[serde(default)]
+    pub hidden: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub picker_order: Option<u32>,
+}
+
+#[typeshare]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HarnessInstalledCliDto {
+    pub id: String,
+    pub display_name: String,
+    pub command: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    pub install_doc_url: String,
+    pub in_roster: bool,
+    pub auth_ready: bool,
+}
+
+#[typeshare]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HarnessPickerSettingsDto {
+    pub harness_order: Vec<String>,
+    pub hidden_harness_ids: Vec<String>,
+    pub enable_cli_update_checks: bool,
 }
 
 #[typeshare]
@@ -460,6 +485,7 @@ impl TamtriCore {
     pub fn new_inner(vault_path: PathBuf, observer: Arc<dyn ConversationObserver>) -> Result<Self> {
         let runtime = Builder::new_multi_thread().enable_all().build()?;
         seed_agent_roster_if_empty(&vault_path)?;
+        crate::harness::discovery::sync_agent_roster_with_discovery(&vault_path)?;
         let vault = Arc::new(FilesystemVault::new(vault_path.clone())?);
         let projects = Arc::new(ProjectStore::new(&vault_path)?);
         let config = load_app_config(&vault_path)?;
@@ -1160,6 +1186,32 @@ impl TamtriCore {
 
     pub fn list_harness_usage(&self) -> FfiResult<HarnessUsageListDto> {
         self.list_harness_usage_inner().map_err(ffi_err)
+    }
+
+    pub fn list_harness_installed_clis(&self) -> FfiResult<Vec<HarnessInstalledCliDto>> {
+        self.list_harness_installed_clis_inner().map_err(ffi_err)
+    }
+
+    pub fn harness_picker_settings_get(&self) -> FfiResult<HarnessPickerSettingsDto> {
+        self.harness_picker_settings_get_inner().map_err(ffi_err)
+    }
+
+    pub fn harness_picker_settings_set(
+        &self,
+        harness_order: Vec<String>,
+        hidden_harness_ids: Vec<String>,
+        enable_cli_update_checks: bool,
+    ) -> FfiResult<()> {
+        self.harness_picker_settings_set_inner(
+            harness_order,
+            hidden_harness_ids,
+            enable_cli_update_checks,
+        )
+        .map_err(ffi_err)
+    }
+
+    pub fn harness_discovery_sync(&self) -> FfiResult<()> {
+        self.harness_discovery_sync_inner().map_err(ffi_err)
     }
 
     pub fn harness_health_checklist(&self) -> FfiResult<String> {
@@ -2557,12 +2609,32 @@ impl TamtriCore {
 
     fn roster_specs_from_config(&self) -> Result<Vec<AgentLaunchSpec>> {
         let config = load_app_config(self.vault.root())?;
-        let mut specs = config.agent_roster;
-        specs.sort_by(|left, right| left.display_name.cmp(&right.display_name));
-        Ok(specs)
+        Ok(crate::harness::discovery::sort_roster_by_picker_order(
+            config.agent_roster,
+            &config.harness_order,
+        ))
+    }
+
+    fn picker_settings_from_config(&self) -> Result<HarnessPickerSettingsDto> {
+        let config = load_app_config(self.vault.root())?;
+        Ok(HarnessPickerSettingsDto {
+            harness_order: config.harness_order,
+            hidden_harness_ids: config.hidden_harness_ids,
+            enable_cli_update_checks: config.enable_cli_update_checks,
+        })
     }
 
     pub fn list_harness_providers_inner(&self) -> Result<Vec<HarnessProviderEntryDto>> {
+        let config = load_app_config(self.vault.root())?;
+        let hidden: std::collections::HashSet<_> =
+            config.hidden_harness_ids.iter().cloned().collect();
+        let order_index = |id: &str| -> Option<u32> {
+            config
+                .harness_order
+                .iter()
+                .position(|entry| entry == id)
+                .map(|index| index as u32)
+        };
         let roster = self.roster_specs_from_config()?;
         let adapters = self
             .adapters
@@ -2600,9 +2672,58 @@ impl TamtriCore {
                     adapter_kind: adapter_kind_label(&spec.adapter).to_string(),
                     enabled: spec.enabled,
                     model_count,
+                    hidden: hidden.contains(&spec.id),
+                    picker_order: order_index(&spec.id),
                 }
             })
             .collect())
+    }
+
+    pub fn list_harness_installed_clis_inner(&self) -> Result<Vec<HarnessInstalledCliDto>> {
+        let config = load_app_config(self.vault.root())?;
+        Ok(crate::harness::discovery::list_installed_clis(&config.agent_roster)
+            .into_iter()
+            .map(|cli| HarnessInstalledCliDto {
+                id: cli.id,
+                display_name: cli.display_name,
+                command: cli.command,
+                version: cli.version,
+                install_doc_url: cli.install_doc_url,
+                in_roster: cli.in_roster,
+                auth_ready: cli.auth_ready,
+            })
+            .collect())
+    }
+
+    pub fn harness_picker_settings_get_inner(&self) -> Result<HarnessPickerSettingsDto> {
+        self.picker_settings_from_config()
+    }
+
+    pub fn harness_picker_settings_set_inner(
+        &self,
+        harness_order: Vec<String>,
+        hidden_harness_ids: Vec<String>,
+        enable_cli_update_checks: bool,
+    ) -> Result<()> {
+        crate::harness::discovery::update_picker_settings(
+            self.vault.root(),
+            harness_order,
+            hidden_harness_ids,
+            enable_cli_update_checks,
+        )
+    }
+
+    pub fn harness_discovery_sync_inner(&self) -> Result<()> {
+        crate::harness::discovery::sync_agent_roster_with_discovery(self.vault.root())?;
+        let config = load_app_config(self.vault.root())?;
+        let mut adapters = self
+            .adapters
+            .lock()
+            .map_err(|_| CoreError::Protocol("adapter registry lock poisoned".to_string()))?;
+        for spec in &config.agent_roster {
+            adapters.insert(spec.id.clone(), crate::harness::registry::build_adapter(spec));
+        }
+        Ok(())
     }
 
     pub fn harness_readiness_recommend_inner(&self) -> Result<HarnessReadinessRecommendDto> {

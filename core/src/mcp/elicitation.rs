@@ -29,9 +29,9 @@ pub fn schema_looks_secret(schema: &Value) -> bool {
     let Some(properties) = schema.get("properties").and_then(Value::as_object) else {
         return false;
     };
-    properties.iter().any(|(name, property)| {
-        text_looks_secret(name) || field_descriptor_looks_secret(property)
-    })
+    properties
+        .iter()
+        .any(|(name, property)| text_looks_secret(name) || field_descriptor_looks_secret(property))
 }
 
 fn field_descriptor_looks_secret(property: &Value) -> bool {
@@ -102,7 +102,12 @@ pub fn result_for_action(action: ElicitationAction, data: Option<Value>) -> Valu
 
 pub fn origin_tool_call_id_from_meta(meta: Option<&Value>) -> Option<String> {
     let meta = meta?;
-    for key in ["toolCallId", "tool_call_id", "originToolCallId", "origin_tool_call_id"] {
+    for key in [
+        "toolCallId",
+        "tool_call_id",
+        "originToolCallId",
+        "origin_tool_call_id",
+    ] {
         if let Some(value) = meta.get(key).and_then(Value::as_str) {
             return Some(value.to_string());
         }

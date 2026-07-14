@@ -3,9 +3,9 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use serde::Serialize;
-use serde_json::{json, Value};
-use zip::write::SimpleFileOptions;
+use serde_json::{Value, json};
 use zip::ZipWriter;
+use zip::write::SimpleFileOptions;
 
 use crate::config::{AppConfig, GatewayConfig, GatewayServerConfig, GatewayTransport};
 use crate::{CoreError, Result};
@@ -123,10 +123,25 @@ pub(crate) fn collect_events_excerpts(
             fs::read_to_string(&meta_path)
                 .ok()
                 .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
-                .and_then(|value| value.get("id").and_then(|id| id.as_str()).map(str::to_string))
-                .unwrap_or_else(|| folder.file_name().unwrap_or_default().to_string_lossy().into_owned())
+                .and_then(|value| {
+                    value
+                        .get("id")
+                        .and_then(|id| id.as_str())
+                        .map(str::to_string)
+                })
+                .unwrap_or_else(|| {
+                    folder
+                        .file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        .into_owned()
+                })
         } else {
-            folder.file_name().unwrap_or_default().to_string_lossy().into_owned()
+            folder
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .into_owned()
         };
         let raw = fs::read_to_string(&events_path)?;
         let lines: Vec<String> = raw
@@ -191,7 +206,8 @@ pub fn write_diagnostics_bundle(
     });
     write_zip_json(&mut zip, "manifest.json", &manifest, options)?;
 
-    let excerpts = collect_events_excerpts(&vault_root.join("conversations"), EVENTS_EXCERPT_MAX_LINES)?;
+    let excerpts =
+        collect_events_excerpts(&vault_root.join("conversations"), EVENTS_EXCERPT_MAX_LINES)?;
     let mut events_bytes = 0usize;
     let mut capped_excerpts = Vec::new();
     for excerpt in excerpts {
@@ -260,8 +276,8 @@ mod tests {
     use super::*;
     use crate::config::GatewayConfig;
     use crate::conversation::Conversation;
-    use crate::vault::fs::FilesystemVault;
     use crate::vault::ConversationVault;
+    use crate::vault::fs::FilesystemVault;
     use std::fs;
 
     #[test]
@@ -351,6 +367,11 @@ mod tests {
             "detail": "Duplicate conversation id"
         }]);
         assert_eq!(issues[0]["kind"], "duplicate_id");
-        assert!(issues[0]["detail"].as_str().unwrap().contains("Duplicate conversation id"));
+        assert!(
+            issues[0]["detail"]
+                .as_str()
+                .unwrap()
+                .contains("Duplicate conversation id")
+        );
     }
 }

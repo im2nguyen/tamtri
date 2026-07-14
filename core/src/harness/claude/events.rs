@@ -1,8 +1,6 @@
 use serde_json::{Value, json};
 
-use crate::harness::{
-    HarnessEvent, ToolKind, ToolStatus, TurnEndReason,
-};
+use crate::harness::{HarnessEvent, ToolKind, ToolStatus, TurnEndReason};
 
 pub fn stream_line_events(line: &Value) -> Vec<HarnessEvent> {
     match line.get("type").and_then(Value::as_str) {
@@ -56,11 +54,12 @@ fn assistant_events(line: &Value) -> Vec<HarnessEvent> {
 
 fn assistant_block_event(item: &Value) -> Option<HarnessEvent> {
     match item.get("type").and_then(Value::as_str)? {
-        "text" => item.get("text").and_then(Value::as_str).map(|text| {
-            HarnessEvent::TextDelta {
+        "text" => item
+            .get("text")
+            .and_then(Value::as_str)
+            .map(|text| HarnessEvent::TextDelta {
                 text: text.to_string(),
-            }
-        }),
+            }),
         "thinking" => item
             .get("thinking")
             .and_then(Value::as_str)

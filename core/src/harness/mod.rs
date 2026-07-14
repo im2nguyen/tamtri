@@ -1,10 +1,18 @@
 pub mod acp;
+pub mod auth;
 pub mod claude;
 pub mod codex;
 pub mod health;
+pub mod opencode;
+pub mod pi;
+pub mod discovery;
+pub mod readiness;
+pub mod spawn_env;
 pub mod registry;
+pub mod roster;
 pub mod sessions;
 pub mod tools;
+pub mod usage;
 
 use std::path::PathBuf;
 
@@ -14,6 +22,7 @@ use tokio::sync::mpsc;
 
 use crate::Result;
 use crate::conversation::{Message, NativeSessionLink, WorkingDir};
+use crate::harness::readiness::{ReadinessDiagnostic, diagnose_agent};
 
 #[async_trait]
 pub trait HarnessAdapter: Send + Sync {
@@ -22,6 +31,21 @@ pub trait HarnessAdapter: Send + Sync {
     fn capabilities(&self) -> HarnessCapabilities;
     fn agent_launch_spec(&self) -> Option<crate::harness::acp::AgentLaunchSpec> {
         None
+    }
+    fn readiness_diagnostic(&self, enabled: bool) -> ReadinessDiagnostic {
+        if let Some(spec) = self.agent_launch_spec() {
+            diagnose_agent(&spec, enabled)
+        } else {
+            ReadinessDiagnostic {
+                state: readiness::ReadinessState::CheckFailed,
+                recovery_action: "ask_it".into(),
+                message: Some(format!(
+                    "{} has no launch configuration.",
+                    self.display_name()
+                )),
+                install_doc_url: String::new(),
+            }
+        }
     }
     async fn run(&self, ctx: ConversationContext, turn: TurnInput) -> Result<HarnessRun>;
     async fn available_models(&self) -> Result<Vec<ModelInfo>>;
@@ -37,6 +61,10 @@ pub struct HarnessCapabilities {
     /// relying solely on tamtri's MCP gateway surface.
     #[serde(default)]
     pub native_tools: bool,
+    /// When true, the user may change `model_id` on the conversation and the
+    /// next turn will use the new model without forking.
+    #[serde(default)]
+    pub runtime_model_switch: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

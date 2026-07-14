@@ -6,13 +6,14 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::mpsc;
 
+use crate::Result;
 use crate::conversation::{ContentBlock, Message, NativeSessionLink};
 use crate::harness::acp::AgentLaunchSpec;
 use crate::harness::claude::events::stream_line_events;
+use crate::harness::spawn_env::preserve_spawn_env_tokio;
 use crate::harness::{
     ContextSeed, ConversationContext, HarnessEvent, RunCommand, TurnEndReason, TurnInput,
 };
-use crate::Result;
 
 pub async fn run_claude_session(
     launch: AgentLaunchSpec,
@@ -33,11 +34,7 @@ pub async fn run_claude_session(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .current_dir(&cwd);
-    preserve_env(&mut cmd, "PATH");
-    preserve_env(&mut cmd, "HOME");
-    preserve_env(&mut cmd, "TMPDIR");
-    preserve_env(&mut cmd, "LANG");
-    preserve_env(&mut cmd, "CLAUDE_CONFIG_DIR");
+    preserve_spawn_env_tokio(&mut cmd);
     for (key, value) in &launch.env {
         cmd.env(key, value);
     }
@@ -189,7 +186,11 @@ async fn read_stdout_loop(
     Ok(())
 }
 
-pub fn build_claude_args(prompt: &str, ctx: &ConversationContext, launch: &AgentLaunchSpec) -> Vec<String> {
+pub fn build_claude_args(
+    prompt: &str,
+    ctx: &ConversationContext,
+    launch: &AgentLaunchSpec,
+) -> Vec<String> {
     let mut args = vec![
         "-p".to_string(),
         prompt.to_string(),
@@ -203,7 +204,11 @@ pub fn build_claude_args(prompt: &str, ctx: &ConversationContext, launch: &Agent
         args.push("--model".to_string());
         args.push(model);
     }
-    if let Some(NativeSessionLink { provider, session_id, .. }) = &ctx.native_session
+    if let Some(NativeSessionLink {
+        provider,
+        session_id,
+        ..
+    }) = &ctx.native_session
         && provider == "claude"
     {
         args.push("--resume".to_string());
@@ -269,12 +274,6 @@ fn render_message(message: &Message) -> String {
         .join("\n")
 }
 
-fn preserve_env(cmd: &mut Command, key: &str) {
-    if let Ok(value) = std::env::var(key) {
-        cmd.env(key, value);
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -289,9 +288,7 @@ mod tests {
                     id: uuid::Uuid::now_v7(),
                     role: Role::User,
                     harness_id: None,
-                    content: vec![ContentBlock::Text {
-                        text: "old".into(),
-                    }],
+                    content: vec![ContentBlock::Text { text: "old".into() }],
                     created_at: chrono::Utc::now(),
                 }],
             },
@@ -313,9 +310,7 @@ mod tests {
                 id: uuid::Uuid::now_v7(),
                 role: Role::User,
                 harness_id: None,
-                content: vec![ContentBlock::Text {
-                    text: "new".into(),
-                }],
+                content: vec![ContentBlock::Text { text: "new".into() }],
                 created_at: chrono::Utc::now(),
             },
         };
@@ -351,6 +346,7 @@ mod tests {
                 args: vec![],
                 env: vec![],
                 adapter: Default::default(),
+                enabled: true,
             },
         );
         assert!(args.contains(&"--resume".to_string()));

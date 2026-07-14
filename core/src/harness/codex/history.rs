@@ -17,9 +17,8 @@ pub struct ParsedCodexSession {
 }
 
 pub fn parse_codex_session_file(path: &Path) -> Result<ParsedCodexSession> {
-    let content = fs::read_to_string(path).map_err(|err| {
-        CoreError::Protocol(format!("failed to read Codex session file: {err}"))
-    })?;
+    let content = fs::read_to_string(path)
+        .map_err(|err| CoreError::Protocol(format!("failed to read Codex session file: {err}")))?;
     parse_codex_session_jsonl(&content)
 }
 
@@ -38,7 +37,10 @@ pub fn parse_codex_session_jsonl(content: &str) -> Result<ParsedCodexSession> {
             Ok(value) => value,
             Err(_) => continue,
         };
-        let entry_type = entry.get("type").and_then(Value::as_str).unwrap_or_default();
+        let entry_type = entry
+            .get("type")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
         match entry_type {
             "session_meta" => {
                 if let Some(payload) = entry.get("payload") {
@@ -65,10 +67,10 @@ pub fn parse_codex_session_jsonl(content: &str) -> Result<ParsedCodexSession> {
         }
     }
 
-    let session_id = session_id.ok_or_else(|| {
-        CoreError::Protocol("Codex session file missing session_id".to_string())
-    })?;
-    let cwd = cwd.ok_or_else(|| CoreError::Protocol("Codex session file missing cwd".to_string()))?;
+    let session_id = session_id
+        .ok_or_else(|| CoreError::Protocol("Codex session file missing session_id".to_string()))?;
+    let cwd =
+        cwd.ok_or_else(|| CoreError::Protocol("Codex session file missing cwd".to_string()))?;
 
     Ok(ParsedCodexSession {
         session_id,
@@ -124,11 +126,13 @@ fn content_block_from_item(item: &Value, role: &Role) -> Option<ContentBlock> {
                 text: text.to_string(),
             })
         }
-        (Role::Assistant, "output_text") => item.get("text").and_then(Value::as_str).map(|text| {
-            ContentBlock::Text {
-                text: text.to_string(),
-            }
-        }),
+        (Role::Assistant, "output_text") => {
+            item.get("text")
+                .and_then(Value::as_str)
+                .map(|text| ContentBlock::Text {
+                    text: text.to_string(),
+                })
+        }
         _ => None,
     }
 }

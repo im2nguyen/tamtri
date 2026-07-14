@@ -178,11 +178,7 @@ impl GatewayTaskTracker {
         }
     }
 
-    pub async fn cancel_task(
-        &self,
-        task_id: &str,
-        emit: EmitFn,
-    ) -> Result<()> {
+    pub async fn cancel_task(&self, task_id: &str, emit: EmitFn) -> Result<()> {
         let server_id = self
             .task_server_id(task_id)
             .await
@@ -212,11 +208,7 @@ impl GatewayTaskTracker {
         self.stop_polling(task_id).await;
     }
 
-    pub async fn resume_polling(
-        &self,
-        task_id: &str,
-        emit: EmitFn,
-    ) -> Result<()> {
+    pub async fn resume_polling(&self, task_id: &str, emit: EmitFn) -> Result<()> {
         self.suspended.lock().await.remove(task_id);
         let server_id = self
             .task_server_id(task_id)
@@ -229,8 +221,14 @@ impl GatewayTaskTracker {
         let raw = client.get_task(task_id).await?;
         let mcp_task = parse_task_value(&raw)
             .ok_or_else(|| CoreError::Protocol("invalid tasks/get response".to_string()))?;
-        self.apply_task_update(&server_id, mcp_task, None, Arc::clone(&emit), Arc::clone(&client))
-            .await;
+        self.apply_task_update(
+            &server_id,
+            mcp_task,
+            None,
+            Arc::clone(&emit),
+            Arc::clone(&client),
+        )
+        .await;
         let subscribe_capable = self
             .tasks
             .lock()
@@ -319,10 +317,7 @@ impl GatewayTaskTracker {
                     result.clone(),
                 );
                 if terminal {
-                    emit(GatewayEvent::TaskCompleted {
-                        state,
-                        result,
-                    });
+                    emit(GatewayEvent::TaskCompleted { state, result });
                     break;
                 }
                 emit(GatewayEvent::TaskUpdated { state });

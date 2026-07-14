@@ -1,4 +1,4 @@
-import { HomePane } from "@/components/layout/conversation-pane";
+import { HomePane } from "@/components/layout/home-pane";
 
 export default function HomeScreen() {
   return <HomePane />;

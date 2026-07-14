@@ -7,11 +7,11 @@
   "scripts": {
     "typecheck": "tsc --noEmit",
     "build": "node build.mjs",
-    "start": "npm run build && electron dist/main.js",
+    "start": "pnpm run build && electron dist/main.js",
     "test": "node --import tsx --test test/*.test.ts"
   },
   "dependencies": {
-    "@tamtri/client": "*"
+    "@tamtri/client": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^26.1.1",

@@ -1,16 +1,18 @@
 import { Platform, Text, View } from "react-native";
 
 import { SandboxedHtml } from "@/components/transcript/sandboxed-html.web";
-import { theme } from "@/styles/theme";
+import { useTheme } from "@/styles/use-theme";
 
 interface SandboxedHtmlProps {
   html: string;
   title?: string;
   height?: number;
+  fill?: boolean;
   onNavigationBlocked?: (url: string) => void;
 }
 
 export function SandboxedHtmlNative(props: SandboxedHtmlProps) {
+  const theme = useTheme();
   if (Platform.OS === "web") {
     return <SandboxedHtml {...props} />;
   }

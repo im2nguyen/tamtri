@@ -3,7 +3,7 @@ import { Text, View } from "react-native";
 
 import { Button } from "@/components/ui/button";
 import type { ClassifiedError } from "@/lib/errors";
-import { theme } from "@/styles/theme";
+import { useTheme } from "@/styles/use-theme";
 
 interface ErrorCardProps {
   error: ClassifiedError;
@@ -12,6 +12,7 @@ interface ErrorCardProps {
 }
 
 export function ErrorCard({ error, onAction, compact }: ErrorCardProps) {
+  const theme = useTheme();
   const Icon = error.kind === "unknown" ? Info : AlertTriangle;
   const tone =
     error.kind === "conversation_busy" || error.kind === "schema_version"

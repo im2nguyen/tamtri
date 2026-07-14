@@ -12,16 +12,16 @@ cargo test -p tamtri-core -- --test-threads=1
 echo "[core] clippy"
 cargo clippy -p tamtri-core -p tamtri-daemon --all-targets -- -D warnings
 
-if command -v npm >/dev/null 2>&1; then
+if command -v pnpm >/dev/null 2>&1; then
   echo "[app] typecheck"
-  npm run typecheck --workspace @tamtri/app
+  pnpm --filter @tamtri/app run typecheck
 
   echo "[desktop] typecheck"
-  npm run typecheck --workspace @tamtri/desktop
+  pnpm --filter @tamtri/desktop run typecheck
 else
-  echo "[npm] skipped (npm unavailable)"
+  echo "[pnpm] skipped (pnpm unavailable)"
 fi
 
 echo "Checklist passed."
 echo "Manual visual pass: docs/visual-qa-checklist.md"
-echo "Desktop dev: npm run app:web + npm run desktop:dev"
+echo "Desktop dev: pnpm run app:web + pnpm run desktop:dev"

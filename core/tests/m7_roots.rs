@@ -5,12 +5,13 @@ use pretty_assertions::assert_eq;
 use serde_json::json;
 use tamtri_core::config::{GatewayConfig, GatewayScope, GatewayServerConfig, GatewayTransport};
 use tamtri_core::conversation::{
-    Conversation, Root, RootKind, RootScope, attach_root, filesystem_root_requires_bookmark,
-    is_path_under_any_root, missing_bookmark_error_state, remove_root,
+    Conversation, Root, RootKind, RootOrigin, RootScope, attach_root,
+    filesystem_root_requires_bookmark, is_path_under_any_root, missing_bookmark_error_state,
+    remove_root,
 };
 use tamtri_core::mcp::gateway::{McpGateway, NoCredentials};
-use tamtri_core::vault::fs::FilesystemVault;
 use tamtri_core::vault::ConversationVault;
+use tamtri_core::vault::fs::FilesystemVault;
 
 fn stdio_server(id: &str, command: &str) -> GatewayServerConfig {
     GatewayServerConfig {
@@ -36,6 +37,7 @@ fn sample_root(uri: &str) -> Root {
         uri: uri.to_string(),
         kind: RootKind::Filesystem,
         scope: RootScope::Conversation,
+        origin: RootOrigin::Conversation,
     }
 }
 
@@ -86,6 +88,7 @@ fn root_missing_bookmark_surfaces_error_state() {
         uri: "kb://team/docs".to_string(),
         kind: RootKind::KnowledgeBase,
         scope: RootScope::Conversation,
+        origin: RootOrigin::Conversation,
     };
     assert!(!filesystem_root_requires_bookmark(&kb_root));
     assert!(missing_bookmark_error_state(&kb_root, false).is_none());
@@ -107,9 +110,7 @@ async fn roots_exposed_to_downstream_server() {
     let root_path = temp.path().join("data");
     fs::create_dir_all(&root_path).expect("mkdir");
     let root_uri = format!("file://{}", root_path.to_string_lossy());
-    gateway
-        .set_roots(vec![sample_root(&root_uri)])
-        .await;
+    gateway.set_roots(vec![sample_root(&root_uri)]).await;
 
     let result = gateway
         .call_tool("m7roots__probe_roots", json!({}))
@@ -184,9 +185,7 @@ async fn roots_listed_emitted_when_downstream_lists_roots() {
     let root_path = temp.path().join("data");
     fs::create_dir_all(&root_path).expect("mkdir");
     let root_uri = format!("file://{}", root_path.to_string_lossy());
-    gateway
-        .set_roots(vec![sample_root(&root_uri)])
-        .await;
+    gateway.set_roots(vec![sample_root(&root_uri)]).await;
 
     let gateway_for_call = Arc::new(gateway);
     let call_gateway = Arc::clone(&gateway_for_call);
@@ -199,8 +198,7 @@ async fn roots_listed_emitted_when_downstream_lists_roots() {
     let listed = tokio::time::timeout(std::time::Duration::from_secs(5), async {
         loop {
             let event = rx.recv().await.expect("gateway event");
-            if let tamtri_core::mcp::gateway::GatewayEvent::RootsListed { server_id, count } =
-                event
+            if let tamtri_core::mcp::gateway::GatewayEvent::RootsListed { server_id, count } = event
             {
                 return (server_id, count);
             }
@@ -232,9 +230,7 @@ async fn downstream_validate_path_respects_roots() {
     let inside = root_path.join("report.csv");
     fs::write(&inside, b"ok").expect("write");
     let root_uri = format!("file://{}", root_path.to_string_lossy());
-    gateway
-        .set_roots(vec![sample_root(&root_uri)])
-        .await;
+    gateway.set_roots(vec![sample_root(&root_uri)]).await;
 
     let allowed = gateway
         .call_tool(

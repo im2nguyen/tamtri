@@ -21,7 +21,7 @@ Trust is structural, not promised. Your conversations live as plain files in a f
 - **Engine and model agnostic.** Any harness, any model. Fork a conversation to try another. Never locked to one vendor.
 - **Renders what a terminal can't.** Finished reports, charts, interactive apps, inline. This is the whole point.
 - **Your data is files.** Legible, local, yours. Nothing hidden, nothing held hostage.
-- **Native outer shell, web renderer where it helps.** Instant launch, menu bar, real shortcuts, keychain/bookmark integration, with React/TypeScript allowed inside WebKit for the complex AI surfaces.
+- **Native desktop + web UI.** Electron desktop and Expo web/mobile share one `@tamtri/app` codebase. Menu bar, shortcuts, and packaged Mac download are on the roadmap; dev builds use Electron today.
 
 ## How it works
 
@@ -35,12 +35,10 @@ tamtri is that bet for AI knowledge work, and the timing is the point. MCP forma
 
 ## Built to be contributed to
 
-This is a young codebase designed for other people's hands. A portable Rust core under a native Swift shell, with contained WebKit renderer islands where the web ecosystem helps. Layer boundaries are sacred: the core never touches UI, and no adapter leaks its quirks past its own seam, because the adapter interface is the future plugin contract. Every architectural decision is written down with its reasoning, and every milestone ships as a spec with its tests enumerated before the code exists. You can read your way to a first PR.
+This is a young codebase designed for other people's hands. A portable Rust core with Expo/Electron surfaces today (native Swift shell planned). Layer boundaries are sacred: the core never touches UI, and no adapter leaks its quirks past its own seam, because the adapter interface is the future plugin contract. Architectural decisions are written in [docs/tamtri-decisions.md](./tamtri-decisions.md); live docs are in [docs/README.md](./README.md).
 
-It is early. That is the offer: ground floor on the open surface for agents, with the hard decisions documented and plenty of good problems left. Harness adapters, MCP primitive rendering, the vault, the shell. AGPL, with a CLA.
-
-**Use it:** star the repo, follow the milestones, break the builds and file what you find.
-**Build it:** read `tamtri-decisions.md`, pick a milestone task, open an issue to claim it.
+**Use it:** download or build from source, set up an agent app, run the report-from-data demo.
+**Build it:** read `tamtri-decisions.md`, pick an area from [product-gaps.md](./product-gaps.md), open an issue to claim it.
 
 ---
 

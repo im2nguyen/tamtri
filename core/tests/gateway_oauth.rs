@@ -287,7 +287,7 @@ async fn oauth_refresh_success_updates_keychain_impl() {
     assert_eq!(updated.access_token, "access-new");
 }
 
-/// Spec name from docs/milestone-6.md; `MemoryCredentials` mirrors keychain preload in core tests.
+/// OAuth gateway test; `MemoryCredentials` mirrors keychain preload in core tests.
 /// Real keychain round-trips live in `KeychainCredentialStoreTests` (Swift).
 #[tokio::test]
 async fn oauth_refresh_success_updates_keychain() {

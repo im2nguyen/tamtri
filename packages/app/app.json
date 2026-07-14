@@ -16,6 +16,13 @@
           "root": "./src/app"
         }
       ]
-    ]
+    ],
+    "ios": {
+      "infoPlist": {
+        "NSAppTransportSecurity": {
+          "NSAllowsLocalNetworking": true
+        }
+      }
+    }
   }
 }

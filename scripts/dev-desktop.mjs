@@ -19,12 +19,12 @@ function run(label, cmd, args, env = process.env) {
   return child;
 }
 
-const metro = run("metro", "npm", ["run", "web", "--workspace", "@tamtri/app"]);
+const metro = run("metro", "pnpm", ["--filter", "@tamtri/app", "run", "web"]);
 
 // Give Metro a head start before Electron loads localhost:8081.
 await new Promise((resolve) => setTimeout(resolve, 2500));
 
-const desktop = run("electron", "npm", ["run", "start", "--workspace", "@tamtri/desktop"], {
+const desktop = run("electron", "pnpm", ["--filter", "@tamtri/desktop", "run", "start"], {
   ...process.env,
   TAMTRI_USE_DEV_SERVER: "1",
 });

@@ -49,11 +49,23 @@ pub mod method {
     pub const CONVERSATION_LOAD: &str = "conversation.load";
     pub const CONVERSATION_CREATE: &str = "conversation.create";
     pub const CONVERSATION_FORK: &str = "conversation.fork";
+    pub const CONVERSATION_MOVE_PROJECT: &str = "conversation.move_project";
+    pub const CONVERSATION_SET_MODEL: &str = "conversation.set_model";
+    pub const CONVERSATION_COPY_EXAMPLE: &str = "conversation.copy_example";
     pub const CONVERSATION_DELETE: &str = "conversation.delete";
     pub const CONVERSATION_SEND_MESSAGE: &str = "conversation.send_message";
     pub const CONVERSATION_FOLDER_PATH: &str = "conversation.folder_path";
     pub const CONVERSATION_EXPORT_BUNDLE: &str = "conversation.export_bundle";
     pub const CONVERSATION_IMPORT: &str = "conversation.import";
+
+    // Projects
+    pub const PROJECT_LIST: &str = "project.list";
+    pub const PROJECT_CREATE: &str = "project.create";
+    pub const PROJECT_UPDATE: &str = "project.update";
+    pub const PROJECT_DELETE: &str = "project.delete";
+    pub const PROJECT_ROOT_ATTACH: &str = "project.root_attach";
+    pub const PROJECT_ROOT_REMOVE: &str = "project.root_remove";
+    pub const PROJECT_CONVERSATION_CREATE: &str = "project.conversation_create";
 
     // Run control
     pub const RUN_CANCEL: &str = "run.cancel";
@@ -75,6 +87,7 @@ pub mod method {
     pub const WORKDIR_READ_FILE: &str = "workdir.read_file";
     pub const ATTACHMENT_READ_VERIFIED: &str = "attachment.read_verified";
     pub const ATTACHMENT_VERIFIED_PATH: &str = "attachment.verified_path";
+    pub const ARTIFACT_RESOLVE_PATH: &str = "artifact.resolve_path";
     pub const ARTIFACT_VERIFY_INLINE: &str = "artifact.verify_inline";
     pub const ARTIFACT_LOG_NAVIGATION_BLOCKED: &str = "artifact.log_navigation_blocked";
 
@@ -103,6 +116,15 @@ pub mod method {
     pub const SEARCH_SCOPE_MESSAGE: &str = "search.scope_message";
     pub const HARNESS_HEALTH_LIST: &str = "harness.health_list";
     pub const HARNESS_HEALTH_CHECKLIST: &str = "harness.health_checklist";
+    pub const HARNESS_PROVIDERS_LIST: &str = "harness.providers_list";
+    pub const HARNESS_READINESS_RECOMMEND: &str = "harness.readiness_recommend";
+    pub const HARNESS_ROSTER_SET_ENABLED: &str = "harness.roster_set_enabled";
+    pub const HARNESS_ROSTER_ADD: &str = "harness.roster_add";
+    pub const HARNESS_USAGE_LIST: &str = "harness.usage_list";
+    pub const HARNESS_INSTALLED_CLIS_LIST: &str = "harness.installed_clis_list";
+    pub const HARNESS_PICKER_SETTINGS_GET: &str = "harness.picker_settings_get";
+    pub const HARNESS_PICKER_SETTINGS_SET: &str = "harness.picker_settings_set";
+    pub const HARNESS_DISCOVERY_SYNC: &str = "harness.discovery_sync";
     pub const VAULT_ISSUES: &str = "vault.issues";
     pub const VAULT_PATH: &str = "vault.path";
     pub const DIAGNOSTICS_WRITE_BUNDLE: &str = "diagnostics.write_bundle";
@@ -174,6 +196,15 @@ pub struct Features {
     /// Daemon can bridge remote clients through the E2E relay (Workstream A).
     #[serde(default)]
     pub relay: bool,
+    /// Daemon can list and mutate the harness agent roster from settings.
+    #[serde(default)]
+    pub harness_roster: bool,
+    /// Daemon can probe provider usage quotas (Codex, Claude).
+    #[serde(default)]
+    pub provider_usage: bool,
+    /// Daemon persists projects and exposes shared project roots.
+    #[serde(default)]
+    pub projects: bool,
 }
 
 /// Daemon identity + capabilities, returned in response to [`Hello`].
@@ -267,11 +298,20 @@ mod tests {
             method::CONVERSATION_LOAD,
             method::CONVERSATION_CREATE,
             method::CONVERSATION_FORK,
+            method::CONVERSATION_MOVE_PROJECT,
+            method::CONVERSATION_COPY_EXAMPLE,
             method::CONVERSATION_DELETE,
             method::CONVERSATION_SEND_MESSAGE,
             method::CONVERSATION_FOLDER_PATH,
             method::CONVERSATION_EXPORT_BUNDLE,
             method::CONVERSATION_IMPORT,
+            method::PROJECT_LIST,
+            method::PROJECT_CREATE,
+            method::PROJECT_UPDATE,
+            method::PROJECT_DELETE,
+            method::PROJECT_ROOT_ATTACH,
+            method::PROJECT_ROOT_REMOVE,
+            method::PROJECT_CONVERSATION_CREATE,
             method::RUN_CANCEL,
             method::PERMISSION_RESPOND,
             method::ELICITATION_RESPOND,
@@ -287,6 +327,7 @@ mod tests {
             method::WORKDIR_READ_FILE,
             method::ATTACHMENT_READ_VERIFIED,
             method::ATTACHMENT_VERIFIED_PATH,
+            method::ARTIFACT_RESOLVE_PATH,
             method::ARTIFACT_VERIFY_INLINE,
             method::ARTIFACT_LOG_NAVIGATION_BLOCKED,
             method::APP_RESOLVE_TEMPLATE,
@@ -309,6 +350,15 @@ mod tests {
             method::SEARCH_SCOPE_MESSAGE,
             method::HARNESS_HEALTH_LIST,
             method::HARNESS_HEALTH_CHECKLIST,
+            method::HARNESS_PROVIDERS_LIST,
+            method::HARNESS_READINESS_RECOMMEND,
+            method::HARNESS_ROSTER_SET_ENABLED,
+            method::HARNESS_ROSTER_ADD,
+            method::HARNESS_USAGE_LIST,
+            method::HARNESS_INSTALLED_CLIS_LIST,
+            method::HARNESS_PICKER_SETTINGS_GET,
+            method::HARNESS_PICKER_SETTINGS_SET,
+            method::HARNESS_DISCOVERY_SYNC,
             method::VAULT_ISSUES,
             method::VAULT_PATH,
             method::DIAGNOSTICS_WRITE_BUNDLE,

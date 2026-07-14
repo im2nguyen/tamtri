@@ -25,7 +25,8 @@ pub struct ConnectionOffer {
 }
 
 pub fn relay_endpoint_from_env() -> RelayEndpoint {
-    let endpoint = std::env::var("TAMTRI_RELAY_ENDPOINT").unwrap_or_else(|_| DEFAULT_RELAY_ENDPOINT.to_string());
+    let endpoint = std::env::var("TAMTRI_RELAY_ENDPOINT")
+        .unwrap_or_else(|_| DEFAULT_RELAY_ENDPOINT.to_string());
     RelayEndpoint {
         use_tls: !endpoint.contains(":80"),
         endpoint,

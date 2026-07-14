@@ -5,9 +5,11 @@ use std::time::Duration;
 use serde_json::{Value, json};
 use tokio::sync::{mpsc, oneshot};
 
+use super::events::{
+    is_approval_request, notification_events, permission_decision, permission_event,
+};
 use crate::conversation::{ContentBlock, Message};
 use crate::harness::acp::AgentLaunchSpec;
-use super::events::{is_approval_request, notification_events, permission_decision, permission_event};
 use crate::harness::tools::ToolCatalogEntry;
 use crate::harness::{
     ContextSeed, ConversationContext, HarnessEvent, RunCommand, TurnEndReason, TurnInput,
@@ -150,18 +152,16 @@ async fn run_codex_session_inner(
     Ok(())
 }
 
-pub async fn connect_and_initialize(launch: &AgentLaunchSpec, cwd: Option<&Path>) -> Result<(RpcHandle, mpsc::Receiver<InboundMessage>)> {
+pub async fn connect_and_initialize(
+    launch: &AgentLaunchSpec,
+    cwd: Option<&Path>,
+) -> Result<(RpcHandle, mpsc::Receiver<InboundMessage>)> {
     use crate::rpc::dispatch::RpcConnection;
     use crate::rpc::transport::stdio::StdioTransport;
 
     let args = effective_args(&launch.args);
-    let transport = StdioTransport::spawn_with_cwd(
-        &launch.command,
-        &args,
-        &launch.env,
-        cwd,
-    )
-    .await?;
+    let transport =
+        StdioTransport::spawn_with_cwd(&launch.command, &args, &launch.env, cwd).await?;
     let (rpc, inbound) = RpcConnection::start(Box::new(transport));
     handshake(&rpc).await?;
     Ok((rpc, inbound))

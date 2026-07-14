@@ -2,7 +2,7 @@ use std::path::{Component, Path, PathBuf};
 
 use url::Url;
 
-use crate::conversation::{Conversation, Root, RootKind, RootScope};
+use crate::conversation::{Conversation, Root, RootKind, RootOrigin, RootScope};
 use crate::{CoreError, Result};
 
 pub fn attach_root(
@@ -19,6 +19,7 @@ pub fn attach_root(
         uri,
         kind,
         scope,
+        origin: RootOrigin::Conversation,
     };
     validate_root(&root)?;
     conversation.roots.push(root.clone());
@@ -56,10 +57,14 @@ pub fn missing_bookmark_error_state(root: &Root, bookmark_present: bool) -> Opti
 
 pub fn validate_root(root: &Root) -> Result<()> {
     if root.uri.trim().is_empty() {
-        return Err(CoreError::MalformedVault("root uri is required".to_string()));
+        return Err(CoreError::MalformedVault(
+            "root uri is required".to_string(),
+        ));
     }
     if root.name.trim().is_empty() {
-        return Err(CoreError::MalformedVault("root name is required".to_string()));
+        return Err(CoreError::MalformedVault(
+            "root name is required".to_string(),
+        ));
     }
     if root.id.trim().is_empty() {
         return Err(CoreError::MalformedVault("root id is required".to_string()));
@@ -73,7 +78,9 @@ pub fn validate_root(root: &Root) -> Result<()> {
 pub fn normalize_root_uri(uri: &str, kind: &RootKind) -> Result<String> {
     let trimmed = uri.trim();
     if trimmed.is_empty() {
-        return Err(CoreError::MalformedVault("root uri is required".to_string()));
+        return Err(CoreError::MalformedVault(
+            "root uri is required".to_string(),
+        ));
     }
     if !matches!(kind, RootKind::Filesystem) {
         return Ok(trimmed.to_string());
@@ -87,18 +94,20 @@ pub fn normalize_root_uri(uri: &str, kind: &RootKind) -> Result<String> {
             "filesystem root must be an absolute path or file:// URI: {trimmed}"
         )));
     }
-    Url::from_file_path(path).map(|url| url.to_string()).map_err(|_| {
-        CoreError::MalformedVault(format!("filesystem root path is invalid: {trimmed}"))
-    })
+    Url::from_file_path(path)
+        .map(|url| url.to_string())
+        .map_err(|_| {
+            CoreError::MalformedVault(format!("filesystem root path is invalid: {trimmed}"))
+        })
 }
 
 pub fn root_filesystem_path(uri: &str) -> Result<PathBuf> {
     if let Ok(url) = Url::parse(uri)
         && url.scheme() == "file"
     {
-        return url
-            .to_file_path()
-            .map_err(|_| CoreError::MalformedVault(format!("root uri is not a local path: {uri}")));
+        return url.to_file_path().map_err(|_| {
+            CoreError::MalformedVault(format!("root uri is not a local path: {uri}"))
+        });
     }
     let path = PathBuf::from(uri);
     if path.is_absolute() {
@@ -210,6 +219,7 @@ mod tests {
             uri: "file:///tmp/reports".into(),
             kind: RootKind::Filesystem,
             scope: RootScope::Conversation,
+            origin: RootOrigin::Conversation,
         };
         assert!(missing_bookmark_error_state(&root, false).is_some());
         assert!(missing_bookmark_error_state(&root, true).is_none());

@@ -40,9 +40,7 @@ pub enum RecipeStep {
         message: String,
     },
     /// Fan out the same briefing to multiple harnesses in parallel (committee).
-    Parallel {
-        branches: Vec<ParallelBranch>,
-    },
+    Parallel { branches: Vec<ParallelBranch> },
     /// Repeat a fork/run cycle up to `max_iterations` times on the latest fork.
     Loop {
         max_iterations: u32,

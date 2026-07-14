@@ -1,3 +1,5 @@
+import { isPackagedApp } from "@/lib/connection-errors";
+
 export type AppErrorKind =
   | "connection"
   | "conversation_busy"
@@ -61,13 +63,22 @@ export function classifyDaemonError(raw: string): ClassifiedError {
   if (lower.includes("harness") && (lower.includes("missing") || lower.includes("not found"))) {
     return {
       kind: "harness_missing",
-      title: "Harness unavailable",
+      title: "Agent app unavailable",
       message,
-      recovery: "Open Harness health to see install status for configured agents.",
-      actionLabel: "Harness health",
+      recovery: "Open Agents & providers to see install status for your agent apps.",
+      actionLabel: "Agents & providers",
     };
   }
   if (lower.includes("connect") || lower.includes("daemon") || lower.includes("websocket")) {
+    if (isPackagedApp()) {
+      return {
+        kind: "connection",
+        title: "Cannot reach tamtri",
+        message,
+        recovery: "Quit tamtri completely and open it again. The background service may not have started.",
+        actionLabel: "Retry",
+      };
+    }
     return {
       kind: "connection",
       title: "Cannot reach daemon",

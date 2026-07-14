@@ -4,7 +4,7 @@ import { ActivityIndicator, Linking, Text, TextInput, View } from "react-native"
 
 import { Button } from "@/components/ui/button";
 import type { PendingElicitation } from "@/lib/elicitation";
-import { theme } from "@/styles/theme";
+import { useTheme } from "@/styles/use-theme";
 
 interface ElicitationCardProps {
   elicitation: PendingElicitation;
@@ -13,6 +13,7 @@ interface ElicitationCardProps {
 }
 
 export function ElicitationCard({ elicitation, responding, onRespond }: ElicitationCardProps) {
+  const theme = useTheme();
   const [formJson, setFormJson] = useState("{}");
 
   return (
@@ -67,7 +68,7 @@ export function ElicitationCard({ elicitation, responding, onRespond }: Elicitat
             borderRadius: theme.radius.md,
             padding: theme.spacing[3],
             color: theme.colors.foreground,
-            fontFamily: "monospace",
+            fontFamily: theme.fontFamily.mono,
             fontSize: theme.fontSize.xs,
             backgroundColor: theme.colors.surface0,
           }}

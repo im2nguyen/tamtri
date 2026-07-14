@@ -24,7 +24,11 @@ export interface DaemonClientConfig {
   clientType: ClientType;
   appVersion?: string;
   transport: DaemonTransportFactory;
+  /** Max wait for transport open + hello handshake. Default 30s. */
+  connectTimeoutMs?: number;
 }
+
+const DEFAULT_CONNECT_TIMEOUT_MS = 30_000;
 
 export class DaemonClientError extends Error {
   constructor(
@@ -57,6 +61,29 @@ export class DaemonClient {
   /** Open the transport and complete the hello handshake. Returns the daemon's
    * identity + capability flags so the caller can gate features. */
   async connect(): Promise<ServerInfo> {
+    const timeoutMs = this.config.connectTimeoutMs ?? DEFAULT_CONNECT_TIMEOUT_MS;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([
+        this.connectInner(),
+        new Promise<ServerInfo>((_, reject) => {
+          timer = setTimeout(
+            () =>
+              reject(
+                new DaemonClientError(
+                  `Connection timed out after ${Math.round(timeoutMs / 1000)} seconds`,
+                ),
+              ),
+            timeoutMs,
+          );
+        }),
+      ]);
+    } finally {
+      if (timer !== undefined) clearTimeout(timer);
+    }
+  }
+
+  private async connectInner(): Promise<ServerInfo> {
     if (this.transport) throw new DaemonClientError("already connected");
     const transport = await this.config.transport();
     this.transport = transport;

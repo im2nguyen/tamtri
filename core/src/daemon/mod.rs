@@ -52,16 +52,17 @@ impl Daemon {
     /// (the core builds its own runtime); the WebSocket layer does so on a
     /// blocking thread.
     pub fn new(vault_path: impl Into<String>) -> Result<Self> {
+        let vault_path = vault_path.into();
+        crate::config::seed_vault_content(std::path::Path::new(&vault_path))?;
         let (events_tx, _rx) = broadcast::channel(EVENT_CHANNEL_CAPACITY);
         let observer = Arc::new(BroadcastObserver {
             tx: events_tx.clone(),
         });
-        let core = TamtriCore::new(vault_path.into(), observer)
+        let core = TamtriCore::new(vault_path, observer)
             .map_err(|err| CoreError::Protocol(format!("core init failed: {err}")))?;
-        Ok(Self {
-            core: Arc::new(core),
-            events_tx,
-        })
+        let core = Arc::new(core);
+        TamtriCore::install_shared(Arc::clone(&core));
+        Ok(Self { core, events_tx })
     }
 
     /// Subscribe a new client connection to the event stream.
@@ -87,6 +88,9 @@ impl Daemon {
                 relay: true,
                 native_tools: true,
                 session_import: true,
+                harness_roster: true,
+                provider_usage: true,
+                projects: true,
             },
         }
     }

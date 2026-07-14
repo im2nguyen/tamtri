@@ -20,7 +20,38 @@ export type ContentBlock =
       inline?: string;
       integrity_failed?: boolean;
     }
-  | { type: "elicitation_request"; request_id: string; message: string; mode: string }
+  | {
+      type: "app_resource";
+      uri: string;
+      template_ref: string;
+      state: unknown;
+      server_id?: string;
+      origin_tool_call_id?: string;
+    }
+  | {
+      type: "elicitation_request";
+      request_id: string;
+      message: string;
+      mode: string;
+      server_id?: string;
+      origin_tool_call_id?: string;
+      schema?: unknown;
+      url?: string;
+    }
+  | {
+      type: "elicitation_response";
+      request_id: string;
+      action: string;
+      data?: unknown;
+    }
+  | {
+      type: "task_ref";
+      task_id: string;
+      status: string;
+      title?: string;
+      result_summary?: string;
+      origin_tool_call_id?: string;
+    }
   | { type: "unknown"; raw: unknown };
 
 export function parseTranscript(json: string): TranscriptMessage[] {
@@ -68,6 +99,35 @@ export function normalizeBlock(raw: Record<string, unknown>): ContentBlock {
         request_id: String(raw.request_id ?? ""),
         message: String(raw.message ?? ""),
         mode: String(raw.mode ?? ""),
+        server_id: raw.server_id ? String(raw.server_id) : undefined,
+        origin_tool_call_id: raw.origin_tool_call_id ? String(raw.origin_tool_call_id) : undefined,
+        schema: raw.schema,
+        url: raw.url ? String(raw.url) : undefined,
+      };
+    case "elicitation_response":
+      return {
+        type: "elicitation_response",
+        request_id: String(raw.request_id ?? ""),
+        action: String(raw.action ?? ""),
+        data: raw.data,
+      };
+    case "app_resource":
+      return {
+        type: "app_resource",
+        uri: String(raw.uri ?? ""),
+        template_ref: String(raw.template_ref ?? ""),
+        state: raw.state,
+        server_id: raw.server_id ? String(raw.server_id) : undefined,
+        origin_tool_call_id: raw.origin_tool_call_id ? String(raw.origin_tool_call_id) : undefined,
+      };
+    case "task_ref":
+      return {
+        type: "task_ref",
+        task_id: String(raw.task_id ?? ""),
+        status: String(raw.status ?? ""),
+        title: raw.title ? String(raw.title) : undefined,
+        result_summary: raw.result_summary ? String(raw.result_summary) : undefined,
+        origin_tool_call_id: raw.origin_tool_call_id ? String(raw.origin_tool_call_id) : undefined,
       };
     default:
       return { type: "unknown", raw };

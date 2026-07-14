@@ -6,6 +6,7 @@ import { useDaemon } from "@/runtime/daemon-provider";
 export interface AgentRosterEntry {
   id: string;
   display_name: string;
+  runtime_model_switch?: boolean;
 }
 
 export interface ModelEntry {

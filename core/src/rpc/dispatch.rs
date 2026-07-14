@@ -436,9 +436,10 @@ mod tests {
 
         let sent = Arc::new(Mutex::new(Vec::new()));
         let transport = DispatchMockTransport {
-            incoming: VecDeque::from(vec![IncomingMessage::Response(
-                JsonRpcResponse::success(RequestId::Number(1), json!("late")),
-            )]),
+            incoming: VecDeque::from(vec![IncomingMessage::Response(JsonRpcResponse::success(
+                RequestId::Number(1),
+                json!("late"),
+            ))]),
             sent,
             recv_delay: Duration::from_secs(60),
         };

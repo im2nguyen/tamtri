@@ -1,8 +1,10 @@
 pub mod engine;
+pub mod events;
+pub mod mcp_tools;
 pub mod recipe;
 pub mod run;
 pub mod store;
 
-pub use recipe::{Recipe, RecipeSummary, RECIPE_SCHEMA_VERSION};
+pub use recipe::{RECIPE_SCHEMA_VERSION, Recipe, RecipeSummary};
 pub use run::{OrchestrationRunDto, OrchestrationRunMeta, OrchestrationRunStatus};
-pub use store::{load_recipe, list_recipes, seed_starter_recipes};
+pub use store::{list_recipes, load_recipe, seed_starter_recipes};

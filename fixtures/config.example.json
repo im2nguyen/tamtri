@@ -14,6 +14,20 @@
       "command": "claude",
       "args": ["acp"],
       "env": []
+    },
+    {
+      "id": "opencode-acp",
+      "display_name": "OpenCode",
+      "command": "opencode",
+      "args": ["acp"],
+      "env": []
+    },
+    {
+      "id": "pi-acp",
+      "display_name": "Pi",
+      "command": "pi-acp",
+      "args": [],
+      "env": []
     }
   ],
   "gateway": {

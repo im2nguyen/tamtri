@@ -12,6 +12,10 @@ export {
   type WebSocketTransportOptions,
 } from "./websocket-transport.js";
 export {
+  relayTransport,
+  type RelayTransportOptions,
+} from "./relay-transport.js";
+export {
   DaemonClient,
   DaemonClientError,
   createDaemonClient,

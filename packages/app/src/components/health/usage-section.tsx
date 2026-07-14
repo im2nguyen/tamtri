@@ -2,6 +2,7 @@ import { ActivityIndicator, Text, View } from "react-native";
 
 import { Button } from "@/components/ui/button";
 import type { HarnessUsageView } from "@/hooks/use-harness-usage";
+import { formatResetCountdown } from "@/lib/usage-format";
 import type { HarnessUsageEntryDto } from "@tamtri/protocol";
 import { useTheme } from "@/styles/use-theme";
 
@@ -21,13 +22,16 @@ function UsageBar({
   label,
   utilizationPct,
   tone,
+  resetsAt,
 }: {
   label: string;
   utilizationPct: number;
   tone: string;
+  resetsAt?: string | null;
 }) {
   const theme = useTheme();
   const clamped = Math.max(0, Math.min(100, utilizationPct));
+  const resetLabel = formatResetCountdown(resetsAt);
   return (
     <View style={{ gap: theme.spacing[1] }}>
       <View style={{ flexDirection: "row", justifyContent: "space-between" }}>
@@ -52,6 +56,9 @@ function UsageBar({
           }}
         />
       </View>
+      {resetLabel ? (
+        <Text style={{ color: theme.colors.foregroundMuted, fontSize: theme.fontSize.xs }}>{resetLabel}</Text>
+      ) : null}
     </View>
   );
 }
@@ -73,9 +80,18 @@ function UsageCard({ usage }: { usage: HarnessUsageEntryDto }) {
           {usage.display_name}
         </Text>
         {usage.plan_label ? (
-          <Text style={{ color: theme.colors.foregroundMuted, fontSize: theme.fontSize.xs }}>
-            {usage.plan_label}
-          </Text>
+          <View
+            style={{
+              paddingHorizontal: theme.spacing[2],
+              paddingVertical: 2,
+              borderRadius: theme.radius.full,
+              backgroundColor: theme.colors.surface3,
+            }}
+          >
+            <Text style={{ color: theme.colors.foregroundMuted, fontSize: theme.fontSize.xs }}>
+              {usage.plan_label}
+            </Text>
+          </View>
         ) : null}
         <View style={{ flex: 1 }} />
         {unavailable && !usage.error ? (
@@ -93,6 +109,7 @@ function UsageCard({ usage }: { usage: HarnessUsageEntryDto }) {
           label={window.label}
           utilizationPct={window.utilization_pct}
           tone={window.tone}
+          resetsAt={window.resets_at}
         />
       ))}
       {(usage.balances ?? []).map((balance) => (

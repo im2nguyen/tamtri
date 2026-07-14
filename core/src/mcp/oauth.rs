@@ -73,12 +73,9 @@ pub fn build_authorization_url(
     pkce: &PkceChallenge,
     state: &str,
 ) -> Result<String> {
-    let authorization_endpoint = config
-        .authorization_endpoint
-        .as_deref()
-        .ok_or_else(|| {
-            CoreError::Protocol("oauth authorization_endpoint is required".to_string())
-        })?;
+    let authorization_endpoint = config.authorization_endpoint.as_deref().ok_or_else(|| {
+        CoreError::Protocol("oauth authorization_endpoint is required".to_string())
+    })?;
     let validated = validate_handoff_url(authorization_endpoint)?;
     let redirect = validate_handoff_url(redirect_uri)?;
 
@@ -215,21 +212,19 @@ pub fn oauth_connection_status(
 }
 
 pub fn parse_stored_oauth(raw: &str) -> Result<StoredOAuthBundle> {
-    serde_json::from_str(raw).map_err(|err| {
-        CoreError::Protocol(format!("invalid stored oauth bundle: {err}"))
-    })
+    serde_json::from_str(raw)
+        .map_err(|err| CoreError::Protocol(format!("invalid stored oauth bundle: {err}")))
 }
 
 pub fn serialize_stored_oauth(bundle: &StoredOAuthBundle) -> Result<String> {
-    serde_json::to_string(bundle).map_err(|err| {
-        CoreError::Protocol(format!("failed to serialize oauth bundle: {err}"))
-    })
+    serde_json::to_string(bundle)
+        .map_err(|err| CoreError::Protocol(format!("failed to serialize oauth bundle: {err}")))
 }
 
 pub fn stored_oauth_from_token_response(response: &TokenEndpointResponse) -> StoredOAuthBundle {
-    let expires_at = response.expires_in.map(|seconds| {
-        Utc::now().timestamp() + i64::try_from(seconds).unwrap_or(i64::MAX)
-    });
+    let expires_at = response
+        .expires_in
+        .map(|seconds| Utc::now().timestamp() + i64::try_from(seconds).unwrap_or(i64::MAX));
     StoredOAuthBundle {
         access_token: response.access_token.clone(),
         refresh_token: response.refresh_token.clone(),
@@ -300,7 +295,10 @@ impl std::fmt::Debug for TokenEndpointResponse {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("TokenEndpointResponse")
             .field("access_token", &"[redacted]")
-            .field("refresh_token", &self.refresh_token.as_ref().map(|_| "[redacted]"))
+            .field(
+                "refresh_token",
+                &self.refresh_token.as_ref().map(|_| "[redacted]"),
+            )
             .field("expires_in", &self.expires_in)
             .field("token_type", &self.token_type)
             .finish()
@@ -433,12 +431,7 @@ mod tests {
             .unwrap_err();
         assert!(err.to_string().contains("400"));
         assert_eq!(
-            oauth_connection_status(
-                Some(&config),
-                false,
-                None,
-                true
-            ),
+            oauth_connection_status(Some(&config), false, None, true),
             OAuthConnectionStatus::ReauthRequired
         );
         server.await.unwrap();

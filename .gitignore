@@ -11,6 +11,9 @@ build/
 .expo/
 web-build/
 packages/app/dist/
+packages/app/.env.development.local
+packages/app/.env.local
+packages/app/public/tamtri-dev-endpoint.json
 *.orig.*
 
 # Electron (packages/desktop)
@@ -19,3 +22,4 @@ release/
 
 *.txt
 *.log
+*.exit

@@ -8,12 +8,12 @@ pub use history::parse_claude_session_file;
 
 use async_trait::async_trait;
 
+use crate::Result;
 use crate::harness::acp::AgentLaunchSpec;
 use crate::harness::claude::session::run_claude_session;
 use crate::harness::{
     ConversationContext, HarnessAdapter, HarnessCapabilities, HarnessRun, ModelInfo, TurnInput,
 };
-use crate::Result;
 
 pub struct ClaudeNativeAdapter {
     launch: AgentLaunchSpec,
@@ -46,6 +46,7 @@ impl HarnessAdapter for ClaudeNativeAdapter {
             permissions: true,
             thinking: true,
             native_tools: true,
+            runtime_model_switch: true,
         }
     }
 

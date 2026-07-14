@@ -13,6 +13,14 @@ export {
   encryptToBase64,
   generateKeyPair,
 } from "./e2ee.js";
+export {
+  decodeOfferFragment,
+  encodeOfferFragment,
+  parseConnectionOfferInput,
+  parsedToWire,
+  wireToParsed,
+  type ParsedConnectionOffer,
+} from "./offer.js";
 
 /** Pairing offer encoded into a QR code / deep-link URL fragment. */
 export interface ConnectionOffer {

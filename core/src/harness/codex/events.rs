@@ -149,7 +149,11 @@ fn map_item_started(params: &Value) -> Option<HarnessEvent> {
         id: id.clone(),
         name: item_type.clone(),
         kind: map_tool_kind(&item_type),
-        title: item.get("title").and_then(Value::as_str).unwrap_or(&item_type).to_string(),
+        title: item
+            .get("title")
+            .and_then(Value::as_str)
+            .unwrap_or(&item_type)
+            .to_string(),
         input: item.get("input").cloned().unwrap_or_else(|| json!({})),
     })
 }

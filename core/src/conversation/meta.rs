@@ -1,10 +1,13 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use crate::conversation::{Conversation, Id, McpServerRef, Message, NativeSessionLink, Root, WorkingDir};
+use crate::conversation::model::ConversationKind;
+use crate::conversation::{
+    Conversation, Id, McpServerRef, Message, NativeSessionLink, Root, WorkingDir,
+};
 use crate::{CoreError, Result};
 
-pub const SCHEMA_VERSION: u32 = 2;
+pub const SCHEMA_VERSION: u32 = 4;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ConversationMeta {
@@ -13,6 +16,10 @@ pub struct ConversationMeta {
     pub title: String,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_id: Option<Id>,
+    #[serde(default)]
+    pub kind: ConversationKind,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub active_harness_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -34,6 +41,8 @@ impl ConversationMeta {
             title: c.title.clone(),
             created_at: c.created_at,
             updated_at: c.updated_at,
+            project_id: c.project_id,
+            kind: c.kind,
             active_harness_id: c.active_harness_id.clone(),
             model_id: c.model_id.clone(),
             working_dir: c.working_dir.clone(),
@@ -91,6 +100,8 @@ impl Conversation {
             title: meta.title,
             created_at: meta.created_at,
             updated_at: meta.updated_at,
+            project_id: meta.project_id,
+            kind: meta.kind,
             active_harness_id: meta.active_harness_id,
             model_id: meta.model_id,
             working_dir: meta.working_dir,
