@@ -62,7 +62,10 @@ mod tests {
         c.id = uuid::Uuid::parse_str("018e1234-5678-7890-abcd-ef0123456789").unwrap();
         c.created_at = Utc.with_ymd_and_hms(2024, 3, 15, 12, 0, 0).unwrap();
 
-        assert_eq!(folder_name(&c), "2024-03-15-hello-world--018e123456787890abcdef0123456789");
+        assert_eq!(
+            folder_name(&c),
+            "2024-03-15-hello-world--018e123456787890abcdef0123456789"
+        );
     }
 
     #[test]

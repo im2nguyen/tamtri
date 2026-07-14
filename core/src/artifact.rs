@@ -18,6 +18,62 @@ pub struct ArtifactSnapshot {
     pub sha256: String,
 }
 
+pub fn is_deliverable_snapshot_path(path: &str) -> bool {
+    let lower = path.to_ascii_lowercase();
+    lower.ends_with(".html")
+        || lower.ends_with(".htm")
+        || lower.ends_with(".md")
+        || lower.ends_with(".markdown")
+}
+
+pub fn list_renderable_workdir_paths(workdir: &Path) -> Result<HashSet<String>> {
+    let mut paths = HashSet::new();
+    if workdir.is_dir() {
+        collect_renderable_workdir_paths(workdir, workdir, &mut paths)?;
+    }
+    Ok(paths)
+}
+
+pub fn new_renderable_workdir_paths(
+    workdir: &Path,
+    baseline: &HashSet<String>,
+) -> Result<Vec<String>> {
+    let current = list_renderable_workdir_paths(workdir)?;
+    let mut paths: Vec<_> = current
+        .into_iter()
+        .filter(|path| !baseline.contains(path))
+        .collect();
+    paths.sort();
+    Ok(paths)
+}
+
+fn collect_renderable_workdir_paths(
+    root: &Path,
+    dir: &Path,
+    paths: &mut HashSet<String>,
+) -> Result<()> {
+    for entry in fs::read_dir(dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        let name = entry.file_name();
+        if name.to_string_lossy().starts_with('.') {
+            continue;
+        }
+        if path.is_dir() {
+            collect_renderable_workdir_paths(root, &path, paths)?;
+        } else if path.is_file() {
+            let relative = path.strip_prefix(root).map_err(|err| {
+                CoreError::Protocol(format!("workdir listing escaped root: {err}"))
+            })?;
+            let relative_path = relative.to_string_lossy();
+            if is_deliverable_snapshot_path(&relative_path) {
+                paths.insert(relative_path.into_owned());
+            }
+        }
+    }
+    Ok(())
+}
+
 pub struct ArtifactSnapshotter {
     workdir: PathBuf,
     conversation_dir: PathBuf,
@@ -53,6 +109,13 @@ impl ArtifactSnapshotter {
     }
 
     fn snapshot_relative_path(&self, path: &Path) -> Result<Option<ArtifactSnapshot>> {
+        if !is_deliverable_snapshot_path(
+            path.to_str().ok_or_else(|| {
+                CoreError::MalformedVault("artifact path is not UTF-8".to_string())
+            })?,
+        ) {
+            return Ok(None);
+        }
         let original_path = self.resolve_workdir_path(path)?;
         if !original_path.exists() {
             return Ok(None);
@@ -332,16 +395,19 @@ mod tests {
             .unwrap();
         snapshots.sort_by(|a, b| a.mime_type.cmp(&b.mime_type));
 
-        assert_eq!(snapshots.len(), 4);
-        let mime_types: Vec<_> = snapshots.iter().map(|snapshot| snapshot.mime_type.as_str()).collect();
-        assert_eq!(
-            mime_types,
-            vec!["image/svg+xml", "text/csv", "text/html", "text/markdown"]
-        );
+        assert_eq!(snapshots.len(), 2);
+        let mime_types: Vec<_> = snapshots
+            .iter()
+            .map(|snapshot| snapshot.mime_type.as_str())
+            .collect();
+        assert_eq!(mime_types, vec!["text/html", "text/markdown"]);
         for snapshot in &snapshots {
             assert!(snapshot.attachment_path.starts_with("attachments/"));
             assert!(snapshot.attachment_path.contains('-'));
-            assert_eq!(snapshot.size, fs::metadata(&snapshot.original_path).unwrap().len());
+            assert_eq!(
+                snapshot.size,
+                fs::metadata(&snapshot.original_path).unwrap().len()
+            );
             assert_eq!(
                 snapshot.sha256,
                 hex_sha256(&fs::read(&snapshot.original_path).unwrap())
@@ -484,7 +550,11 @@ mod tests {
     fn detect_mime_by_extension_and_sniffing() {
         let png_header = b"\x89PNG\r\n\x1a\n";
         let cases = [
-            ("report.html", b"<html><body>x</body></html>" as &[u8], "text/html"),
+            (
+                "report.html",
+                b"<html><body>x</body></html>" as &[u8],
+                "text/html",
+            ),
             ("notes.md", b"# Title", "text/markdown"),
             ("sales.csv", b"a,b\n1,2", "text/csv"),
             ("data.tsv", b"a\tb", "text/tab-separated-values"),
@@ -576,23 +646,23 @@ mod tests {
         let convo = temp.path().join("conversation");
         fs::create_dir_all(&workdir).unwrap();
         fs::create_dir_all(convo.join("attachments")).unwrap();
-        fs::write(workdir.join("notes.txt"), "hello snapshot").unwrap();
+        fs::write(workdir.join("notes.md"), "# Title").unwrap();
         let snapshot = ArtifactSnapshotter::new(&workdir, &convo)
             .snapshot_file_changed(&Diff {
-                path: "notes.txt".to_string(),
+                path: "notes.md".to_string(),
                 change: FileChange::Modified,
                 old_text: None,
                 new_text: None,
             })
             .unwrap()
             .unwrap();
-        assert_eq!(snapshot.mime_type, "text/plain");
+        assert_eq!(snapshot.mime_type, "text/markdown");
         assert!(matches!(
             snapshot.block,
             ContentBlock::Artifact {
                 inline: Some(ref text),
                 ..
-            } if text == "hello snapshot"
+            } if text == "# Title"
         ));
     }
 
@@ -625,8 +695,8 @@ mod tests {
         let bytes = b"hello";
         fs::write(convo.join("attachments/a.txt"), bytes).unwrap();
         let sha256 = hex_sha256(bytes);
-        let path = verify_attachment(&convo, "attachments/a.txt", bytes.len() as u64, &sha256)
-            .unwrap();
+        let path =
+            verify_attachment(&convo, "attachments/a.txt", bytes.len() as u64, &sha256).unwrap();
         assert_eq!(path, convo.join("attachments/a.txt"));
     }
 
@@ -637,5 +707,35 @@ mod tests {
         fs::create_dir_all(convo.join("attachments")).unwrap();
         let err = verify_attachment(&convo, "attachments/missing.txt", 0, "abc").unwrap_err();
         assert!(matches!(err, CoreError::Io(_)));
+    }
+
+    #[test]
+    fn new_renderable_workdir_paths_ignores_baseline_and_non_renderable_files() {
+        let temp = tempfile::tempdir().unwrap();
+        let workdir = temp.path().join("workdir");
+        fs::create_dir_all(&workdir).unwrap();
+        fs::write(workdir.join("sales.csv"), "a,b\n1,2\n").unwrap();
+        fs::write(workdir.join("notes.txt"), "ignore me").unwrap();
+
+        let baseline = list_renderable_workdir_paths(&workdir).unwrap();
+        assert!(baseline.is_empty());
+
+        fs::write(workdir.join("report.html"), "<h1>ok</h1>").unwrap();
+        let new_paths = new_renderable_workdir_paths(&workdir, &baseline).unwrap();
+        assert_eq!(new_paths, vec!["report.html".to_string()]);
+    }
+
+    #[test]
+    fn new_renderable_workdir_paths_skips_files_present_at_turn_start() {
+        let temp = tempfile::tempdir().unwrap();
+        let workdir = temp.path().join("workdir");
+        fs::create_dir_all(&workdir).unwrap();
+        fs::write(workdir.join("draft.html"), "<h1>draft</h1>").unwrap();
+
+        let baseline = list_renderable_workdir_paths(&workdir).unwrap();
+        fs::write(workdir.join("report.html"), "<h1>ok</h1>").unwrap();
+
+        let new_paths = new_renderable_workdir_paths(&workdir, &baseline).unwrap();
+        assert_eq!(new_paths, vec!["report.html".to_string()]);
     }
 }

@@ -180,7 +180,7 @@ fn meta_is_versioned() {
         &fs::read_to_string(conversation_dir(dir.path(), c.id).join("meta.json")).unwrap(),
     )
     .unwrap();
-    assert_eq!(meta["schema_version"], json!(1));
+    assert_eq!(meta["schema_version"], json!(4));
 }
 
 #[test]
@@ -307,6 +307,7 @@ fn import_rejects_malformed_artifact() {
         size: 1,
         sha256: "abc".into(),
         inline: Some("x".into()),
+        integrity_failed: false,
     }];
     let raw = serde_json::to_string(&bad).unwrap();
     fs::write(src.join("messages.jsonl"), format!("{raw}\n")).unwrap();
@@ -324,11 +325,7 @@ fn import_folder_as_new_copies_attachments() {
     let c = Conversation::new("Import attachments");
     source.create(&c).unwrap();
     let src = conversation_dir(dir.path(), c.id);
-    fs::write(
-        src.join("attachments/report.html"),
-        b"<h1>report</h1>",
-    )
-    .unwrap();
+    fs::write(src.join("attachments/report.html"), b"<h1>report</h1>").unwrap();
 
     let (target_dir, target) = vault();
     let imported = target.import_folder_as_new(&src).unwrap();
@@ -380,9 +377,13 @@ fn issues_reports_torn_tail() {
     let mut file = OpenOptions::new().append(true).open(&path).unwrap();
     write!(file, "{{\"id\":\"not done\"").unwrap();
 
-    assert!(vault.issues().unwrap().iter().any(|issue| {
-        matches!(issue, VaultIssue::TornTailDetected { id } if *id == c.id)
-    }));
+    assert!(
+        vault
+            .issues()
+            .unwrap()
+            .iter()
+            .any(|issue| { matches!(issue, VaultIssue::TornTailDetected { id } if *id == c.id) })
+    );
 }
 
 #[test]
@@ -698,6 +699,7 @@ fn artifact_inline_respects_threshold() {
         size: 1,
         sha256: "abc".into(),
         inline: Some("x".repeat(ARTIFACT_INLINE_MAX_BYTES + 1)),
+        integrity_failed: false,
     };
     assert!(
         message_to_line(&Message {
@@ -722,6 +724,7 @@ fn artifact_inline_respects_threshold() {
         size: 1,
         sha256: "abc".into(),
         inline: Some("x".repeat(ARTIFACT_INLINE_MAX_BYTES + 1)),
+        integrity_failed: false,
     }];
     let raw = serde_json::to_string(&bad).unwrap();
     fs::write(dir.join("messages.jsonl"), format!("{raw}\n")).unwrap();
@@ -744,6 +747,7 @@ fn assert_load_rejects_artifact_path(path: &str) {
         size: 1,
         sha256: "abc".into(),
         inline: Some("x".into()),
+        integrity_failed: false,
     }];
     let raw = serde_json::to_string(&bad).unwrap();
     fs::write(dir.join("messages.jsonl"), format!("{raw}\n")).unwrap();

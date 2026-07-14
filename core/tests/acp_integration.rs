@@ -20,6 +20,8 @@ fn adapter() -> AcpAdapter {
         command: env!("CARGO_BIN_EXE_mock-acp-agent").into(),
         args: Vec::new(),
         env: Vec::new(),
+        adapter: Default::default(),
+        enabled: true,
     })
 }
 
@@ -35,6 +37,8 @@ fn real_adapter_from_env() -> Option<AcpAdapter> {
         command,
         args,
         env: Vec::new(),
+        adapter: Default::default(),
+        enabled: true,
     }))
 }
 
@@ -48,6 +52,8 @@ fn ctx_in(path: PathBuf) -> ConversationContext {
         roots: Vec::new(),
         mcp_servers: Vec::new(),
         model_id: "mock".into(),
+        native_session: None,
+        tool_catalog: Vec::new(),
     }
 }
 

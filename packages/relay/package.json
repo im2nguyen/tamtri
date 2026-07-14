@@ -1,0 +1,26 @@
+{
+  "name": "@tamtri/relay",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "End-to-end encrypted relay for remote access: Curve25519 + NaCl box channel and QR/URL pairing offers. Zero-knowledge relay server never sees plaintext.",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./e2ee": "./src/e2ee.ts",
+    "./offer": "./src/offer.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/base64-js": "^1.3.2",
+    "typescript": "^5.8.3"
+  },
+  "dependencies": {
+    "@tamtri/protocol": "workspace:*",
+    "base64-js": "^1.5.1",
+    "tweetnacl": "^1.0.3"
+  }
+}

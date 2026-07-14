@@ -1,4 +1,18 @@
 pub mod acp;
+pub mod auth;
+pub mod claude;
+pub mod codex;
+pub mod health;
+pub mod opencode;
+pub mod pi;
+pub mod discovery;
+pub mod readiness;
+pub mod spawn_env;
+pub mod registry;
+pub mod roster;
+pub mod sessions;
+pub mod tools;
+pub mod usage;
 
 use std::path::PathBuf;
 
@@ -7,13 +21,32 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 
 use crate::Result;
-use crate::conversation::{Message, WorkingDir};
+use crate::conversation::{Message, NativeSessionLink, WorkingDir};
+use crate::harness::readiness::{ReadinessDiagnostic, diagnose_agent};
 
 #[async_trait]
 pub trait HarnessAdapter: Send + Sync {
     fn id(&self) -> &str;
     fn display_name(&self) -> &str;
     fn capabilities(&self) -> HarnessCapabilities;
+    fn agent_launch_spec(&self) -> Option<crate::harness::acp::AgentLaunchSpec> {
+        None
+    }
+    fn readiness_diagnostic(&self, enabled: bool) -> ReadinessDiagnostic {
+        if let Some(spec) = self.agent_launch_spec() {
+            diagnose_agent(&spec, enabled)
+        } else {
+            ReadinessDiagnostic {
+                state: readiness::ReadinessState::CheckFailed,
+                recovery_action: "ask_it".into(),
+                message: Some(format!(
+                    "{} has no launch configuration.",
+                    self.display_name()
+                )),
+                install_doc_url: String::new(),
+            }
+        }
+    }
     async fn run(&self, ctx: ConversationContext, turn: TurnInput) -> Result<HarnessRun>;
     async fn available_models(&self) -> Result<Vec<ModelInfo>>;
 }
@@ -24,6 +57,14 @@ pub struct HarnessCapabilities {
     pub tools: bool,
     pub permissions: bool,
     pub thinking: bool,
+    /// When true, the adapter accepts a runtime tool catalog directly instead of
+    /// relying solely on tamtri's MCP gateway surface.
+    #[serde(default)]
+    pub native_tools: bool,
+    /// When true, the user may change `model_id` on the conversation and the
+    /// next turn will use the new model without forking.
+    #[serde(default)]
+    pub runtime_model_switch: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -40,6 +81,14 @@ pub struct ConversationContext {
     pub roots: Vec<crate::conversation::Root>,
     pub mcp_servers: Vec<crate::conversation::McpServerRef>,
     pub model_id: String,
+    /// When set, native adapters resume the provider session instead of replaying
+    /// the full vault transcript on the wire.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub native_session: Option<NativeSessionLink>,
+    /// Gateway tool catalog for adapters with `native_tools: true`. ACP adapters
+    /// receive tools via `mcp_servers` instead.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tool_catalog: Vec<tools::ToolCatalogEntry>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -141,6 +190,11 @@ pub enum HarnessEvent {
     },
     ModeChanged {
         mode: String,
+    },
+    NativeSessionBound {
+        provider: String,
+        session_id: String,
+        cwd: Option<String>,
     },
     Error {
         message: String,

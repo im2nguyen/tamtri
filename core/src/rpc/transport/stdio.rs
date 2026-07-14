@@ -5,6 +5,7 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 use tokio::time::{Duration, timeout};
 
+use crate::harness::spawn_env::preserve_spawn_env_tokio;
 use crate::rpc::jsonrpc::{IncomingMessage, JsonRpcNotification, JsonRpcRequest, JsonRpcResponse};
 use crate::rpc::transport::Transport;
 use crate::{CoreError, Result};
@@ -36,10 +37,7 @@ impl StdioTransport {
             std::fs::create_dir_all(cwd)?;
             cmd.current_dir(cwd);
         }
-        preserve_env(&mut cmd, "PATH");
-        preserve_env(&mut cmd, "HOME");
-        preserve_env(&mut cmd, "TMPDIR");
-        preserve_env(&mut cmd, "LANG");
+        preserve_spawn_env_tokio(&mut cmd);
         for (key, value) in env {
             cmd.env(key, value);
         }
@@ -120,12 +118,6 @@ impl Transport for StdioTransport {
     }
 }
 
-fn preserve_env(cmd: &mut Command, key: &str) {
-    if let Ok(value) = std::env::var(key) {
-        cmd.env(key, value);
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -136,18 +128,15 @@ mod tests {
         // SAFETY: test-only env mutation; no concurrent tests rely on this variable.
         unsafe { std::env::set_var("TAMTRI_STDIO_ENV_SCRUB_TEST", "must-not-leak") };
         let script = r#"printf '%s\n' "{\"jsonrpc\":\"2.0\",\"method\":\"env_probe\",\"params\":{\"secret\":\"${TAMTRI_STDIO_ENV_SCRUB_TEST:-}\",\"has_path\":\"${PATH:+yes}\"}}""#;
-        let mut transport = StdioTransport::spawn(
-            "/bin/sh",
-            &[String::from("-c"), script.to_string()],
-            &[],
-        )
-        .await
-        .expect("spawn probe shell");
+        let mut transport =
+            StdioTransport::spawn("/bin/sh", &[String::from("-c"), script.to_string()], &[])
+                .await
+                .expect("spawn probe shell");
         let message = transport.recv().await.expect("env probe line");
         let params = match message {
-            IncomingMessage::Notification(note) => note
-                .params
-                .expect("env_probe params should be present"),
+            IncomingMessage::Notification(note) => {
+                note.params.expect("env_probe params should be present")
+            }
             other => panic!("expected env_probe notification, got {other:?}"),
         };
         assert_eq!(params["secret"], "");

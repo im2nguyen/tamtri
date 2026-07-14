@@ -1,3 +1,25 @@
 .DS_Store
 /target/
-/macos/.build/
+
+# JS monorepo
+node_modules/
+dist/
+build/
+*.tsbuildinfo
+
+# Expo / React Native Web (packages/app)
+.expo/
+web-build/
+packages/app/dist/
+packages/app/.env.development.local
+packages/app/.env.local
+packages/app/public/tamtri-dev-endpoint.json
+*.orig.*
+
+# Electron (packages/desktop)
+out/
+release/
+
+*.txt
+*.log
+*.exit

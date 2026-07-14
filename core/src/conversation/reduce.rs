@@ -3,7 +3,9 @@ use serde_json::json;
 
 use crate::Result;
 use crate::conversation::{ContentBlock, Id, Message, Role};
-use crate::harness::{Diff, FileChange, HarnessEvent, ToolContent, ToolKind, ToolStatus};
+use crate::harness::{
+    Diff, FileChange, HarnessEvent, PermissionDetail, ToolContent, ToolKind, ToolStatus,
+};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct RecordedFileChange {
@@ -86,9 +88,7 @@ impl TurnReducer {
                 }
             }
             HarnessEvent::FileChanged {
-                tool_call_id,
-                diff,
-                ..
+                tool_call_id, diff, ..
             } => {
                 if diff.change != FileChange::Deleted {
                     self.push_referenced_path(&diff.path);
@@ -101,10 +101,16 @@ impl TurnReducer {
             HarnessEvent::PermissionRequested {
                 request_id,
                 action,
+                detail,
                 options,
                 ..
             } => {
                 self.flush_deltas();
+                if let PermissionDetail::FileEdit { diff } = detail
+                    && diff.change != FileChange::Deleted
+                {
+                    self.push_referenced_path(&diff.path);
+                }
                 self.blocks.push(ContentBlock::ToolResult {
                     call_id: request_id.clone(),
                     output: json!({
@@ -150,7 +156,8 @@ impl TurnReducer {
             }
             HarnessEvent::TurnEnded { .. }
             | HarnessEvent::PlanUpdated { .. }
-            | HarnessEvent::ModeChanged { .. } => {
+            | HarnessEvent::ModeChanged { .. }
+            | HarnessEvent::NativeSessionBound { .. } => {
                 self.flush_deltas();
             }
         }
@@ -173,7 +180,14 @@ impl TurnReducer {
     }
 
     fn push_referenced_path(&mut self, path: &str) {
-        if !self.referenced_paths.iter().any(|existing| existing == path) {
+        if !crate::artifact::is_deliverable_snapshot_path(path) {
+            return;
+        }
+        if !self
+            .referenced_paths
+            .iter()
+            .any(|existing| existing == path)
+        {
             self.referenced_paths.push(path.to_string());
         }
     }
@@ -332,6 +346,27 @@ mod tests {
     }
 
     #[test]
+    fn reducer_preserves_multiline_execute_tool_text() {
+        let output_text =
+            "Execution complete\n\nOutput:\nsales.csv rows: 30\nexternal_refs_found: False";
+        let mut reducer = TurnReducer::new("acp:test");
+        reducer
+            .apply(&HarnessEvent::ToolCallProgress {
+                id: "tool-1".into(),
+                status: ToolStatus::Completed,
+                content: vec![ToolContent::Text {
+                    text: output_text.to_string(),
+                }],
+            })
+            .unwrap();
+        let reduced = reducer.finish();
+        let ContentBlock::ToolResult { output, .. } = &reduced.message.content[0] else {
+            panic!("expected tool result");
+        };
+        assert_eq!(output["content"][0]["text"].as_str(), Some(output_text));
+    }
+
+    #[test]
     fn reducer_records_file_changed_without_artifact_block() {
         let diff = Diff {
             path: "report.html".into(),
@@ -367,21 +402,25 @@ mod tests {
             .apply(&HarnessEvent::ThoughtDelta { text: "hmm".into() })
             .unwrap();
         reducer
-            .apply(&HarnessEvent::TextDelta { text: "Hello".into() })
+            .apply(&HarnessEvent::TextDelta {
+                text: "Hello".into(),
+            })
             .unwrap();
         reducer
-            .apply(&HarnessEvent::ThoughtDelta { text: " wait".into() })
+            .apply(&HarnessEvent::ThoughtDelta {
+                text: " wait".into(),
+            })
             .unwrap();
         reducer
-            .apply(&HarnessEvent::TextDelta { text: " world".into() })
+            .apply(&HarnessEvent::TextDelta {
+                text: " world".into(),
+            })
             .unwrap();
         let reduced = reducer.finish();
         assert_eq!(
             reduced.message.content,
             vec![
-                ContentBlock::Thinking {
-                    text: "hmm".into()
-                },
+                ContentBlock::Thinking { text: "hmm".into() },
                 ContentBlock::Text {
                     text: "Hello".into()
                 },
@@ -408,9 +447,7 @@ mod tests {
             .apply(&HarnessEvent::PermissionRequested {
                 request_id: "perm-1".into(),
                 action: "edit".into(),
-                detail: crate::harness::PermissionDetail::FileEdit {
-                    diff: diff.clone(),
-                },
+                detail: crate::harness::PermissionDetail::FileEdit { diff: diff.clone() },
                 options: vec![crate::harness::PermissionOption {
                     id: "allow-once".into(),
                     label: "Allow once".into(),
@@ -631,9 +668,7 @@ mod tests {
             .apply(&HarnessEvent::ToolCallProgress {
                 id: "tool-1".into(),
                 status: ToolStatus::Completed,
-                content: vec![ToolContent::Diff {
-                    diff: diff.clone(),
-                }],
+                content: vec![ToolContent::Diff { diff: diff.clone() }],
             })
             .unwrap();
         reducer
@@ -646,5 +681,27 @@ mod tests {
             .unwrap();
         let reduced = reducer.finish();
         assert_eq!(reduced.referenced_paths, vec!["report.html".to_string()]);
+    }
+
+    #[test]
+    fn permission_file_edit_tracks_referenced_paths() {
+        let diff = Diff {
+            path: "report.html".into(),
+            change: FileChange::Created,
+            old_text: None,
+            new_text: Some("<html></html>".into()),
+        };
+        let mut reducer = TurnReducer::new("acp:test");
+        reducer
+            .apply(&HarnessEvent::PermissionRequested {
+                request_id: "perm-1".into(),
+                action: "edit".into(),
+                detail: PermissionDetail::FileEdit { diff: diff.clone() },
+                options: Vec::new(),
+            })
+            .unwrap();
+        let reduced = reducer.finish();
+        assert_eq!(reduced.referenced_paths, vec!["report.html".to_string()]);
+        assert!(reduced.file_changes.is_empty());
     }
 }

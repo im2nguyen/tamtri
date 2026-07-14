@@ -2,12 +2,12 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tokio::sync::oneshot;
 use uuid::Uuid;
 
 use crate::conversation::Id;
-use crate::mcp::gateway::{gateway_exposed_resource_uri, gateway_exposed_tool_name, McpGateway};
+use crate::mcp::gateway::{McpGateway, gateway_exposed_resource_uri, gateway_exposed_tool_name};
 use crate::mcp::protocol::CallToolResult;
 use crate::{CoreError, Result};
 
@@ -34,16 +34,9 @@ pub struct AppBridgeRpcRequest {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum AppBridgeAction {
-    CallTool {
-        name: String,
-        arguments: Value,
-    },
-    ReadResource {
-        uri: String,
-    },
-    SetState {
-        state: Value,
-    },
+    CallTool { name: String, arguments: Value },
+    ReadResource { uri: String },
+    SetState { state: Value },
 }
 
 impl AppBridgeAction {
@@ -69,9 +62,8 @@ pub struct AppBridgeConsentRequest {
 }
 
 pub fn parse_app_bridge_rpc(raw: &str) -> Result<AppBridgeRpcRequest> {
-    let request: AppBridgeRpcRequest = serde_json::from_str(raw).map_err(|err| {
-        CoreError::Protocol(format!("invalid app bridge JSON-RPC: {err}"))
-    })?;
+    let request: AppBridgeRpcRequest = serde_json::from_str(raw)
+        .map_err(|err| CoreError::Protocol(format!("invalid app bridge JSON-RPC: {err}")))?;
     if request.jsonrpc != "2.0" {
         return Err(CoreError::Protocol(
             "app bridge request must use JSON-RPC 2.0".to_string(),
@@ -135,9 +127,9 @@ pub fn consent_summary(
             "App {app_id} ({template_ref}) on {server_id} wants to call tool {name} with {}",
             summarize_arguments(arguments)
         ),
-        AppBridgeAction::ReadResource { uri } => format!(
-            "App {app_id} ({template_ref}) on {server_id} wants to read resource {uri}"
-        ),
+        AppBridgeAction::ReadResource { uri } => {
+            format!("App {app_id} ({template_ref}) on {server_id} wants to read resource {uri}")
+        }
         AppBridgeAction::SetState { state } => format!(
             "App {app_id} ({template_ref}) on {server_id} wants to update state ({})",
             summarize_arguments(state)
@@ -254,12 +246,14 @@ impl AppBridgeCoordinator {
         let action = action_from_rpc(request)?;
         if self.has_grant(conversation_id, server_id, &action) {
             let (response_tx, _response_rx) = oneshot::channel();
-            return Ok(AppBridgeBeginResult::AlreadyGranted(PendingAppBridgeExecution {
-                rpc_id: request.id.clone(),
-                server_id: server_id.to_string(),
-                action,
-                response_tx,
-            }));
+            return Ok(AppBridgeBeginResult::AlreadyGranted(
+                PendingAppBridgeExecution {
+                    rpc_id: request.id.clone(),
+                    server_id: server_id.to_string(),
+                    action,
+                    response_tx,
+                },
+            ));
         }
         let request_id = Uuid::now_v7().to_string();
         let summary = consent_summary(server_id, app_id, template_ref, &action);
@@ -326,11 +320,7 @@ impl AppBridgeCoordinator {
         }
         if option_id == APP_BRIDGE_ALLOW_ONCE || option_id == APP_BRIDGE_ALLOW_FOR_CONVERSATION {
             if option_id == APP_BRIDGE_ALLOW_FOR_CONVERSATION {
-                self.record_grant(
-                    conversation_id,
-                    &pending.server_id,
-                    &pending.action,
-                );
+                self.record_grant(conversation_id, &pending.server_id, &pending.action);
             }
             return Ok(AppBridgeResolution::Approved {
                 pending: pending.into(),
@@ -424,10 +414,7 @@ pub async fn execute_action(
     }
 }
 
-pub fn finish_execution(
-    pending: PendingAppBridgeExecution,
-    result: Result<Value>,
-) -> String {
+pub fn finish_execution(pending: PendingAppBridgeExecution, result: Result<Value>) -> String {
     let response = match result {
         Ok(result) => rpc_success(&pending.rpc_id, result),
         Err(err) => rpc_error(&pending.rpc_id, -32002, &err.to_string()),
@@ -480,10 +467,13 @@ mod tests {
             AppBridgeBeginResult::NeedsConsent(consent, rx) => (consent, rx),
             AppBridgeBeginResult::AlreadyGranted(_) => panic!("expected consent"),
         };
-        assert_eq!(consent.action, AppBridgeAction::CallTool {
-            name: "echo".into(),
-            arguments: json!({"value": 1}),
-        });
+        assert_eq!(
+            consent.action,
+            AppBridgeAction::CallTool {
+                name: "echo".into(),
+                arguments: json!({"value": 1}),
+            }
+        );
         assert!(consent.summary.contains("fixture"));
         assert_eq!(coordinator.pending_count(), 1);
     }

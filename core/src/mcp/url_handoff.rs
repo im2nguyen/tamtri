@@ -59,11 +59,7 @@ pub fn validate_handoff_url(raw: &str) -> Result<ValidatedHandoffUrl> {
         ));
     }
 
-    let origin = format!(
-        "{}://{}",
-        scheme,
-        host
-    );
+    let origin = format!("{}://{}", scheme, host);
     let port = parsed.port();
     let origin = if let Some(port) = port {
         format!("{origin}:{port}")
@@ -86,7 +82,10 @@ pub fn redact_url_for_audit(raw: &str) -> String {
 }
 
 pub fn is_loopback_host(host: &str) -> bool {
-    let normalized = host.trim_matches('[').trim_matches(']').to_ascii_lowercase();
+    let normalized = host
+        .trim_matches('[')
+        .trim_matches(']')
+        .to_ascii_lowercase();
     matches!(
         normalized.as_str(),
         "localhost" | "127.0.0.1" | "::1" | "0:0:0:0:0:0:0:1"
@@ -99,8 +98,8 @@ mod tests {
 
     #[test]
     fn https_url_is_allowed() {
-        let validated = validate_handoff_url("https://example.com/oauth/authorize?state=abc")
-            .unwrap();
+        let validated =
+            validate_handoff_url("https://example.com/oauth/authorize?state=abc").unwrap();
         assert_eq!(validated.origin, "https://example.com");
         assert!(validated.url.contains("state=abc"));
     }

@@ -12,11 +12,11 @@ use async_trait::async_trait;
 use crate::Result;
 use crate::mcp::jsonrpc::{JsonRpcError, METHOD_NOT_FOUND};
 use crate::mcp::protocol::{
-    CallToolParams, CallToolResult, ClientCapabilities, ElicitationCapability,
-    GetPromptParams, GetPromptResult, Implementation, InitializeParams, InitializeResult,
-    ListPromptsParams, ListPromptsResult, ListResourcesParams, ListResourcesResult,
-    ListToolsParams, ListToolsResult, MCP_PROTOCOL_VERSION, Prompt, ReadResourceParams,
-    ReadResourceResult, Resource, RootsCapability, ServerCapabilities, Tool,
+    CallToolParams, CallToolResult, ClientCapabilities, ElicitationCapability, GetPromptParams,
+    GetPromptResult, Implementation, InitializeParams, InitializeResult, ListPromptsParams,
+    ListPromptsResult, ListResourcesParams, ListResourcesResult, ListToolsParams, ListToolsResult,
+    MCP_PROTOCOL_VERSION, Prompt, ReadResourceParams, ReadResourceResult, Resource,
+    RootsCapability, ServerCapabilities, Tool,
 };
 use crate::mcp::roots::RootsHandler;
 use crate::rpc::dispatch::{InboundMessage, RpcConnection, RpcHandle};
@@ -237,9 +237,7 @@ impl McpClient {
         task: Option<serde_json::Value>,
         meta: Option<serde_json::Value>,
     ) -> Result<CallToolResult> {
-        let raw = self
-            .call_tool_raw(name, arguments, task, meta)
-            .await?;
+        let raw = self.call_tool_raw(name, arguments, task, meta).await?;
         if raw.get("task").is_some() {
             return Ok(CallToolResult {
                 content: vec![json!({
@@ -692,8 +690,13 @@ mod tests {
     #[tokio::test]
     async fn sends_initialized_notification() {
         let (transport, sent) = MockTransport::new(vec![init_response()]);
-        let mut client =
-            McpClient::with_transport(Box::new(transport), McpClientConfig::default(), None, None, None);
+        let mut client = McpClient::with_transport(
+            Box::new(transport),
+            McpClientConfig::default(),
+            None,
+            None,
+            None,
+        );
         client.initialize().await.unwrap();
         client.send_initialized_notification().await.unwrap();
         let sent = wait_for_sent_len(&sent, 2).await;

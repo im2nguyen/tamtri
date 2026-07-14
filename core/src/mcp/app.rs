@@ -13,7 +13,7 @@ use std::sync::Arc;
 use serde_json::Value;
 use tokio::sync::Mutex;
 
-use crate::mcp::capabilities::{apps_available, TamtriFeatureSupport};
+use crate::mcp::capabilities::{TamtriFeatureSupport, apps_available};
 use crate::mcp::protocol::{CallToolResult, Resource, ServerCapabilities, Tool};
 use crate::{CoreError, Result};
 
@@ -27,7 +27,9 @@ impl Origin {
     pub fn parse(raw: &str) -> Result<Self> {
         let trimmed = raw.trim();
         if trimmed.is_empty() {
-            return Err(CoreError::Protocol("app origin must not be empty".to_string()));
+            return Err(CoreError::Protocol(
+                "app origin must not be empty".to_string(),
+            ));
         }
         if trimmed.contains(char::is_whitespace) {
             return Err(CoreError::Protocol(format!(
@@ -84,7 +86,10 @@ impl AppTemplateRegistry {
 
     pub fn is_declared(&self, template_ref: &str) -> bool {
         self.declared_refs.contains(template_ref)
-            || self.tool_resource_uris.values().any(|uri| uri == template_ref)
+            || self
+                .tool_resource_uris
+                .values()
+                .any(|uri| uri == template_ref)
     }
 
     pub fn record_tool_uri(&mut self, tool_name: &str, resource_uri: String) {
@@ -94,9 +99,7 @@ impl AppTemplateRegistry {
     }
 
     pub fn tool_resource_uri(&self, tool_name: &str) -> Option<&str> {
-        self.tool_resource_uris
-            .get(tool_name)
-            .map(String::as_str)
+        self.tool_resource_uris.get(tool_name).map(String::as_str)
     }
 }
 
@@ -127,7 +130,12 @@ pub fn allowed_origins_from_csp(csp: Option<&Value>) -> Result<Vec<Origin>> {
         return Ok(Vec::new());
     };
     let mut origins = Vec::new();
-    for key in ["connectDomains", "resourceDomains", "frameDomains", "baseUriDomains"] {
+    for key in [
+        "connectDomains",
+        "resourceDomains",
+        "frameDomains",
+        "baseUriDomains",
+    ] {
         if let Some(items) = csp.get(key).and_then(Value::as_array) {
             for item in items {
                 if let Some(origin) = item.as_str() {
@@ -175,16 +183,13 @@ pub fn template_from_resource_contents(
         .and_then(Value::as_str)
         .map(str::to_string)
         .or_else(|| {
-            entry
-                .get("blob")
-                .and_then(Value::as_str)
-                .and_then(|blob| {
-                    use base64::Engine;
-                    base64::engine::general_purpose::STANDARD
-                        .decode(blob)
-                        .ok()
-                        .and_then(|bytes| String::from_utf8(bytes).ok())
-                })
+            entry.get("blob").and_then(Value::as_str).and_then(|blob| {
+                use base64::Engine;
+                base64::engine::general_purpose::STANDARD
+                    .decode(blob)
+                    .ok()
+                    .and_then(|bytes| String::from_utf8(bytes).ok())
+            })
         })
         .ok_or_else(|| {
             CoreError::Protocol(format!(
@@ -241,9 +246,10 @@ pub fn navigation_allowed(template: &AppTemplate, url: &str) -> bool {
         return false;
     };
     let origin = parsed.origin().ascii_serialization();
-    template.allowed_origins.iter().any(|allowed| {
-        allowed.0 == origin || allowed.0 == trimmed
-    })
+    template
+        .allowed_origins
+        .iter()
+        .any(|allowed| allowed.0 == origin || allowed.0 == trimmed)
 }
 
 pub fn app_sandbox_csp(allowed_origins: &[Origin]) -> String {
@@ -304,9 +310,7 @@ pub fn require_declared_template<'a>(
         )));
     }
     registry.template(template_ref).ok_or_else(|| {
-        CoreError::Protocol(format!(
-            "declared app template not loaded: {template_ref}"
-        ))
+        CoreError::Protocol(format!("declared app template not loaded: {template_ref}"))
     })
 }
 
@@ -338,10 +342,7 @@ impl GatewayAppState {
         F: FnOnce(&mut AppTemplateRegistry) -> T,
     {
         let mut guard = store.lock().await;
-        let registry = guard
-            .per_server
-            .entry(server_id.to_string())
-            .or_default();
+        let registry = guard.per_server.entry(server_id.to_string()).or_default();
         f(registry)
     }
 

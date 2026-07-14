@@ -7,12 +7,33 @@ pub type Id = uuid::Uuid;
 
 pub const ARTIFACT_INLINE_MAX_BYTES: usize = 32 * 1024;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ConversationKind {
+    #[default]
+    User,
+    Example,
+}
+
+/// Link to a provider-native session file (Claude jsonl, Codex thread, …).
+/// Stored in `meta.json` so native adapters can `--resume` on the next run.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NativeSessionLink {
+    pub provider: String,
+    pub session_id: String,
+    pub cwd: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_path: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Conversation {
     pub id: Id,
     pub title: String,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_id: Option<Id>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub active_harness_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -22,6 +43,10 @@ pub struct Conversation {
     pub roots: Vec<Root>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub forked_from: Option<Id>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub native_session: Option<NativeSessionLink>,
+    #[serde(default)]
+    pub kind: ConversationKind,
     pub messages: Vec<Message>,
 }
 
@@ -78,6 +103,8 @@ pub enum ContentBlock {
         sha256: String,
         #[serde(skip_serializing_if = "Option::is_none")]
         inline: Option<String>,
+        #[serde(default, skip_serializing_if = "is_false")]
+        integrity_failed: bool,
     },
     ElicitationRequest {
         request_id: String,
@@ -124,9 +151,57 @@ impl ContentBlock {
             size,
             sha256: sha256.into(),
             inline,
+            integrity_failed: false,
         };
         block.validate()?;
         Ok(block)
+    }
+
+    pub fn artifact_with_integrity_failed(
+        path: impl Into<String>,
+        mime_type: impl Into<String>,
+        size: u64,
+        sha256: impl Into<String>,
+        inline: Option<String>,
+    ) -> crate::Result<Self> {
+        let block = ContentBlock::Artifact {
+            path: path.into(),
+            mime_type: mime_type.into(),
+            size,
+            sha256: sha256.into(),
+            inline,
+            integrity_failed: true,
+        };
+        block.validate()?;
+        Ok(block)
+    }
+
+    pub fn mark_integrity_failed(&mut self) {
+        if let ContentBlock::Artifact {
+            integrity_failed, ..
+        } = self
+        {
+            *integrity_failed = true;
+        }
+    }
+
+    pub fn integrity_failed(&self) -> bool {
+        matches!(
+            self,
+            ContentBlock::Artifact {
+                integrity_failed: true,
+                ..
+            }
+        )
+    }
+
+    pub fn artifact_path(&self) -> crate::Result<&str> {
+        match self {
+            ContentBlock::Artifact { path, .. } => Ok(path.as_str()),
+            _ => Err(crate::CoreError::MalformedVault(
+                "content block is not an artifact".to_string(),
+            )),
+        }
     }
 
     pub fn validate(&self) -> crate::Result<()> {
@@ -204,6 +279,10 @@ fn validate_artifact_path(path: &str) -> crate::Result<()> {
     Ok(())
 }
 
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
 fn is_inline_text_mime(mime_type: &str) -> bool {
     let mime_type = mime_type
         .split_once(';')
@@ -275,6 +354,8 @@ pub struct Root {
     pub kind: RootKind,
     #[serde(default)]
     pub scope: RootScope,
+    #[serde(default, skip_serializing_if = "RootOrigin::is_conversation")]
+    pub origin: RootOrigin,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
@@ -292,6 +373,21 @@ pub enum RootScope {
     #[default]
     Conversation,
     User,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum RootOrigin {
+    #[default]
+    Conversation,
+    Project,
+    ProjectSnapshot,
+}
+
+impl RootOrigin {
+    fn is_conversation(&self) -> bool {
+        matches!(self, Self::Conversation)
+    }
 }
 
 impl Root {

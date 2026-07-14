@@ -38,6 +38,7 @@ impl FilesystemVault {
     pub fn new(root: impl Into<PathBuf>) -> Result<Self> {
         let root = root.into();
         fs::create_dir_all(root.join("conversations"))?;
+        crate::project::ProjectStore::new(&root)?;
         Ok(Self { root })
     }
 
@@ -154,6 +155,10 @@ impl FilesystemVault {
     }
 
     fn resolve_folder(&self, id: Id) -> Result<PathBuf> {
+        self.resolve_folder_by_meta_scan(id)
+    }
+
+    fn resolve_folder_by_meta_scan(&self, id: Id) -> Result<PathBuf> {
         let mut matches = Vec::new();
         for item in fs::read_dir(self.conversations_dir())? {
             let item = item?;
@@ -244,15 +249,16 @@ impl FilesystemVault {
         let (messages, _) = Self::read_messages(dir)?;
         Ok(Conversation::from_parts(meta, messages))
     }
+
+    pub fn load_conversation_from_dir(dir: &Path) -> Result<Conversation> {
+        Self::load_from_dir(dir)
+    }
 }
 
 pub fn append_vault_event(root: &Path, event: &Event) -> Result<()> {
     let line = event_to_line(event)?;
     let path = root.join("events.jsonl");
-    let mut file = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&path)?;
+    let mut file = OpenOptions::new().create(true).append(true).open(&path)?;
     writeln!(file, "{line}")?;
     Ok(())
 }
@@ -321,6 +327,9 @@ impl ConversationVault for FilesystemVault {
                 id: entry.meta.id,
                 title: entry.meta.title,
                 updated_at: entry.meta.updated_at,
+                project_id: entry.meta.project_id,
+                active_harness_id: entry.meta.active_harness_id.clone(),
+                kind: entry.meta.kind,
             });
         }
         summaries.sort_by(|a, b| b.updated_at.cmp(&a.updated_at).then(a.title.cmp(&b.title)));
@@ -340,6 +349,7 @@ impl ConversationVault for FilesystemVault {
         new.created_at = Utc::now();
         new.updated_at = new.created_at;
         new.forked_from = None;
+        new.project_id = None;
         let dir = self.conversation_dir(&new);
         self.create(&new)?;
         copy_attachments_dir(&src.join("attachments"), &dir.join("attachments"))?;
@@ -453,7 +463,7 @@ fn repair_torn_tail_named(lock_file: &mut File, target: &Path) -> Result<()> {
     repair_torn_tail(&mut file)
 }
 
-fn copy_attachments_dir(src: &Path, dst: &Path) -> Result<()> {
+pub(crate) fn copy_attachments_dir(src: &Path, dst: &Path) -> Result<()> {
     if !src.is_dir() {
         return Ok(());
     }

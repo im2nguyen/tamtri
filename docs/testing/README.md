@@ -1,6 +1,6 @@
 # Verification guides
 
-Manual and automated verification for tamtri gateway features. One guide per feature, not per milestone.
+Manual and automated verification for tamtri gateway and harness features.
 
 | Guide | What it covers |
 |-------|----------------|
@@ -14,7 +14,9 @@ Manual and automated verification for tamtri gateway features. One guide per fea
 
 ## Quick start
 
-1. Build core fixtures: `cargo build -p tamtri-core`
+1. Build core and fixtures: `cargo build -p tamtri-core`
 2. Register servers in `<vault>/config.json` (see each guide for examples).
-3. Launch tamtri: `cd macos && swift run Tamtri`
+3. Launch tamtri: `pnpm run dev:web` or `pnpm run dev:desktop`
 4. Run automated checks: `cargo test -p tamtri-core`
+
+Fixtures live in [`/fixtures`](../fixtures/README.md) (test binaries only).

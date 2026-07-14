@@ -4,6 +4,8 @@ tamtri stores conversations as a legible vault, not an opaque app database. The 
 
 ```text
 <vault>/config.json
+<vault>/projects/<slug>--<project-id>/
+  meta.json
 <vault>/conversations/<yyyy-mm-dd>-<slug>--<id-suffix>/
   meta.json
   messages.jsonl
@@ -12,17 +14,23 @@ tamtri stores conversations as a legible vault, not an opaque app database. The 
   workdir/
 ```
 
-`config.json` is vault-level app configuration. Milestone 4 uses it for the default harness id, hand-editable agent roster, and MCP gateway registry. It stores downstream server definitions, scopes, timeout overrides, and credential references only. It never stores resolved secret values. Inline secrets in `stdio.env` or HTTP `headers` are rejected at save time; use `credentials[]` with `credential_ref` bindings instead. Writes are atomic via `config.json.tmp` in the same vault root. At run time, core reads this registry to decide which downstream MCP servers the gateway proxies.
+`config.json` is vault-level app configuration: default harness id, agent roster (`enabled` per entry), and MCP gateway downstream server registry. It stores server definitions, scopes, timeout overrides, and credential references only — never resolved secret values. Inline secrets in `stdio.env` or HTTP `headers` are rejected at save time; use `credentials[]` with `credential_ref` bindings instead. Writes are atomic via temp file + rename in the vault root.
 
-`meta.json` is the small mutable header. It contains `schema_version`, conversation identity, timestamps, harness/model ids, working directory mode, MCP server refs, roots, and fork lineage. Writes are atomic: tamtri writes `meta.json.tmp` in the same folder, then renames it over `meta.json`.
+Each project folder is `<slug>--<project-id-simple>`, where the suffix is the full UUID without hyphens. Its `meta.json` is a legible, atomic record containing `schema_version`, project identity, timestamps, name, and shared roots. Project folder names are cosmetic, as with conversations. A stable immutable Unfiled project is created automatically. It cannot be renamed, deleted, or own shared roots.
 
-**MCP server refs: two roles.** `config.json` owns downstream routing (full server definitions). `meta.json` `mcp_servers` records the conversation's upstream tamtri gateway ref only: one entry with `id` `tamtri-gateway`, the loopback HTTP endpoint, and transport `http`. ACP `session/new` receives that ref; the harness never sees downstream definitions directly. Per-conversation downstream filtering via `meta.json` is not implemented in M4; the vault registry is the sole source of enabled downstream servers.
+Each conversation `meta.json` is the small mutable header. It contains `schema_version`, conversation identity, timestamps, optional `project_id`, conversation kind, harness/model ids, working directory mode, MCP server refs, conversation roots, and fork lineage. Writes are atomic: tamtri writes `meta.json.tmp` in the same folder, then renames it over `meta.json`. A missing `project_id`, the stable Unfiled id at the DTO boundary, and a reference to a missing project all appear under Unfiled in the shell. This projection does not rewrite legacy or orphaned files.
+
+Moving a conversation updates only its `project_id`, timestamp, and metadata file. Moving to Unfiled stores no `project_id`. Transcript content, attachments, workdir, and fork lineage are unchanged. Deleting a real project first clears membership on every conversation in it, then removes the project folder, so those conversations remain visible under Unfiled. The shell currently offers delete only for projects with no conversations or shared roots, while core preserves conversations even if another client deletes a populated project.
+
+Effective run roots are current project roots followed by conversation roots, deduplicated by kind and URI. Shared-root edits affect later runs without copying those roots into every conversation. Forks retain project membership.
+
+**MCP server refs: two roles.** `config.json` owns downstream routing (full server definitions). `meta.json` `mcp_servers` records the conversation's upstream tamtri gateway ref only: one entry with id `tamtri-gateway`, the loopback HTTP endpoint, and transport `http`. ACP `session/new` receives that ref; the harness never sees downstream definitions directly. The vault registry is the sole source of enabled downstream servers.
 
 `messages.jsonl` is the transcript and the complete render source. It is append-only: one compact JSON `Message` per line. Streaming deltas are buffered in memory and committed only when the message is complete, so in-flight tokens never hit the log. `load` reads the full transcript into memory in V1; long sessions can therefore produce multi-megabyte in-memory transcripts. A streaming reader is a future implementation option, not a format change.
 
 `events.jsonl` is the local audit log for permission receipts, command execution, and gateway routing. It is not portable by default, and secrets never persist to either log.
 
-`attachments/` contains curated rendered artifacts. Anything the transcript renders is a content-hashed snapshot under `attachments/`, frozen at render time. `workdir/` stays messy, mutable, and local. Milestone 5 snapshots renderable `FileChanged` paths from the conversation workdir into `attachments/<sha256-prefix>-<safe-basename>` before appending an `Artifact` block, so reloading from `messages.jsonl` plus `attachments/` does not depend on the mutable workdir copy.
+`attachments/` contains curated rendered artifacts. Anything the transcript renders is a content-hashed snapshot under `attachments/`, frozen at render time. `workdir/` stays messy, mutable, and local. When a harness emits `FileChanged`, core snapshots renderable paths from the turn into `attachments/<sha256-prefix>-<safe-basename>` before appending an `Artifact` block, so replay from `messages.jsonl` plus `attachments/` does not depend on the mutable workdir copy.
 
 ACP agents are launched with the conversation `workdir/` as their process cwd, and the same path is sent in `session/new.cwd`. At turn end Tamtri snapshots only paths collected in the turn reducer's `referenced_paths` list (from `FileChanged`, tool-result diffs, and write/edit tool inputs). There is no full `workdir/` directory scan, so incidental files such as a dropped input CSV are not snapshotted unless the harness actually touched them.
 
@@ -48,4 +56,4 @@ The vault is designed to sync through user-owned tools such as iCloud, Dropbox, 
 
 ## Migration Seam
 
-`meta.json.schema_version` governs the format. Milestone 1 writes version `1`. A future reader may migrate lower versions before reconstructing a conversation. Readers reject future versions with `UnsupportedSchemaVersion`.
+Conversation `meta.json.schema_version` governs the format. Current writers use version `4`; project metadata uses version `1`. Version 4 adds optional project membership, conversation kind, and explicit root origin. Readers default absent membership to Unfiled, absent kind to `conversation`, and absent root origin to `conversation`, so older vaults load without destructive rewrites. Bundle export clears the vault-local `project_id` and writes the effective root set into the portable conversation metadata. Roots inherited from a project become `project_snapshot`; conversation roots keep their origin. Import clears membership in storage, so the imported conversation projects into local Unfiled, while preserving those snapshots as conversation-level roots. The bundle therefore never depends on a project record that exists only in the source vault. Readers reject unknown future versions with a typed unsupported-schema error.

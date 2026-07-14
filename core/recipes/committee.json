@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "id": "committee",
+  "title": "Committee",
+  "description": "Ask multiple harnesses the same question in parallel (analysis-only branches).",
+  "steps": [
+    {
+      "type": "parallel",
+      "branches": [
+        {
+          "harness_id": "{{harness_a}}",
+          "model_id": "{{model_a}}",
+          "message": "{{prompt}}"
+        },
+        {
+          "harness_id": "{{harness_b}}",
+          "model_id": "{{model_b}}",
+          "message": "{{prompt}}"
+        }
+      ]
+    }
+  ]
+}

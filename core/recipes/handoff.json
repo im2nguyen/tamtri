@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "id": "handoff",
+  "title": "Handoff",
+  "description": "Fork the conversation to another harness with a briefing message.",
+  "steps": [
+    {
+      "type": "fork_run",
+      "harness_id": "{{harness_id}}",
+      "model_id": "{{model_id}}",
+      "message": "{{message}}"
+    }
+  ]
+}

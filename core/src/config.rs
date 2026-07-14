@@ -4,6 +4,7 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 
 use crate::harness::acp::AgentLaunchSpec;
+use crate::harness::roster::{repair_agent_roster, repair_roster_spec};
 use crate::{CoreError, Result};
 
 const CONFIG_FILE: &str = "config.json";
@@ -15,8 +16,21 @@ pub struct AppConfig {
     pub default_harness_id: Option<String>,
     #[serde(default)]
     pub agent_roster: Vec<AgentLaunchSpec>,
+    /// Composer/settings picker order for roster entries.
+    #[serde(default)]
+    pub harness_order: Vec<String>,
+    /// Roster ids hidden from the composer picker.
+    #[serde(default)]
+    pub hidden_harness_ids: Vec<String>,
+    /// When true, the shell may check installed provider CLIs for updates.
+    #[serde(default = "default_enable_cli_update_checks")]
+    pub enable_cli_update_checks: bool,
     #[serde(default)]
     pub gateway: GatewayConfig,
+}
+
+fn default_enable_cli_update_checks() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -118,13 +132,35 @@ pub enum CredentialTarget {
     },
 }
 
+pub fn seed_agent_roster_if_empty(vault_path: &Path) -> Result<()> {
+    let mut config = load_app_config(vault_path)?;
+    if !config.agent_roster.is_empty() {
+        return Ok(());
+    }
+    if crate::harness::discovery::apply_discovery_to_config(&mut config)? {
+        save_app_config(vault_path, &config)?;
+    }
+    Ok(())
+}
+
+/// First-run vault content: agent roster discovery and the bundled example thread.
+pub fn seed_vault_content(vault_path: &Path) -> Result<()> {
+    seed_agent_roster_if_empty(vault_path)?;
+    let vault = crate::vault::fs::FilesystemVault::new(vault_path)?;
+    crate::vault::example_seed::seed_example_conversation_if_missing(vault_path, &vault)
+}
+
 pub fn load_app_config(vault_path: &Path) -> Result<AppConfig> {
     let path = vault_path.join(CONFIG_FILE);
     if !path.exists() {
         return Ok(AppConfig::default());
     }
-    let config: AppConfig = serde_json::from_slice(&std::fs::read(path)?)?;
+    let mut config: AppConfig = serde_json::from_slice(&std::fs::read(path)?)?;
+    let migrated = repair_agent_roster(&mut config.agent_roster);
     validate_app_config(&config)?;
+    if migrated {
+        save_app_config(vault_path, &config)?;
+    }
     Ok(config)
 }
 
@@ -139,10 +175,35 @@ pub fn save_app_config(vault_path: &Path, config: &AppConfig) -> Result<()> {
     Ok(())
 }
 
-pub fn replace_gateway_servers(
-    vault_path: &Path,
-    servers: Vec<GatewayServerConfig>,
-) -> Result<()> {
+pub fn set_agent_enabled(vault_path: &Path, agent_id: &str, enabled: bool) -> Result<()> {
+    let mut config = load_app_config(vault_path)?;
+    let entry = config
+        .agent_roster
+        .iter_mut()
+        .find(|spec| spec.id == agent_id)
+        .ok_or_else(|| CoreError::Protocol(format!("unknown agent: {agent_id}")))?;
+    entry.enabled = enabled;
+    save_app_config(vault_path, &config)
+}
+
+pub fn add_agent_to_roster(vault_path: &Path, spec: AgentLaunchSpec) -> Result<()> {
+    if spec.id.trim().is_empty() {
+        return Err(CoreError::Protocol("agent id cannot be empty".to_string()));
+    }
+    let mut config = load_app_config(vault_path)?;
+    if config.agent_roster.iter().any(|entry| entry.id == spec.id) {
+        return Err(CoreError::Protocol(format!(
+            "agent already in roster: {}",
+            spec.id
+        )));
+    }
+    let mut spec = spec;
+    repair_roster_spec(&mut spec);
+    config.agent_roster.push(spec);
+    save_app_config(vault_path, &config)
+}
+
+pub fn replace_gateway_servers(vault_path: &Path, servers: Vec<GatewayServerConfig>) -> Result<()> {
     let mut config = load_app_config(vault_path)?;
     config.gateway.servers = servers;
     save_app_config(vault_path, &config)
@@ -236,7 +297,10 @@ fn reject_inline_secret(server_id: &str, location: &str, name: &str, value: &str
         || key.contains("api_key")
         || key == "authorization"
         || key == "proxy-authorization";
-    let bearer_value = value.trim_start().to_ascii_lowercase().starts_with("bearer ");
+    let bearer_value = value
+        .trim_start()
+        .to_ascii_lowercase()
+        .starts_with("bearer ");
     if secret_key || bearer_value {
         return Err(CoreError::Protocol(format!(
             "gateway server {server_id} must not store inline secrets in {location} `{name}`; use credentials[] credential_ref bindings"
@@ -248,6 +312,8 @@ fn reject_inline_secret(server_id: &str, location: &str, name: &str, value: &str
 #[cfg(test)]
 mod tests {
     use serde_json::json;
+
+    use crate::harness::acp::{AdapterKind, AgentLaunchSpec};
 
     use super::*;
 
@@ -283,6 +349,7 @@ mod tests {
                 default_call_timeout_secs: 120,
                 servers: vec![server("old", true)],
             },
+            ..AppConfig::default()
         };
         save_app_config(dir.path(), &config).unwrap();
         replace_gateway_servers(dir.path(), vec![server("new", false)]).unwrap();
@@ -295,6 +362,118 @@ mod tests {
     }
 
     #[test]
+    fn seed_agent_roster_if_empty_discovers_hermes() {
+        let dir = tempfile::tempdir().unwrap();
+        let hermes_path = dir.path().join("hermes");
+        std::fs::write(&hermes_path, b"#!/bin/sh\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&hermes_path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let home = dir.path().join("home");
+        std::fs::create_dir_all(home.join(".local/bin")).unwrap();
+        std::fs::copy(&hermes_path, home.join(".local/bin/hermes")).unwrap();
+        let previous_home = std::env::var_os("HOME");
+        unsafe {
+            std::env::set_var("HOME", &home);
+        }
+        seed_agent_roster_if_empty(dir.path()).unwrap();
+        if let Some(value) = previous_home {
+            unsafe {
+                std::env::set_var("HOME", value);
+            }
+        } else {
+            unsafe {
+                std::env::remove_var("HOME");
+            }
+        }
+        let loaded = load_app_config(dir.path()).unwrap();
+        assert!(
+            loaded
+                .agent_roster
+                .iter()
+                .any(|spec| spec.id == "hermes-acp"),
+            "expected hermes-acp in {:?}",
+            loaded.agent_roster
+        );
+        assert_eq!(loaded.default_harness_id.as_deref(), Some("hermes-acp"));
+    }
+
+    #[test]
+    fn load_app_config_accepts_roster_entries_without_env_or_args() {
+        let dir = tempfile::tempdir().unwrap();
+        let raw = r#"{
+  "agent_roster": [
+    {
+      "id": "hermes-acp",
+      "display_name": "Hermes",
+      "command": "hermes",
+      "args": ["acp"],
+      "default_model_id": "default"
+    }
+  ],
+  "gateway": {
+    "default_call_timeout_secs": 300,
+    "servers": []
+  }
+}"#;
+        std::fs::write(dir.path().join(CONFIG_FILE), raw).unwrap();
+        let config = load_app_config(dir.path()).unwrap();
+        assert_eq!(config.agent_roster.len(), 1);
+        assert_eq!(config.agent_roster[0].id, "hermes-acp");
+        assert!(config.agent_roster[0].env.is_empty());
+    }
+
+    #[test]
+    fn seed_agent_roster_if_empty_preserves_existing_roster() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = AppConfig {
+            default_harness_id: Some("mock-acp".to_string()),
+            agent_roster: vec![AgentLaunchSpec {
+                id: "mock-acp".into(),
+                display_name: "Mock".into(),
+                command: "/tmp/mock".into(),
+                args: Vec::new(),
+                env: Vec::new(),
+                adapter: Default::default(),
+                enabled: true,
+            }],
+            ..AppConfig::default()
+        };
+        save_app_config(dir.path(), &config).unwrap();
+        seed_agent_roster_if_empty(dir.path()).unwrap();
+        assert_eq!(load_app_config(dir.path()).unwrap(), config);
+    }
+
+    #[test]
+    fn load_app_config_repairs_claude_native_adapter() {
+        let dir = tempfile::tempdir().unwrap();
+        let raw = r#"{
+  "agent_roster": [
+    {
+      "id": "claude-native",
+      "display_name": "Claude Code",
+      "command": "claude",
+      "args": [],
+      "env": [],
+      "adapter": "acp",
+      "enabled": true
+    }
+  ],
+  "gateway": {
+    "default_call_timeout_secs": 300,
+    "servers": []
+  }
+}"#;
+        std::fs::write(dir.path().join(CONFIG_FILE), raw).unwrap();
+        let config = load_app_config(dir.path()).unwrap();
+        assert_eq!(config.agent_roster[0].adapter, AdapterKind::ClaudeNative);
+        let persisted = std::fs::read_to_string(dir.path().join(CONFIG_FILE)).unwrap();
+        assert!(persisted.contains("claude_native"));
+    }
+
+    #[test]
     fn registry_round_trip() {
         let dir = tempfile::tempdir().unwrap();
         let config = AppConfig {
@@ -304,6 +483,7 @@ mod tests {
                 default_call_timeout_secs: 120,
                 servers: vec![server("mock", true)],
             },
+            ..AppConfig::default()
         };
         save_app_config(dir.path(), &config).unwrap();
         assert_eq!(load_app_config(dir.path()).unwrap(), config);

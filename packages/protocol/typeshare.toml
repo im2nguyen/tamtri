@@ -1,0 +1,13 @@
+# typeshare configuration for @tamtri/protocol.
+#
+# The Rust core is the source of truth; `npm run protocol:generate` runs the
+# typeshare CLI against ../../core with this config.
+#
+# 64-bit integers exceed JS's safe-integer range, so typeshare hard-rejects the
+# bare `u64` token at parse time (before any field override applies). The wire
+# structs use the transparent `WireU64` alias (= u64) instead; we map that alias
+# to `number` here. Our u64 values (byte sizes, timeout seconds) never approach
+# 2^53, so number is safe and avoids threading bigint through every surface.
+
+[typescript.type_mappings]
+WireU64 = "number"

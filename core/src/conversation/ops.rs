@@ -1,5 +1,6 @@
 use chrono::Utc;
 
+use crate::conversation::model::ConversationKind;
 use crate::conversation::{Conversation, Message, WorkingDir};
 
 impl Conversation {
@@ -10,12 +11,15 @@ impl Conversation {
             title: title.into(),
             created_at: now,
             updated_at: now,
+            project_id: None,
             active_harness_id: None,
             model_id: None,
             working_dir: WorkingDir::VaultLocal,
             mcp_servers: Vec::new(),
             roots: Vec::new(),
             forked_from: None,
+            native_session: None,
+            kind: ConversationKind::User,
             messages: Vec::new(),
         }
     }

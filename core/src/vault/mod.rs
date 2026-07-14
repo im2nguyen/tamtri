@@ -1,4 +1,6 @@
+pub mod bundle;
 pub mod events;
+pub mod example_seed;
 pub mod fs;
 pub mod naming;
 
@@ -15,6 +17,9 @@ pub struct ConversationSummary {
     pub id: Id,
     pub title: String,
     pub updated_at: DateTime<Utc>,
+    pub project_id: Option<Id>,
+    pub active_harness_id: Option<String>,
+    pub kind: crate::conversation::ConversationKind,
 }
 
 #[derive(Debug, Clone, PartialEq)]
